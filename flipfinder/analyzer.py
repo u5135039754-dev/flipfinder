@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+import unicodedata
+from dataclasses import dataclass, field
+from functools import lru_cache
 from statistics import median
 
 from .vinted import Item
@@ -17,6 +19,8 @@ class Deal:
     profit: float
     roi: float               # profit as % of what you pay
     rating: int              # 1-10
+    basis: str = ""          # how the comparables were picked, shown by --dry-run
+    sample: list[Item] = field(default_factory=list)   # a few comparables, shown by --dry-run
 
 
 @dataclass
@@ -51,13 +55,140 @@ def remove_outliers(prices: list[float]) -> list[float]:
     return [p for p in s if lo <= p <= hi]
 
 
-def market_value(item: Item, pool: list[Item], min_comparables: int) -> tuple[float | None, int]:
+# --- Title matching ------------------------------------------------------------
+# One search returns several models at very different prices (an MG15 practice amp
+# and a valve head both match "marshall amplificatore"), so a listing is only
+# compared with listings that share its model words ("mg15", "studio", "50s").
+
+# Spellings that mean the same thing. Category words map to the Italian one because
+# vinted.it also shows French, Spanish, German and Dutch listings.
+PHRASES = [
+    (re.compile(r"\bles ?paul\b"), "lespaul"),
+    (re.compile(r"\bht ?g ?700\b"), "g700"),
+    (re.compile(r"\bclassic ?vibe\b"), "classicvibe"),
+    (re.compile(r"\bmk ?(ii|2)\b"), "mk2"),
+    (re.compile(r"\bmk ?(iii|3)\b"), "mk3"),
+]
+SYNONYMS = {
+    "lp": "lespaul", "strat": "stratocaster",
+    "guitar": "chitarra", "guitare": "chitarra", "guitarra": "chitarra", "gitarre": "chitarra",
+    "gitaar": "chitarra", "chitarre": "chitarra",
+    "acoustic": "acustica", "acoustics": "acustica", "acoustique": "acustica", "acustico": "acustica",
+    "akustik": "acustica", "akoestische": "acustica", "akustische": "acustica",
+    "amp": "amplificatore", "ampli": "amplificatore", "amplifier": "amplificatore",
+    "amplificador": "amplificatore", "amplificateur": "amplificatore", "amplificatori": "amplificatore",
+    "verstarker": "amplificatore", "versterker": "amplificatore",
+    "pedal": "pedale", "pedalino": "pedale", "pedali": "pedale",
+}
+# Words that say nothing about the model (already normalized: lowercase, no accents)
+FILLER = set("""
+    chitarra elettrica elettrico electric electrique electrica elektrisch elektro
+    acustica classica classical classique clasica amplificatore pedale combo testata head
+    strumento instrument musicale
+    vendo vende vendesi sell selling venta vente verkaufe usata usato used occasion gebraucht
+    ottime ottimo ottima condizioni condizione stato state conditions etat estado zustand
+    come nuova nuovo nuove new neuf nueva nuevo neu perfetta perfetto perfect parfait
+    funzionante working fonctionne funciona bellissima bellissimo bella bello rara raro rare
+    originale original modello model modele serie series edition edizione version versione
+    con per ed di da del della dello dei degli delle il lo la le gli un una uno in su al
+    the and with for of to on by from or
+    avec pour et de du des les une sur
+    para el los las
+    mit und fur der die das ein eine
+    met en voor het een
+    colore color colour couleur nero nera black noir negro schwarz zwart bianco bianca white
+    blanc blanco weiss wit rosso rossa red rouge rojo blu blue bleu azul sunburst natural
+    naturale cherry
+    custodia case gigbag borsa bag housse funda cavo cable incluso inclusa included compreso
+    regalo omaggio prezzo price trattabile spedizione shipping consegna mano ritiro
+""".split())
+
+_YEAR = re.compile(r"^(19[5-9]\d|20[0-3]\d)$")
+_WATTS = re.compile(r"^\d+(w|watt|watts)$")
+_MODEL_CORE = re.compile(r"^([a-z]+\d+)[a-z]+$")   # mg15cdr -> mg15, eg260c -> eg260
+
+
+@lru_cache(maxsize=50_000)
+def normalize(text: str) -> tuple[str, ...]:
+    """Lowercase words without accents or punctuation, with equivalent spellings merged."""
+    t = unicodedata.normalize("NFKD", text.lower())
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    t = re.sub(r"[^a-z0-9]+", " ", t)
+    for pattern, repl in PHRASES:
+        t = pattern.sub(repl, t)
+    out: list[str] = []
+    for w in (SYNONYMS.get(w, w) for w in t.split()):
+        # "MG 15", "DS-1" -> "mg15", "ds1"
+        if (out and w.isdigit() and len(w) <= 3 and out[-1].isalpha()
+                and len(out[-1]) <= 3 and out[-1] not in FILLER):
+            out[-1] += w
+        else:
+            out.append(w)
+    return tuple(out)
+
+
+def is_relevant(title: str, query: str) -> bool:
+    """True when the title contains every word of the search query."""
+    return set(normalize(query)) <= set(normalize(title))
+
+
+_ROMAN = {"ii", "iii", "iv"}   # "Player II", "Special-II" are different models too
+_SERIAL = re.compile(r"^\d{5,}$")
+MAKERS = {"fender", "squier", "gibson", "epiphone"}   # "Squier by Fender" says nothing about the model
+
+
+@lru_cache(maxsize=50_000)
+def model_tokens(title: str, query: str = "", brand: str = "") -> frozenset[str]:
+    """Words in the title that tell models apart, e.g. {"mg15", "mg15cdr"} or {"studio", "50s"}."""
+    skip = FILLER | MAKERS | set(normalize(query)) | set(normalize(brand))
+    tokens = set()
+    for w in normalize(title):
+        if w in skip or len(w) < 2 or _YEAR.match(w) or _WATTS.match(w) or _SERIAL.match(w):
+            continue
+        tokens.add(w)
+        core = _MODEL_CORE.match(w)
+        if core:
+            tokens.add(core.group(1))
+    return frozenset(tokens)
+
+
+def model_numbers(tokens: frozenset[str]) -> frozenset[str]:
+    """The tokens that name a specific model: "mg15" (from mg15cdr too), "50", "mk2", "ii"."""
+    out = set()
+    for t in tokens:
+        if t in _ROMAN:
+            out.add(t)
+        elif any(c.isdigit() for c in t):
+            core = _MODEL_CORE.match(t)
+            out.add(core.group(1) if core else t)
+    return frozenset(out)
+
+
+def price_spread(prices: list[float]) -> float:
+    """IQR / median: how much prices in a group vary."""
+    s = sorted(prices)
+    if len(s) < 4:
+        return float("inf")
+    return (s[(3 * len(s)) // 4] - s[len(s) // 4]) / median(s)
+
+
+TIGHT_SPREAD = 0.35   # the whole pool only counts as comparables when it's this consistent
+
+
+def find_comparables(item: Item, pool: list[Item], min_comparables: int,
+                     query: str = "") -> tuple[list[Item], str]:
     """
-    Median listed price of similar items. Only same-brand items count (a search like
-    "fender stratocaster" also returns Squiers and Harley Bentons), and same-size
-    items are preferred when there are enough.
+    Listings to compare against, plus a note on how they were picked.
+
+    Same brand only. Model numbers ("mg15", "50 mk2", "ii") must match exactly, so a
+    Katana 50 MkII isn't valued like a Katana 100. Listings without a model number are
+    compared with other unnumbered ones, those sharing a model word ("studio") first,
+    and only when their prices are tight. Last resort is the whole pool, again only
+    when prices are tight. Otherwise nothing, since no alert beats a wrong one.
     """
     others = [p for p in pool if p.id != item.id]
+    if query:
+        others = [p for p in others if is_relevant(p.title, query)]
     if item.brand:
         brand = item.brand.lower()
         others = [p for p in others if p.brand.lower() == brand]
@@ -65,10 +196,48 @@ def market_value(item: Item, pool: list[Item], min_comparables: int) -> tuple[fl
         same_size = [p for p in others if p.size == item.size]
         if len(same_size) >= min_comparables:
             others = same_size
-    prices = remove_outliers([p.price for p in others])
-    if len(prices) < min_comparables:
-        return None, len(prices)
-    return round(median(prices), 2), len(prices)
+
+    def tokens(x: Item) -> frozenset[str]:
+        return model_tokens(x.title, query, x.brand)
+
+    def tight(group: list[Item]) -> bool:
+        return (len(group) >= min_comparables
+                and price_spread([p.price for p in group]) < TIGHT_SPREAD)
+
+    mine = tokens(item)
+    numbers = model_numbers(mine)
+    same_number = [p for p in others if model_numbers(tokens(p)) == numbers]
+    if numbers and len(same_number) >= min_comparables:
+        return same_number, "model " + " ".join(sorted(numbers))
+    if not numbers:
+        words = mine - numbers
+        sharing = [p for p in same_number if words & tokens(p)]
+        if tight(sharing):
+            shared = set().union(*(tokens(p) for p in sharing))
+            return sharing, "model words " + " ".join(sorted(words & shared))
+        if tight(same_number):
+            return same_number, "listings without a model number (prices are tight)"
+    if tight(others):
+        return others, "whole pool (prices are tight)"
+    return [], "no comparable model"
+
+
+def _comparables(item: Item, pool: list[Item], min_comparables: int,
+                 query: str) -> tuple[float | None, list[Item], str]:
+    others, basis = find_comparables(item, pool, min_comparables, query)
+    kept = remove_outliers([p.price for p in others])
+    if kept:
+        others = [p for p in others if kept[0] <= p.price <= kept[-1]]
+    if len(kept) < min_comparables:
+        return None, others, basis
+    return round(median(kept), 2), others, basis
+
+
+def market_value(item: Item, pool: list[Item], min_comparables: int,
+                 query: str = "") -> tuple[float | None, int]:
+    """Median listed price of comparable listings, preferring the same size when there are enough."""
+    value, comps, _ = _comparables(item, pool, min_comparables, query)
+    return value, len(comps)
 
 
 def rate(profit: float, roi: float, comparables: int, rules: Rules) -> int:
@@ -82,13 +251,16 @@ def rate(profit: float, roi: float, comparables: int, rules: Rules) -> int:
     return max(1, min(10, round(roi_pts + profit_pts + conf_pts)))
 
 
-def evaluate(item: Item, pool: list[Item], rules: Rules) -> Deal | None:
+def evaluate(item: Item, pool: list[Item], rules: Rules, query: str = "") -> Deal | None:
     """Returns a Deal if the item passes every rule, otherwise None."""
     if is_excluded(item, rules.exclude_keywords):
         return None
-    value, n = market_value(item, pool, rules.min_comparables)
+    if query and not is_relevant(item.title, query):
+        return None
+    value, comps, basis = _comparables(item, pool, rules.min_comparables, query)
     if value is None:
         return None
+    n = len(comps)
     cost = item.total_price
     profit = round(value - cost - rules.resell_costs, 2)
     roi = round(profit / cost * 100, 1) if cost > 0 else 0.0
@@ -97,4 +269,6 @@ def evaluate(item: Item, pool: list[Item], rules: Rules) -> Deal | None:
     rating = rate(profit, roi, n, rules)
     if rating < rules.min_rating:
         return None
-    return Deal(item, value, n, profit, roi, rating)
+    by_price = sorted(comps, key=lambda p: p.price)
+    sample = [by_price[i * (n - 1) // 4] for i in range(5)]   # cheapest, quartiles, priciest
+    return Deal(item, value, n, profit, roi, rating, basis, sample)

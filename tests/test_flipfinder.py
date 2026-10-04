@@ -1,7 +1,8 @@
 import json
 from pathlib import Path
 
-from flipfinder.analyzer import Rules, evaluate, market_value, rate, remove_outliers
+from flipfinder.analyzer import (Rules, evaluate, find_comparables, is_relevant, market_value,
+                                 model_tokens, rate, remove_outliers)
 from flipfinder.storage import SeenStore
 from flipfinder.telegram import format_deal
 from flipfinder.vinted import Item, parse_catalog_page
@@ -107,3 +108,96 @@ def test_parse_catalog_page():
     it = Item.from_page(parse_catalog_page(html)[0], "www.vinted.it", 0.7, 5)
     assert (it.price, it.total_price, it.brand, it.size, it.condition) == (200, 210.70, "Fender", "", "Ottime")
     assert it.url == "https://www.vinted.it/items/7-fender-strat"
+
+
+# --- Title matching, with real titles from a vinted.it dry run ---
+
+def titled(i, title, price, brand=""):
+    x = item(i, price, size="", title=title)
+    x.brand = brand
+    return x
+
+
+def test_relevance_drops_other_models_and_junk():
+    assert not is_relevant("Gibson Sg", "gibson les paul studio")
+    assert not is_relevant("SX guitar", "chitarra acustica yamaha")
+    assert not is_relevant("Clases de canto", "chitarra acustica fender")
+    assert is_relevant("Gibson Les Paul Studio 2016 HP", "gibson les paul studio")
+
+
+def test_relevance_normalizes_spelling():
+    assert is_relevant("Guitarra eléctrica Epiphone LesPaul Special II", "epiphone les paul special")
+    assert is_relevant("Epiphone LP Special", "epiphone les paul special")
+    assert is_relevant("Soundbar Sony HT-G700", "sony g700")
+    assert is_relevant("Guitare acoustique Takamine", "chitarra acustica takamine")
+    assert is_relevant("Chitarra Fender acoustics", "chitarra acustica fender")
+
+
+def test_model_tokens():
+    q = "marshall amplificatore chitarra"
+    assert model_tokens("Amplificatore chitarra Marshall MG15 CF", q) == {"mg15", "cf"}
+    assert model_tokens("Amplificatore marshall mg15cdr 15W", q) == {"mg15cdr", "mg15"}
+    assert model_tokens("Gibson Les Paul Studio 2016 HP usata ottime condizioni",
+                        "gibson les paul studio") == {"hp"}
+    assert model_tokens("Takamine G220 chitarra acustica come nuova", "chitarra acustica takamine") == {"g220"}
+    assert model_tokens("Boss DS-1 distortion", "pedale boss chitarra") == {"ds1", "distortion"}
+
+
+def test_mg15_only_compared_with_mg15s():
+    q = "marshall amplificatore chitarra"
+    mg15 = [titled(100 + n, f"Amplificatore chitarra Marshall MG15 {s}", p, "Marshall")
+            for n, (s, p) in enumerate([("CF", 70), ("CDR", 75), ("", 80), ("CFX", 85), ("CF", 65),
+                                        ("CDR", 78), ("", 72), ("FX", 90)])]
+    big = [titled(200 + n, f"Amplificatore chitarra Marshall {m}", p, "Marshall")
+           for n, (m, p) in enumerate([("DSL40CR", 450), ("JCM 800 2203", 1400), ("Origin 20C", 350),
+                                       ("Code 50", 180), ("DSL20", 400), ("JVM 410", 1200),
+                                       ("MG30 GFX", 160), ("AS50D", 300)])]
+    sg = titled(300, "Gibson Sg", 600, "Gibson")
+    candidate = titled(1, "Amplificatore chitarra Marshall MG15 CF", 70, "Marshall")
+    comps, basis = find_comparables(candidate, mg15 + big + [sg], 8, q)
+    assert {c.id for c in comps} == {c.id for c in mg15}
+    assert "mg15" in basis
+    # Worth about the same as other MG15s, so it's no deal, even though the
+    # Marshall median overall is far higher
+    assert evaluate(candidate, mg15 + big, Rules(), q) is None
+
+
+def test_no_matching_model_and_wide_prices_means_skip():
+    q = "gibson les paul studio"
+    p = [titled(100 + n, f"Gibson Les Paul Studio {m}", price, "Gibson")
+         for n, (m, price) in enumerate([("Faded", 700), ("Tribute", 800), ("Deluxe", 1300), ("Pro", 1500),
+                                         ("Plus", 1900), ("Smartwood", 650), ("50s", 1100), ("Worn", 750),
+                                         ("Raw Power", 900)])]
+    candidate = titled(1, "Gibson Les Paul Studio Ebony", 500, "Gibson")
+    assert find_comparables(candidate, p, 8, q) == ([], "no comparable model")
+    assert evaluate(candidate, p, Rules(), q) is None
+
+
+def test_model_numbers_must_match_exactly():
+    q = "boss katana"
+    candidate = titled(1, "BOSS Katana-50 MkII Gitarrenverstärker 50W – guter Zustand", 180, "Boss")
+    mk2_50 = [titled(100 + n, f"Amplificatore chitarra Boss Katana 50 mkii {n}", 200 + n, "Boss")
+              for n in range(8)]
+    others = [titled(200, "Ampli guitare Boss Katana 50 Gen 1 (MK1)", 150, "Boss"),
+              titled(201, "Amplificatore Boss Katana 100W Mk2, per chitarra elettrica", 300, "Boss"),
+              titled(202, "Boss Katana 100 MkII", 320, "Boss"),
+              titled(203, "Boss Katana Head MkII + Foot Controller", 260, "Boss")]
+    comps, basis = find_comparables(candidate, mk2_50 + others, 8, q)
+    assert {c.id for c in comps} == {c.id for c in mk2_50}
+    assert basis == "model 50 mk2"
+
+
+def test_maker_names_are_not_model_tokens():
+    tokens = model_tokens("Chitarra Elettrica Squier by Fender Stratocaster (Affinity Series)",
+                          "squier affinity stratocaster", "Fender")
+    assert "fender" not in tokens and "squier" not in tokens
+
+
+def test_player_not_valued_like_player_ii():
+    q = "fender player stratocaster"
+    player = [titled(100 + n, "Fender Player Stratocaster", p, "Fender")
+              for n, p in enumerate([500, 520, 540, 560, 580, 600, 520, 550])]
+    player_ii = [titled(200 + n, "Fender Player II Modified Stratocaster", 900, "Fender") for n in range(8)]
+    candidate = titled(1, "Fender stratocaster player", 400, "Fender")
+    comps, _ = find_comparables(candidate, player + player_ii, 8, q)
+    assert {c.id for c in comps} == {c.id for c in player}

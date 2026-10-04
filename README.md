@@ -18,7 +18,7 @@ Open on Vinted
 ## How it decides
 
 - **Item price** is what you'd actually pay, so it includes Vinted's buyer protection fee.
-- **Original price** is the market value: the median price of similar listings from the same search. If there are enough listings in the same size, only those count. Crazy outliers get dropped first.
+- **Original price** is the market value: the median price of the same model in the same search. Listings must contain every word of the search, and are only compared with listings of the same brand and model number (an MG15 against other MG15s, a Katana 50 MkII against other Katana 50 MkIIs). Listings without a model number are only compared when similar listings are priced close together. If there's no good match, the listing is skipped. Crazy outliers get dropped first, and the same size is preferred when there are enough. `--dry-run` shows which listings each deal was compared with.
 - **Possible profit** = original price − item price − your `resell_costs`. Sellers don't pay fees on Vinted, so that's it.
 - **Percentage** = profit ÷ item price.
 - **Rating** (1-10): up to 4 points for percentage, 4 for profit in €, 2 for how many listings the market value is based on.

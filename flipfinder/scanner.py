@@ -98,7 +98,7 @@ class Scanner:
         deals = []
         for item in fresh:
             self.seen.add(item.id)
-            deal = evaluate(item, pool, rules)
+            deal = evaluate(item, pool, rules, s.query)
             if deal:
                 deals.append(deal)
         return deals

@@ -30,6 +30,13 @@ def sample_deal() -> Deal:
     return Deal(item, market_value=85.0, comparables=24, profit=37.05, roi=77.3, rating=8)
 
 
+def explain(deal: Deal) -> str:
+    """Why --dry-run thinks this is a deal: how comparables were picked, and a few of them."""
+    lines = [f"   compared on {deal.basis}, {deal.comparables} listings, e.g.:"]
+    lines += [f"     {c.price:8.2f}  {c.title[:70]}" for c in deal.sample]
+    return "\n".join(lines)
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="flipFinder - Vinted flip alerts")
     p.add_argument("--config", default="config.yaml")
@@ -67,7 +74,7 @@ def main() -> int:
             if tg:
                 tg.send_deal(deal)
             else:
-                print("\n" + format_deal(deal) + "\n")
+                print("\n" + format_deal(deal) + "\n" + explain(deal) + "\n")
         if args.once:
             return 0
         time.sleep(cfg.interval_minutes * 60)

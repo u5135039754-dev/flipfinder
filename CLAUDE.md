@@ -4,8 +4,8 @@ Python 3.10+ app that finds underpriced Vinted listings and sends Telegram alert
 
 ## Layout
 - `main.py` CLI entry (`--once`, `--dry-run`, `--test-telegram`, `-v`)
-- `flipfinder/vinted.py` Vinted catalog API client (`/api/v2/catalog/items`, cookie from homepage)
-- `flipfinder/analyzer.py` market value (median of comparables, IQR outlier removal, same-size preference), profit, ROI, 1-10 rating, filters
+- `flipfinder/vinted.py` Vinted search client: loads the `/catalog` page and reads items from its embedded Next.js data (`/api/v2/catalog/items` is gone, 404)
+- `flipfinder/analyzer.py` market value (median of comparables matched by query relevance, brand and model tokens from titles, IQR outlier removal, same-size preference), profit, ROI, 1-10 rating, filters
 - `flipfinder/scanner.py` per-search scan, price pool cache in `data/pools.json`
 - `flipfinder/storage.py` seen item IDs in `data/seen.json` (14 day expiry)
 - `flipfinder/telegram.py` message format + Bot API
