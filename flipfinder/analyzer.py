@@ -17,10 +17,15 @@ class Deal:
     market_value: float      # "original price" = median of similar listings
     comparables: int         # how many listings that median is based on
     profit: float
-    roi: float               # profit as % of what you pay
+    roi: float               # profit as % of what you pay (item + shipping)
     rating: int              # 1-10
     basis: str = ""          # how the comparables were picked, shown by --dry-run
     sample: list[Item] = field(default_factory=list)   # a few comparables, shown by --dry-run
+    shipping: float = 0.0          # what you pay to get it delivered (0 for pickup)
+    shipping_known: bool = True    # False when it's the config estimate, not Vinted's price
+    packaging: float = 0.0         # resell_costs: your box/packaging when you sell it on
+    pickup_only: bool = False
+    city: str = ""
 
 
 @dataclass
@@ -31,6 +36,7 @@ class Rules:
     min_comparables: int = 8
     max_roi: float = 400.0          # anything cheaper than this is probably fake/broken/wrong item
     resell_costs: float = 0.0       # your own extra costs per flip (packaging, etc.)
+    shipping_cost: float = 0.0      # estimate of what you pay for delivery, if Vinted doesn't say
     exclude_keywords: tuple[str, ...] = ()
     # rating knobs: profit/roi at which that part of the score maxes out
     rating_profit_cap: float = 50.0
@@ -251,8 +257,38 @@ def rate(profit: float, roi: float, comparables: int, rules: Rules) -> int:
     return max(1, min(10, round(roi_pts + profit_pts + conf_pts)))
 
 
-def evaluate(item: Item, pool: list[Item], rules: Rules, query: str = "") -> Deal | None:
-    """Returns a Deal if the item passes every rule, otherwise None."""
+# "Only pickup" in the languages vinted.it shows. Whole phrases on purpose: "pickup"
+# alone is also a guitar part, and "remise en main propre privilégiée" means preferred.
+PICKUP_ONLY = re.compile(r"""\b(
+      solo\ (ritiro|consegna|a\ mano|di\ persona|in\ zona|brevi\ mani)
+    | (ritiro|consegna)\ (solo|esclusivamente|unicamente)
+    | (ritiro|consegna)\ a\ mano\ (solo|esclusivamente|unicamente)
+    | no\ spedizion[ei] | niente\ spedizion[ei] | non\ (spedisco|spedisce|spedibile|effettuo\ spedizion[ei])
+    | (pick\ ?up|collection|collect)\ only | only\ (pick\ ?up|collection|collect) | no\ (shipping|postage)
+    | (remise\ en\ )?main\ propre\ uniquement | uniquement\ (en\ )?(remise\ en\ )?main\ propre | pas\ d\ envoi
+    | solo\ (entrega\ )?en\ mano | (no|sin)\ envios?
+    | nur\ (selbst)?abholung | kein\ versand
+    | alleen\ ophalen
+)\b""", re.X)
+
+
+def is_pickup_only(text: str) -> bool:
+    return bool(PICKUP_ONLY.search(" ".join(normalize_text(text))))
+
+
+def normalize_text(text: str) -> list[str]:
+    """Lowercase words without accents or punctuation, no other merging (for phrase matching)."""
+    t = unicodedata.normalize("NFKD", text.lower())
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    return re.sub(r"[^a-z0-9]+", " ", t).split()
+
+
+def evaluate(item: Item, pool: list[Item], rules: Rules, query: str = "",
+             shipping: float | None = None, pickup_only: bool = False, city: str = "") -> Deal | None:
+    """
+    Returns a Deal if the item passes every rule, otherwise None. `shipping` is the
+    real delivery price from the item page; without it the config estimate is used.
+    """
     if is_excluded(item, rules.exclude_keywords):
         return None
     if query and not is_relevant(item.title, query):
@@ -261,7 +297,8 @@ def evaluate(item: Item, pool: list[Item], rules: Rules, query: str = "") -> Dea
     if value is None:
         return None
     n = len(comps)
-    cost = item.total_price
+    ship = 0.0 if pickup_only else (shipping if shipping is not None else rules.shipping_cost)
+    cost = item.total_price + ship
     profit = round(value - cost - rules.resell_costs, 2)
     roi = round(profit / cost * 100, 1) if cost > 0 else 0.0
     if profit < rules.min_profit or roi < rules.min_roi or roi > rules.max_roi:
@@ -271,4 +308,6 @@ def evaluate(item: Item, pool: list[Item], rules: Rules, query: str = "") -> Dea
         return None
     by_price = sorted(comps, key=lambda p: p.price)
     sample = [by_price[i * (n - 1) // 4] for i in range(5)]   # cheapest, quartiles, priciest
-    return Deal(item, value, n, profit, roi, rating, basis, sample)
+    return Deal(item, value, n, profit, roi, rating, basis, sample,
+                shipping=round(ship, 2), shipping_known=pickup_only or shipping is not None,
+                packaging=rules.resell_costs, pickup_only=pickup_only, city=city)

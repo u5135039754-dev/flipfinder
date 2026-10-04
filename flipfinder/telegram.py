@@ -31,9 +31,19 @@ def format_deal(deal: Deal) -> str:
     ]
     if extras:
         lines.append(f"<i>{html.escape(extras)}</i>")
+    if deal.pickup_only:
+        lines.append("📍 <b>Pickup only</b>" + (f" · {html.escape(deal.city)}" if deal.city else ""))
+    if deal.pickup_only:
+        delivery = f"📦 Packaging: <b>{money(deal.packaging, c)}</b> (no shipping, pickup)"
+    elif deal.shipping_known:
+        delivery = f"📦 Shipping + packaging: <b>{money(deal.shipping + deal.packaging, c)}</b>"
+    else:
+        delivery = (f"📦 Shipping + packaging: <b>~{money(deal.shipping + deal.packaging, c)}</b> "
+                    "(shipping estimated)")
     lines += [
         "",
         f"💶 Item price: <b>{money(it.total_price, c)}</b> (listed {money(it.price, c)})",
+        delivery,
         f"🏷 Original price: <b>{money(deal.market_value, c)}</b> (median of {deal.comparables} listings)",
         f"💰 Possible profit: <b>{money(deal.profit, c)}</b>",
         f"📈 Percentage: <b>+{deal.roi:.0f}%</b>",

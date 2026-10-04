@@ -7,9 +7,10 @@ Watches Vinted for listings priced well below what similar items usually sell fo
 Nike · 42 · Very good
 
 💶 Item price: €47.95 (listed €45.00)
+📦 Shipping + packaging: €5.89
 🏷 Original price: €85.00 (median of 24 listings)
-💰 Possible profit: €37.05
-📈 Percentage: +77%
+💰 Possible profit: €31.16
+📈 Percentage: +59%
 🟢 Rating: 8/10
 
 Open on Vinted
@@ -19,8 +20,9 @@ Open on Vinted
 
 - **Item price** is what you'd actually pay, so it includes Vinted's buyer protection fee.
 - **Original price** is the market value: the median price of the same model in the same search. Listings must contain every word of the search, and are only compared with listings of the same brand and model number (an MG15 against other MG15s, a Katana 50 MkII against other Katana 50 MkIIs). Listings without a model number are only compared when similar listings are priced close together. If there's no good match, the listing is skipped. Crazy outliers get dropped first, and the same size is preferred when there are enough. `--dry-run` shows which listings each deal was compared with.
-- **Possible profit** = original price − item price − your `resell_costs`. Sellers don't pay fees on Vinted, so that's it.
-- **Percentage** = profit ÷ item price.
+- **Shipping** is the real delivery price from the listing's page (what Vinted charges you for the cheapest option). If the page can't be read, `shipping_cost` from the config is used and the alert says it's an estimate. Listings that say "solo ritiro a mano", "pickup only" and so on, or that Vinted won't ship, are marked 📍 Pickup only and counted without shipping.
+- **Possible profit** = original price − item price − shipping − your `resell_costs` (packaging for when you sell it on; the buyer pays shipping then). Sellers don't pay fees on Vinted, so that's it.
+- **Percentage** = profit ÷ (item price + shipping).
 - **Rating** (1-10): up to 4 points for percentage, 4 for profit in €, 2 for how many listings the market value is based on.
 
 Anything with too few comparable listings, too little profit, or a suspiciously huge discount (`max_roi`, usually fakes or broken stuff) gets skipped. Every item is only checked once.

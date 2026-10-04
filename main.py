@@ -27,7 +27,8 @@ def sample_deal() -> Deal:
     item = Item(id=1, title="Nike Dunk Low Panda (test message)", price=45.0,
                 total_price=47.95, currency="EUR", url="https://www.vinted.it/",
                 brand="Nike", size="42", condition="Very good")
-    return Deal(item, market_value=85.0, comparables=24, profit=37.05, roi=77.3, rating=8)
+    return Deal(item, market_value=85.0, comparables=24, profit=31.16, roi=59.0, rating=8,
+                shipping=4.89, packaging=1.0)
 
 
 def explain(deal: Deal) -> str:

@@ -2,10 +2,10 @@ import json
 from pathlib import Path
 
 from flipfinder.analyzer import (Rules, evaluate, find_comparables, is_relevant, market_value,
-                                 model_tokens, rate, remove_outliers)
+                                 is_pickup_only, model_tokens, rate, remove_outliers)
 from flipfinder.storage import SeenStore
 from flipfinder.telegram import format_deal
-from flipfinder.vinted import Item, parse_catalog_page
+from flipfinder.vinted import Item, parse_catalog_page, parse_item_page
 
 
 def item(i, price, size="42", title="Nike Dunk Low", total=None):
@@ -201,3 +201,57 @@ def test_player_not_valued_like_player_ii():
     candidate = titled(1, "Fender stratocaster player", 400, "Fender")
     comps, _ = find_comparables(candidate, player + player_ii, 8, q)
     assert {c.id for c in comps} == {c.id for c in player}
+
+
+# --- Shipping and pickup ---
+
+def test_shipping_counts_in_profit_roi_and_rating():
+    rules = Rules(resell_costs=10)
+    p = pool([200] * 12)
+    free = evaluate(item(1, 100), p, rules, shipping=0.0)
+    shipped = evaluate(item(1, 100), p, rules, shipping=25.0)
+    assert shipped.profit == round(free.profit - 25, 2)
+    assert shipped.roi == round(shipped.profit / (item(1, 100).total_price + 25) * 100, 1)
+    assert shipped.rating <= free.rating
+    # shipping can turn a deal into no deal
+    assert evaluate(item(1, 130), p, rules, shipping=0.0) is not None
+    assert evaluate(item(1, 130), p, rules, shipping=30.0) is None
+
+
+def test_estimated_shipping_used_when_unknown_and_none_for_pickup():
+    rules = Rules(shipping_cost=20)
+    est = evaluate(item(1, 40), pool([120] * 12), rules)
+    assert est.shipping == 20 and not est.shipping_known
+    pickup = evaluate(item(1, 40), pool([120] * 12), rules, shipping=18.0, pickup_only=True, city="Milano")
+    assert pickup.shipping == 0 and pickup.pickup_only
+    msg = format_deal(pickup)
+    assert "📍 <b>Pickup only</b> · Milano" in msg and "no shipping" in msg
+
+
+def test_shipping_line_in_message():
+    deal = evaluate(item(1, 40), pool([120] * 12), Rules(resell_costs=10), shipping=15.0)
+    assert "📦 Shipping + packaging: <b>€25.00</b>" in format_deal(deal)
+
+
+def test_pickup_only_phrases():
+    assert is_pickup_only("Solo ritiro a mano zona Milano")
+    assert is_pickup_only("Ritiro a mano solo, no spedizione")
+    assert is_pickup_only("Only pickup, too fragile to ship")
+    assert is_pickup_only("Nur Abholung")
+    # real descriptions that only mention it or are about guitar pickups
+    assert not is_pickup_only("Pickup al ponte: Fender Designed alnico humbucking")
+    assert not is_pickup_only("Remise en main propre privilégiée pour ne pas abîmer la guitare. "
+                              "Possibilité de faire un envoi")
+    assert not is_pickup_only("Zona La Spezia possibilità di consegna hand carry gratuita")
+    assert not is_pickup_only("Spedizione rapida e imballaggio accurato!")
+
+
+def test_parse_item_page():
+    payload = ('{"shipping":{"type":"shipping","originalPrice":{"amount":"10.49","currencyCode":"EUR"},'
+               '"finalPrice":{"amount":"10.49","currencyCode":"EUR"},"isFree":false},'
+               '"x":[{"data":{"description":"Solo ritiro a mano"},"exposures":[],"name":"description","section":"content"},'
+               '{"data":{"name":"seller","user_info":[{"key":"location","text":"Torino, Italia"}]},'
+               '"exposures":[],"name":"user_info_header","section":"sidebar"}],"isShippingAvailable":true}')
+    html = "<script>self.__next_f.push([1," + json.dumps(payload) + "])</script>"
+    d = parse_item_page(html)
+    assert (d.shipping, d.shipping_available, d.description, d.city) == (10.49, True, "Solo ritiro a mano", "Torino, Italia")

@@ -18,7 +18,9 @@ rules:
   min_rating: 6        # out of 10
   min_comparables: 8   # need this many similar listings to trust the market value
   max_roi: 120         # way cheaper than this usually means a different model, fake, broken or a toy
-  resell_costs: 10     # shipping/packaging, guitars and amps are bulky
+  resell_costs: 10     # your packaging when you resell (the buyer pays shipping on Vinted)
+  shipping_cost: 15    # what you pay for delivery, only used when the item page doesn't say
+                       # (searches below override both per item type)
 
 # Titles containing any of these get skipped, for every search
 exclude_keywords:
@@ -73,59 +75,98 @@ searches:
   - query: fender player stratocaster
     price_from: 350
     price_to: 600
+    shipping_cost: 22
+    resell_costs: 10
   - query: squier classic vibe stratocaster
     price_from: 150
     price_to: 300
+    shipping_cost: 22
+    resell_costs: 10
   - query: squier affinity stratocaster
     price_from: 60
     price_to: 200
+    shipping_cost: 22
+    resell_costs: 10
 
   # Les Pauls
   - query: epiphone les paul standard
     price_from: 150
     price_to: 350
+    shipping_cost: 22
+    resell_costs: 10
   - query: epiphone les paul special
     price_from: 60
     price_to: 200
+    shipping_cost: 22
+    resell_costs: 10
   - query: gibson les paul studio
     price_from: 500
     price_to: 1500
     exclude_keywords: [epiphone, tribute copy, made in china, copy]
+    shipping_cost: 22
+    resell_costs: 10
 
   # Acoustics
-  - query: chitarra acustica yamaha
+  - query: yamaha chitarra
     price_from: 40
     price_to: 200
-  - query: chitarra acustica fender
+    shipping_cost: 20
+    resell_costs: 12
+  - query: fender acustica
     price_from: 40
     price_to: 200
-  - query: chitarra acustica takamine
+    shipping_cost: 20
+    resell_costs: 12
+  - query: takamine
     price_from: 150       # cheaper ones are entry G-series, valued against pro models otherwise
     price_to: 300
+    shipping_cost: 20
+    resell_costs: 12
 
   # Amps (Marshall also sells headphones/speakers, so those get skipped)
   - query: boss katana
     price_from: 80
     price_to: 300
     exclude_keywords: [pedale, footswitch]
+    shipping_cost: 10
+    resell_costs: 5
   - query: fender mustang amplificatore
     price_from: 40
     price_to: 200
-  - query: marshall amplificatore chitarra
+    shipping_cost: 10
+    resell_costs: 5
+  - query: marshall amplificatore
     price_from: 70        # skips MG10-size practice amps
     price_to: 300
     exclude_keywords: [cuffie, headphones, bluetooth, speaker, cassa, emberton, major, minor, acton, stanmore, woburn]
+    shipping_cost: 10
+    resell_costs: 5
   - query: vox amplificatore
     price_from: 40
     price_to: 300
+    shipping_cost: 10
+    resell_costs: 5
 
   # Pedals
-  - query: pedale boss chitarra
+  - query: boss
     price_from: 25
     price_to: 90
+    filters:
+      catalog: [4840]      # Vinted's "Pedali" category, otherwise "boss" is mostly Hugo Boss clothes
+    exclude_keywords: [katana]   # the Katana search covers those
+    shipping_cost: 6
+    resell_costs: 1
 
   # Soundbars
-  - query: sony g700
+  - query: soundbar sony    # every Sony soundbar, each compared with the same model (HT-G700 with HT-G700s)
     price_from: 80
     price_to: 250
     exclude_keywords: [telecomando, remote, staffa, supporto, cavo]
+    shipping_cost: 9
+    resell_costs: 4
+  - query: sony g700        # catches G700 listings that don't say "soundbar"
+    price_from: 80
+    price_to: 250
+    exclude_keywords: [telecomando, remote, staffa, supporto, cavo]
+    shipping_cost: 9
+    resell_costs: 4

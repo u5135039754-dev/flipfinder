@@ -8,7 +8,7 @@ import time
 from dataclasses import asdict, replace
 from pathlib import Path
 
-from .analyzer import Deal, evaluate
+from .analyzer import Deal, evaluate, is_pickup_only
 from .config import Config, Search
 from .storage import SeenStore
 from .vinted import Item, VintedClient
@@ -90,6 +90,10 @@ class Scanner:
         pool = self._pool(s, newest)
         rules = replace(self.cfg.rules,
                         exclude_keywords=self.cfg.rules.exclude_keywords + tuple(s.exclude_keywords))
+        if s.shipping_cost is not None:
+            rules = replace(rules, shipping_cost=s.shipping_cost)
+        if s.resell_costs is not None:
+            rules = replace(rules, resell_costs=s.resell_costs)
         if self.first_run:
             # Nothing seen yet: remember what's listed now instead of alerting on all of it
             for item in fresh:
@@ -98,10 +102,26 @@ class Scanner:
         deals = []
         for item in fresh:
             self.seen.add(item.id)
-            deal = evaluate(item, pool, rules, s.query)
+            # Shipping is only on the item page, so only open it for listings that
+            # would be a deal even with free shipping (a handful per scan)
+            if evaluate(item, pool, rules, s.query, shipping=0.0) is None:
+                continue
+            deal = self._with_details(item, pool, rules, s.query)
             if deal:
                 deals.append(deal)
         return deals
+
+    def _with_details(self, item: Item, pool: list[Item], rules, query: str) -> Deal | None:
+        try:
+            d = self.client.details(item)
+        except Exception as e:
+            log.warning("Couldn't open item %s, using estimated shipping: %s", item.id, e)
+            return evaluate(item, pool, rules, query)
+        pickup = not d.shipping_available or is_pickup_only(f"{item.title}\n{d.description}")
+        log.info("Item %s: shipping %s%s", item.id,
+                 "unknown" if d.shipping is None else f"{d.shipping:.2f}", ", pickup only" if pickup else "")
+        return evaluate(item, pool, rules, query, shipping=d.shipping,
+                        pickup_only=pickup, city=d.city)
 
     def scan(self) -> list[Deal]:
         deals: list[Deal] = []

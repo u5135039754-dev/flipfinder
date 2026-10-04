@@ -19,6 +19,8 @@ class Search:
     price_to: float | None = None
     filters: dict = field(default_factory=dict)   # brand_ids, size_ids, status_ids, catalog_ids
     exclude_keywords: list[str] = field(default_factory=list)
+    shipping_cost: float | None = None   # overrides rules.shipping_cost for this search
+    resell_costs: float | None = None    # overrides rules.resell_costs for this search
 
 
 @dataclass
@@ -37,6 +39,10 @@ class Config:
     seen_file: Path
 
 
+def _opt_float(value) -> float | None:
+    return None if value is None else float(value)
+
+
 def load(path: str | Path = "config.yaml") -> Config:
     load_dotenv()
     path = Path(path)
@@ -51,6 +57,7 @@ def load(path: str | Path = "config.yaml") -> Config:
         min_comparables=int(r.get("min_comparables", 8)),
         max_roi=float(r.get("max_roi", 400)),
         resell_costs=float(r.get("resell_costs", 0)),
+        shipping_cost=float(r.get("shipping_cost", 15)),
         exclude_keywords=tuple(global_excl),
     )
 
@@ -64,6 +71,8 @@ def load(path: str | Path = "config.yaml") -> Config:
             price_to=s.get("price_to"),
             filters=s.get("filters", {}) or {},
             exclude_keywords=s.get("exclude_keywords", []) or [],
+            shipping_cost=_opt_float(s.get("shipping_cost")),
+            resell_costs=_opt_float(s.get("resell_costs")),
         ))
     if not searches:
         raise SystemExit("No searches in config.yaml, add at least one.")

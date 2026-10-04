@@ -162,6 +162,11 @@ class VintedClient:
             return r
         raise RuntimeError(f"Vinted kept refusing {path} after retries")
 
+    def details(self, item: "Item") -> "ItemDetails":
+        r = self._get(f"/items/{item.id}", {})
+        r.encoding = "utf-8"
+        return parse_item_page(r.text)
+
     def search(self, query: str, *, order: str = "newest_first", page: int = 1,
                per_page: int = 96, price_from: float | None = None,
                price_to: float | None = None, extra: dict | None = None) -> list[Item]:
@@ -204,3 +209,43 @@ def parse_catalog_page(html: str) -> list[dict]:
     raw, _ = json.JSONDecoder().raw_decode(data, start + len(_ITEMS_MARKER) - 1)
     return [x["productItem"] for x in raw
             if isinstance(x, dict) and isinstance(x.get("productItem"), dict)]
+
+
+@dataclass
+class ItemDetails:
+    """What only the item page tells us: shipping price, description, seller city."""
+    shipping: float | None = None      # cheapest delivery option for the buyer, None if unknown
+    shipping_available: bool = True
+    description: str = ""
+    city: str = ""
+
+
+def parse_item_page(html: str) -> ItemDetails:
+    data = "".join(json.loads(c) for c in _RSC_CHUNK.findall(html))
+    details = ItemDetails()
+
+    i = data.find('"shipping":{"type":"shipping"')
+    if i >= 0:
+        shipping, _ = json.JSONDecoder().raw_decode(data, i + len('"shipping":'))
+        details.shipping, _ = _money(shipping.get("finalPrice") or shipping.get("originalPrice"))
+    if '"isShippingAvailable":false' in data:
+        details.shipping_available = False
+
+    for name, key in (("description", "description"), ("user_info_header", "user_info")):
+        m = re.search(r'"name":"%s","section"' % name, data)
+        if not m:
+            continue
+        start = data.rfind('{"data":', 0, m.start())
+        try:
+            block, _ = json.JSONDecoder().raw_decode(data, start)
+        except ValueError:
+            continue
+        value = block.get("data", {}).get(key)
+        if name == "description":
+            details.description = _text(value)
+        else:
+            # only there when the seller chose to show their city
+            for entry in value or []:
+                if entry.get("key") == "location":
+                    details.city = _text(entry.get("text"))
+    return details
