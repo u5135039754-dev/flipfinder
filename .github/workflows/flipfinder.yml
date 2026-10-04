@@ -3,7 +3,7 @@ name: flipFinder
 
 on:
   schedule:
-    - cron: "*/10 * * * *"   # every 10 min (GitHub may delay runs a bit when busy)
+    - cron: "*/5 * * * *"    # every 5 min, the shortest GitHub allows (it may delay runs when busy)
   workflow_dispatch:          # lets you start a run by hand from the Actions tab
 
 concurrency:

@@ -35,7 +35,7 @@ Anything with too few comparable listings, too little profit, or a suspiciously 
 
 ## 2. Run it 24/7 for free (PC can be off)
 
-This uses GitHub Actions, which runs the scan on GitHub's servers every 10 minutes.
+This uses GitHub Actions, which runs the scan on GitHub's servers every 5 minutes.
 
 1. Move `deploy/flipfinder.yml` into a `.github/workflows/` folder (create it). In PowerShell, from the FlipFinder folder:
    ```
@@ -58,7 +58,7 @@ To change searches later, edit `config.yaml` and push. No need to touch anything
 
 Things to know:
 
-- **Public vs private repo.** Public repos get unlimited Actions minutes. Private ones get 2,000 min/month, and every 10 min is about 4,300 runs, so if you go private change the cron in `.github/workflows/flipfinder.yml` to `*/30 * * * *`. Your token stays secret either way since it's in Secrets.
+- **Public vs private repo.** Public repos get unlimited Actions minutes. Private ones get 2,000 min/month, and every 5 min is about 8,600 runs, so if you go private change the cron in `.github/workflows/flipfinder.yml` to `*/30 * * * *`. Your token stays secret either way since it's in Secrets.
 - GitHub can delay scheduled runs by a few minutes when it's busy, and it pauses schedules in repos with no commits for 60 days. Push any small change to wake it up.
 - Vinted sometimes blocks requests from data center IPs. If the Actions logs show 403 errors on every run, use the VPS option below or run it on your PC.
 

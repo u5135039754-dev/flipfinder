@@ -10,7 +10,7 @@ Python 3.10+ app that finds underpriced Vinted listings and sends Telegram alert
 - `flipfinder/storage.py` seen item IDs in `data/seen.json` (14 day expiry)
 - `flipfinder/telegram.py` message format + Bot API
 - `config.yaml` searches and rules; secrets in `.env` (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)
-- `.github/workflows/flipfinder.yml` (shipped as `deploy/flipfinder.yml`, move it there) runs `main.py --once` every 10 min, `data/` persisted with actions/cache
+- `.github/workflows/flipfinder.yml` (shipped as `deploy/flipfinder.yml`, move it there) runs `main.py --once` every 5 min, `data/` persisted with actions/cache
 
 ## Commands
 - `pytest` run tests
