@@ -17,7 +17,7 @@ rules:
   min_roi: 30          # % profit compared to what you pay
   min_rating: 6        # out of 10
   min_comparables: 8   # need this many similar listings to trust the market value
-  max_roi: 300         # way cheaper than this usually means fake, broken or a toy
+  max_roi: 120         # way cheaper than this usually means a different model, fake, broken or a toy
   resell_costs: 10     # shipping/packaging, guitars and amps are bulky
 
 # Titles containing any of these get skipped, for every search
@@ -56,25 +56,41 @@ exclude_keywords:
   - corde
   - plettri
   - tracolla
+  # smaller versions and bundles get compared to the full-size item otherwise
+  - mini
+  - kit
+  - set
+  - pack
+  - starter
+  - bundle
 
 # price_from cuts out cheap accessories that share the keyword
 searches:
+  # One model per search: market value is the median of the search, so mixing
+  # cheap and premium models makes every cheap one look like a deal.
+
   # Strats
-  - query: fender stratocaster
-    price_from: 150
+  - query: fender player stratocaster
+    price_from: 350
     price_to: 600
-  - query: squier stratocaster
+  - query: squier classic vibe stratocaster
+    price_from: 150
+    price_to: 300
+  - query: squier affinity stratocaster
     price_from: 60
     price_to: 200
 
   # Les Pauls
-  - query: epiphone les paul
-    price_from: 80
+  - query: epiphone les paul standard
+    price_from: 150
     price_to: 350
-  - query: gibson les paul
+  - query: epiphone les paul special
+    price_from: 60
+    price_to: 200
+  - query: gibson les paul studio
     price_from: 500
     price_to: 1500
-    exclude_keywords: [epiphone, tribute copy]
+    exclude_keywords: [epiphone, tribute copy, made in china, copy]
 
   # Acoustics
   - query: chitarra acustica yamaha
@@ -84,7 +100,7 @@ searches:
     price_from: 40
     price_to: 200
   - query: chitarra acustica takamine
-    price_from: 60
+    price_from: 150       # cheaper ones are entry G-series, valued against pro models otherwise
     price_to: 300
 
   # Amps (Marshall also sells headphones/speakers, so those get skipped)
@@ -96,7 +112,7 @@ searches:
     price_from: 40
     price_to: 200
   - query: marshall amplificatore chitarra
-    price_from: 40
+    price_from: 70        # skips MG10-size practice amps
     price_to: 300
     exclude_keywords: [cuffie, headphones, bluetooth, speaker, cassa, emberton, major, minor, acton, stanmore, woburn]
   - query: vox amplificatore
