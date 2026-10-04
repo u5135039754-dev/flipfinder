@@ -1,0 +1,44 @@
+# Runs flipFinder in the cloud on a schedule, so it works with your PC off.
+name: flipFinder
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # every 10 min (GitHub may delay runs a bit when busy)
+  workflow_dispatch:          # lets you start a run by hand from the Actions tab
+
+concurrency:
+  group: flipfinder
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # Brings back seen items + price pools from the previous run
+      - uses: actions/cache/restore@v4
+        with:
+          path: data
+          key: flipfinder-data-${{ github.run_id }}
+          restore-keys: flipfinder-data-
+
+      - name: Scan Vinted
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python main.py --once
+
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: data
+          key: flipfinder-data-${{ github.run_id }}

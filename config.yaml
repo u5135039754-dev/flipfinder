@@ -1,0 +1,115 @@
+# flipFinder settings
+
+domain: www.vinted.it        # or www.vinted.fr, www.vinted.de, ...
+interval_minutes: 5          # only used when running on your PC (python main.py)
+request_delay: 2             # seconds between Vinted requests, don't go lower
+comparable_pages: 3          # pages of listings used to work out market value
+pool_refresh_minutes: 60     # how often market value gets recalculated
+
+# Vinted adds a buyer protection fee on top of the price.
+# If the API gives the real total we use that, otherwise this estimate.
+buyer_protection:
+  fixed: 0.70
+  percent: 5
+
+rules:
+  min_profit: 25       # € you'd make at least (gear is pricier, so higher than for clothes)
+  min_roi: 30          # % profit compared to what you pay
+  min_rating: 6        # out of 10
+  min_comparables: 8   # need this many similar listings to trust the market value
+  max_roi: 300         # way cheaper than this usually means fake, broken or a toy
+  resell_costs: 10     # shipping/packaging, guitars and amps are bulky
+
+# Titles containing any of these get skipped, for every search
+exclude_keywords:
+  # fakes and broken stuff
+  - fake
+  - replica
+  - copia
+  - rotto
+  - rotta
+  - difettoso
+  - non funzionante
+  - per ricambi
+  # toys and kids' stuff
+  - giocattolo
+  - toy
+  - bambini
+  - bambino
+  # merch, not gear
+  - maglietta
+  - t-shirt
+  - felpa
+  - cappello
+  - poster
+  - adesivo
+  - sticker
+  - portachiavi
+  - tazza
+  # parts and accessories only
+  - solo custodia
+  - solo case
+  - battipenna
+  - pickguard
+  - manico
+  - meccaniche
+  - corde
+  - plettri
+  - tracolla
+
+# price_from cuts out cheap accessories that share the keyword
+searches:
+  # Strats
+  - query: fender stratocaster
+    price_from: 150
+    price_to: 600
+  - query: squier stratocaster
+    price_from: 60
+    price_to: 200
+
+  # Les Pauls
+  - query: epiphone les paul
+    price_from: 80
+    price_to: 350
+  - query: gibson les paul
+    price_from: 500
+    price_to: 1500
+    exclude_keywords: [epiphone, tribute copy]
+
+  # Acoustics
+  - query: chitarra acustica yamaha
+    price_from: 40
+    price_to: 200
+  - query: chitarra acustica fender
+    price_from: 40
+    price_to: 200
+  - query: chitarra acustica takamine
+    price_from: 60
+    price_to: 300
+
+  # Amps (Marshall also sells headphones/speakers, so those get skipped)
+  - query: boss katana
+    price_from: 80
+    price_to: 300
+    exclude_keywords: [pedale, footswitch]
+  - query: fender mustang amplificatore
+    price_from: 40
+    price_to: 200
+  - query: marshall amplificatore chitarra
+    price_from: 40
+    price_to: 300
+    exclude_keywords: [cuffie, headphones, bluetooth, speaker, cassa, emberton, major, minor, acton, stanmore, woburn]
+  - query: vox amplificatore
+    price_from: 40
+    price_to: 300
+
+  # Pedals
+  - query: pedale boss chitarra
+    price_from: 25
+    price_to: 90
+
+  # Soundbars
+  - query: sony g700
+    price_from: 80
+    price_to: 250
+    exclude_keywords: [telecomando, remote, staffa, supporto, cavo]
