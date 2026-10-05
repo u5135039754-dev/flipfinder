@@ -103,6 +103,16 @@ eBay is searched at most every 20 minutes and its price pools are refreshed ever
 default (`ebay: item_location: IT`, or `EU`). Selling on eBay.it is free for private sellers in the
 EEA, so no fee is subtracted; set `sell_fees` in `config.yaml` if that changes for you.
 
+## Optional: Subito, local pickup
+
+With `subito: enabled: true`, flipFinder also checks Subito.it listings near you: new listings in
+your province (`region`, `province`), kept if the town is within `radius_km` of `center`. The cost
+to get an item is the cheaper of picking it up (`travel_cost`, with per-town overrides in
+`town_travel_costs`) and the seller's shipping. Alerts show the town and distance, and
+"💬 Negotiable" when the listing says *trattabile*. Market value compares the same model on Subito
+(all of Italy), Vinted and eBay. Subito has no public API: this uses the JSON API of its app, which
+works today but could change.
+
 ## Settings
 
 Everything lives in `config.yaml`, with comments. The ones you'll touch most:
