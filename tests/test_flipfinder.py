@@ -282,28 +282,61 @@ def test_summary_due_once_a_day_after_9_rome(tmp_path: Path):
     assert s.summary_due(winter_0800utc)
 
 
-def test_summary_text_and_best_near_miss(tmp_path: Path):
+def _summary_stats(tmp_path, miss_title="Squier Affinity Strat <Nero & Bianco>"):
     from datetime import datetime, timezone
     from flipfinder.health import RunStats, miss_record
-    rules = Rules(min_profit=25, min_roi=30, min_rating=6)
-    p = pool([100] * 12)
-    weak = assess(item(1, 80), p, rules)       # profit ~15: blocked
-    close = assess(item(2, 65), p, rules)      # nearer to passing
-    assert weak.blocked and close.blocked and close.closeness > weak.closeness
+    rules = Rules(min_profit=25, min_roi=30, min_rating=3)
+    p = pool([160] * 12)
+    close = assess(titled(2, miss_title, 125, "Fender"), p, rules, shipping=0.0)
     s = RunStats(tmp_path / "stats.json")
-    s.data["since"] = datetime(2026, 7, 1, 7, 0, tzinfo=timezone.utc).timestamp()
-    s.record_run(40, 0, miss_record("nike dunk low", weak))
-    s.record_run(25, 1, miss_record("nike dunk low", close))
-    s.record_failure()
-    text = s.summary_text(datetime(2026, 7, 2, 7, 0, tzinfo=timezone.utc))
-    assert "Runs: <b>3</b> (1 failed)" in text and "schedule should give ~288" in text
-    assert "Listings checked: <b>65</b>" in text and "Deals sent: <b>1</b>" in text
-    assert "/items/2" in text and "blocked by:" in text
+    s.data["since"] = datetime(2026, 10, 4, 7, 0, tzinfo=timezone.utc).timestamp()
+    for _ in range(270):
+        s.record_run(7, 0, None)
+    s.record_run(-50, 2, miss_record("squier affinity stratocaster", close))   # totals: 1,840 checked, 2 deals
+    return s, close
+
+
+def test_summary_format(tmp_path: Path):
+    from datetime import datetime, timezone
+    s, close = _summary_stats(tmp_path)
+    text = s.summary_text(Rules(min_profit=25, min_roi=30, min_rating=3),
+                          datetime(2026, 10, 5, 7, 0, tzinfo=timezone.utc))
+    lines = text.split("\n")
+    assert lines[0] == "📊 <b>flipFinder · last 24h</b>"
+    assert lines[1] == "Runs: 271 · Listings checked: 1,840 · Deals: 2"
+    # HTML link with the title escaped, never a Markdown-style [text](url)
+    assert lines[2] == ('Closest miss: <a href="https://www.vinted.it/items/2">'
+                        'Squier Affinity Strat &lt;Nero &amp; Bianco&gt;</a>')
+    assert "](" not in text
+    assert close.blocked == ["ROI < 30%"]
+    assert lines[3] == (f"€{close.item.total_price:.0f} → worth €160 · +€{close.profit:.0f} "
+                        f"({close.roi:.0f}%) · blocked: ROI &lt; 30%")
+    assert len(lines) == 4   # 271 of the expected 288 runs is fine, no warning
+
+
+def test_summary_uses_current_rules_and_warns_on_missing_runs(tmp_path: Path):
+    from datetime import datetime, timezone
+    s, _ = _summary_stats(tmp_path)
+    s.data["runs"] = 40
+    # with looser rules the stored miss would pass, so it isn't a miss any more
+    text = s.summary_text(Rules(min_profit=25, min_roi=20, min_rating=3),
+                          datetime(2026, 10, 5, 7, 0, tzinfo=timezone.utc))
+    assert "No near misses" in text and "Closest miss" not in text
+    assert "⚠️ Expected ~288 runs (12/hour)" in text
+
+
+def test_negative_profit_is_never_a_near_miss(tmp_path: Path):
+    from flipfinder.health import RunStats, miss_record
+    losing = assess(item(1, 99), pool([100] * 12), Rules(min_profit=25, min_roi=30))
+    s = RunStats(tmp_path / "stats.json")
+    s.record_run(10, 0, miss_record("x", losing))
+    assert s.data["best_miss"] is None
+    assert "No near misses" in s.summary_text(Rules())
 
 
 def test_assess_reports_blocking_rules():
     d = assess(item(1, 80), pool([100] * 12), Rules(min_profit=25, min_roi=30))
-    assert any("min_profit" in b for b in d.blocked) and any("min_roi" in b for b in d.blocked)
+    assert d.blocked == ["profit < €25", "ROI < 30%", "rating < 6"]
     assert evaluate(item(1, 80), pool([100] * 12), Rules(min_profit=25, min_roi=30)) is None
     too_cheap = assess(item(1, 5), pool([100] * 12), Rules())
     assert not is_near_miss(too_cheap)   # blocked by max_roi: suspicious, not "almost"

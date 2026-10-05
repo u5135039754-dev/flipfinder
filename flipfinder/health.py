@@ -12,21 +12,20 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from .analyzer import Deal
+from .analyzer import Deal, Rules, blocked_reasons
 
 FAIL_ALERT_AFTER = 3
 SUMMARY_TZ = ZoneInfo("Europe/Rome")
 SUMMARY_HOUR = 9
-EXPECTED_RUNS_PER_DAY = 24 * 60 // 5   # the workflow cron is every 5 minutes
+RUNS_PER_HOUR = 12   # cron-job.org (and the backup GitHub cron) trigger a run every 5 minutes
 
 
 def miss_record(query: str, m: Deal) -> dict:
     return {
         "title": m.item.title, "url": m.item.url, "query": query, "currency": m.item.currency,
         "pay": round(m.item.total_price + m.shipping, 2), "value": m.market_value,
-        "profit": m.profit, "roi": m.roi, "rating": m.rating,
-        "blocked": m.blocked, "closeness": m.closeness,
-    }
+        "profit": m.profit, "roi": m.roi, "rating": m.rating, "closeness": m.closeness,
+    }   # no "blocked" text: it's worded at summary time with the config values then
 
 
 class RunStats:
@@ -48,7 +47,7 @@ class RunStats:
         d["checked"] += checked
         d["deals_sent"] += deals_sent
         old = d["best_miss"]
-        if best_miss and (not old or (best_miss["closeness"], best_miss["profit"])
+        if best_miss and best_miss["profit"] > 0 and (not old or (best_miss["closeness"], best_miss["profit"])
                           > (old["closeness"], old["profit"])):
             d["best_miss"] = best_miss
 
@@ -70,33 +69,32 @@ class RunStats:
         now = (now or datetime.now(SUMMARY_TZ)).astimezone(SUMMARY_TZ)
         return now.hour >= SUMMARY_HOUR and self.data["last_summary_day"] != now.date().isoformat()
 
-    def summary_text(self, now: datetime | None = None) -> str:
+    def summary_text(self, rules: Rules, now: datetime | None = None) -> str:
+        """Short, phone-friendly summary. Blocking reasons use the current rules."""
         now = (now or datetime.now(SUMMARY_TZ)).astimezone(SUMMARY_TZ)
         d = self.data
-        since = datetime.fromtimestamp(d["since"], SUMMARY_TZ)
-        hours = max((now - since).total_seconds() / 3600, 0.1)
-        expected = round(EXPECTED_RUNS_PER_DAY * min(hours, 24) / 24)
+        hours = max((now - datetime.fromtimestamp(d["since"], SUMMARY_TZ)).total_seconds() / 3600, 0.1)
+        period = "last 24h" if 23 <= hours <= 25 else f"last {hours:.0f}h"
+        expected = round(RUNS_PER_HOUR * hours)
         lines = [
-            "📊 <b>flipFinder daily summary</b>",
-            f"<i>since {since:%a %d %b %H:%M}</i>",
-            "",
-            f"🔁 Runs: <b>{d['runs']}</b>" + (f" ({d['failed_runs']} failed)" if d["failed_runs"] else "")
-            + (f" · schedule should give ~{expected}" if d["runs"] < expected * 0.8 else ""),
-            f"🔎 Listings checked: <b>{d['checked']}</b>",
-            f"🔥 Deals sent: <b>{d['deals_sent']}</b>",
+            f"📊 <b>flipFinder · {period}</b>",
+            f"Runs: {d['runs']:,} · Listings checked: {d['checked']:,} · Deals: {d['deals_sent']:,}",
         ]
+        if d["failed_runs"]:
+            lines.append(f"⚠️ {d['failed_runs']:,} run(s) failed")
+        if d["runs"] < expected * 0.8:
+            lines.append(f"⚠️ Expected ~{expected:,} runs ({RUNS_PER_HOUR}/hour), the trigger may be off")
         m = d["best_miss"]
-        if m:
+        blocked = blocked_reasons(m["profit"], m["roi"], m["rating"], rules) if m else []
+        if m and m["profit"] > 0 and blocked:
             sym = "€" if m["currency"] == "EUR" else m["currency"] + " "
             lines += [
-                "",
-                f"🥈 Best near miss: <a href=\"{html.escape(m['url'])}\">{html.escape(m['title'][:80])}</a>",
-                f"pay {sym}{m['pay']:.2f} incl. shipping · value {sym}{m['value']:.2f} · "
-                f"profit {sym}{m['profit']:.2f} · ROI {m['roi']:.1f}% · rating {m['rating']}/10",
-                f"blocked by: {html.escape(', '.join(m['blocked']))}",
+                f'Closest miss: <a href="{html.escape(m["url"], quote=True)}">{html.escape(m["title"][:60])}</a>',
+                f"{sym}{m['pay']:,.0f} → worth {sym}{m['value']:,.0f} · +{sym}{m['profit']:,.0f} "
+                f"({m['roi']:.0f}%) · blocked: {html.escape(', '.join(blocked))}",
             ]
         else:
-            lines += ["", "🥈 No near misses: nothing came close to the rules."]
+            lines.append("No near misses")
         return "\n".join(lines)
 
     def mark_summary_sent(self, now: datetime | None = None):

@@ -111,7 +111,7 @@ def report(stats: RunStats, tg: Telegram, ok: bool, error: str, scanner: Scanner
                      f"Latest: {html.escape(error)}\n"
                      "You'll get a message when it works again.")
     if stats.summary_due():
-        if tg.send_text(stats.summary_text()):
+        if tg.send_text(stats.summary_text(scanner.cfg.rules)):
             stats.mark_summary_sent()
     stats.save()
 

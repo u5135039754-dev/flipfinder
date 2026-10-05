@@ -289,6 +289,20 @@ def normalize_text(text: str) -> list[str]:
     return re.sub(r"[^a-z0-9]+", " ", t).split()
 
 
+def blocked_reasons(profit: float, roi: float, rating: int, rules: Rules) -> list[str]:
+    """Which rules a listing fails, worded with the thresholds from config.yaml."""
+    out = []
+    if profit < rules.min_profit:
+        out.append(f"profit < €{rules.min_profit:g}")
+    if roi < rules.min_roi:
+        out.append(f"ROI < {rules.min_roi:g}%")
+    if roi > rules.max_roi:
+        out.append(f"ROI > {rules.max_roi:g}%")
+    if rating < rules.min_rating:
+        out.append(f"rating < {rules.min_rating}")
+    return out
+
+
 def platform_values(comps: list[Item], min_comparables: int) -> dict:
     """Median price per platform, for platforms with enough comparables of their own."""
     need = max(3, min_comparables // 2)
@@ -341,15 +355,7 @@ def assess(item: Item, pool: list[Item], rules: Rules, query: str = "",
     profit = round(value - sell_fee - cost - rules.resell_costs, 2)
     roi = round(profit / cost * 100, 1) if cost > 0 else 0.0
     rating = rate(profit, roi, n, rules)
-    blocked = []
-    if profit < rules.min_profit:
-        blocked.append(f"profit under min_profit {rules.min_profit:g}")
-    if roi < rules.min_roi:
-        blocked.append(f"ROI under min_roi {rules.min_roi:g}%")
-    if roi > rules.max_roi:
-        blocked.append(f"ROI over max_roi {rules.max_roi:g}%")
-    if rating < rules.min_rating:
-        blocked.append(f"rating under min_rating {rules.min_rating}")
+    blocked = blocked_reasons(profit, roi, rating, rules)
     by_price = sorted(comps, key=lambda p: p.price)
     sample = [by_price[i * (n - 1) // 4] for i in range(5)]   # cheapest, quartiles, priciest
     deal = Deal(item, value, n, profit, roi, rating, basis, sample,
@@ -381,5 +387,5 @@ def is_near_miss(deal: Deal | None) -> bool:
     Blocked, but at least halfway on its weakest rule (profit, ROI or rating), and not
     blocked by max_roi (that's "too good to be true", not "almost").
     """
-    return bool(deal and deal.blocked and deal.closeness >= NEAR_MISS_CLOSENESS
-                and not any("max_roi" in b for b in deal.blocked))
+    return bool(deal and deal.blocked and deal.profit > 0 and deal.closeness >= NEAR_MISS_CLOSENESS
+                and not any(b.startswith("ROI >") for b in deal.blocked))
