@@ -10,13 +10,15 @@ flipFinder entry point.
 from __future__ import annotations
 
 import argparse
+import html
 import logging
 import sys
 import time
 
 from flipfinder import config as config_mod
 from flipfinder.analyzer import Deal
-from flipfinder.scanner import Scanner
+from flipfinder.health import FAIL_ALERT_AFTER, RunStats, miss_record
+from flipfinder.scanner import Scanner, describe_miss
 from flipfinder.telegram import Telegram, format_deal
 from flipfinder.vinted import Item
 
@@ -68,17 +70,50 @@ def main() -> int:
         return 0 if ok else 1
 
     scanner = Scanner(cfg)
+    # dry runs don't touch the stats, so testing locally doesn't skew the daily summary
+    stats = RunStats(cfg.seen_file.parent / "stats.json") if tg else None
     while True:
-        deals = scanner.scan()
+        try:
+            deals = scanner.scan()
+            ok = not scanner.failed
+            error = "every Vinted search failed (blocked or site changed?), see the Actions log"
+        except Exception as e:
+            logging.exception("Scan crashed")
+            deals, ok, error = [], False, f"the scan crashed: {type(e).__name__}: {e}"
         logging.info("Found %d deal(s)", len(deals))
+        sent = 0
         for deal in deals[:MAX_ALERTS_PER_SCAN]:
             if tg:
-                tg.send_deal(deal)
+                sent += tg.send_deal(deal)
             else:
                 print("\n" + format_deal(deal) + "\n" + explain(deal) + "\n")
+        if stats is None and scanner.near_misses:
+            print("Closest near misses:")
+            for query, m in scanner.near_misses[:5]:
+                print("  " + describe_miss(query, m))
+        if stats is not None:
+            report(stats, tg, ok, error, scanner, sent)
         if args.once:
-            return 0
+            return 0 if ok else 1
         time.sleep(cfg.interval_minutes * 60)
+
+
+def report(stats: RunStats, tg: Telegram, ok: bool, error: str, scanner: Scanner, sent: int):
+    """Failure alerts and the daily summary."""
+    if ok:
+        streak = stats.record_success()
+        if streak:
+            tg.send_text(f"✅ flipFinder is working again after {streak} failed runs.")
+        best = scanner.near_misses[0] if scanner.near_misses else None
+        stats.record_run(scanner.checked, sent, miss_record(*best) if best else None)
+    elif stats.record_failure():
+        tg.send_text(f"⚠️ <b>flipFinder: the last {FAIL_ALERT_AFTER} runs failed.</b>\n"
+                     f"Latest: {html.escape(error)}\n"
+                     "You'll get a message when it works again.")
+    if stats.summary_due():
+        if tg.send_text(stats.summary_text()):
+            stats.mark_summary_sent()
+    stats.save()
 
 
 if __name__ == "__main__":

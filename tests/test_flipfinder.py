@@ -1,8 +1,8 @@
 import json
 from pathlib import Path
 
-from flipfinder.analyzer import (Rules, evaluate, find_comparables, is_relevant, market_value,
-                                 is_pickup_only, model_tokens, rate, remove_outliers)
+from flipfinder.analyzer import (Rules, assess, evaluate, find_comparables, is_near_miss, is_pickup_only,
+                                 is_relevant, market_value, model_tokens, rate, remove_outliers)
 from flipfinder.storage import SeenStore
 from flipfinder.telegram import format_deal
 from flipfinder.vinted import Item, parse_catalog_page, parse_item_page
@@ -255,3 +255,55 @@ def test_parse_item_page():
     html = "<script>self.__next_f.push([1," + json.dumps(payload) + "])</script>"
     d = parse_item_page(html)
     assert (d.shipping, d.shipping_available, d.description, d.city) == (10.49, True, "Solo ritiro a mano", "Torino, Italia")
+
+
+# --- Health: failure alerts, daily summary, near misses ---
+
+def test_failure_alert_fires_once_at_three_and_recovery_reports_streak(tmp_path: Path):
+    from flipfinder.health import RunStats
+    s = RunStats(tmp_path / "stats.json")
+    assert [s.record_failure() for _ in range(5)] == [False, False, True, False, False]
+    assert s.record_success() == 5
+    assert s.record_success() == 0
+    assert not s.record_failure() and s.record_success() == 0   # a single failure isn't news
+
+
+def test_summary_due_once_a_day_after_9_rome(tmp_path: Path):
+    from datetime import datetime, timezone
+    from flipfinder.health import RunStats
+    s = RunStats(tmp_path / "stats.json")
+    summer_0859 = datetime(2026, 7, 1, 6, 59, tzinfo=timezone.utc)   # 08:59 in Rome (CEST)
+    summer_0900 = datetime(2026, 7, 1, 7, 0, tzinfo=timezone.utc)
+    winter_0800utc = datetime(2026, 12, 1, 8, 0, tzinfo=timezone.utc)  # 09:00 in Rome (CET)
+    assert not s.summary_due(summer_0859)
+    assert s.summary_due(summer_0900)
+    s.mark_summary_sent(summer_0900)
+    assert not s.summary_due(datetime(2026, 7, 1, 20, 0, tzinfo=timezone.utc))
+    assert s.summary_due(winter_0800utc)
+
+
+def test_summary_text_and_best_near_miss(tmp_path: Path):
+    from datetime import datetime, timezone
+    from flipfinder.health import RunStats, miss_record
+    rules = Rules(min_profit=25, min_roi=30, min_rating=6)
+    p = pool([100] * 12)
+    weak = assess(item(1, 80), p, rules)       # profit ~15: blocked
+    close = assess(item(2, 65), p, rules)      # nearer to passing
+    assert weak.blocked and close.blocked and close.closeness > weak.closeness
+    s = RunStats(tmp_path / "stats.json")
+    s.data["since"] = datetime(2026, 7, 1, 7, 0, tzinfo=timezone.utc).timestamp()
+    s.record_run(40, 0, miss_record("nike dunk low", weak))
+    s.record_run(25, 1, miss_record("nike dunk low", close))
+    s.record_failure()
+    text = s.summary_text(datetime(2026, 7, 2, 7, 0, tzinfo=timezone.utc))
+    assert "Runs: <b>3</b> (1 failed)" in text and "schedule should give ~288" in text
+    assert "Listings checked: <b>65</b>" in text and "Deals sent: <b>1</b>" in text
+    assert "/items/2" in text and "blocked by:" in text
+
+
+def test_assess_reports_blocking_rules():
+    d = assess(item(1, 80), pool([100] * 12), Rules(min_profit=25, min_roi=30))
+    assert any("min_profit" in b for b in d.blocked) and any("min_roi" in b for b in d.blocked)
+    assert evaluate(item(1, 80), pool([100] * 12), Rules(min_profit=25, min_roi=30)) is None
+    too_cheap = assess(item(1, 5), pool([100] * 12), Rules())
+    assert not is_near_miss(too_cheap)   # blocked by max_roi: suspicious, not "almost"

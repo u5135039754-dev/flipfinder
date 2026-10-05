@@ -8,7 +8,7 @@ import time
 from dataclasses import asdict, replace
 from pathlib import Path
 
-from .analyzer import Deal, evaluate, is_pickup_only
+from .analyzer import Deal, assess, is_near_miss, is_pickup_only
 from .config import Config, Search
 from .storage import SeenStore
 from .vinted import Item, VintedClient
@@ -57,6 +57,10 @@ class Scanner:
         self.seen = SeenStore(cfg.seen_file)
         self.first_run = self.seen.is_empty
         self.pools = PoolCache(cfg.seen_file.parent / "pools.json", cfg.pool_refresh_minutes)
+        # filled by each scan(), for logs and the daily summary
+        self.checked = 0
+        self.failed_searches = 0
+        self.near_misses: list[tuple[str, Deal]] = []   # (query, deal it would have been)
 
     def _pool(self, s: Search, newest: list[Item]) -> list[Item]:
         key = _key(s)
@@ -102,13 +106,18 @@ class Scanner:
         deals = []
         for item in fresh:
             self.seen.add(item.id)
+            self.checked += 1
             # Shipping is only on the item page, so only open it for listings that
             # would be a deal even with free shipping (a handful per scan)
-            if evaluate(item, pool, rules, s.query, shipping=0.0) is None:
+            free = assess(item, pool, rules, s.query, shipping=0.0)
+            if free is None:
                 continue
-            deal = self._with_details(item, pool, rules, s.query)
-            if deal:
+            deal = (self._with_details(item, pool, rules, s.query) if not free.blocked
+                    else assess(item, pool, rules, s.query))   # estimated shipping
+            if deal and not deal.blocked:
                 deals.append(deal)
+            elif is_near_miss(deal):
+                self.near_misses.append((s.query, deal))
         return deals
 
     def _with_details(self, item: Item, pool: list[Item], rules, query: str) -> Deal | None:
@@ -116,19 +125,21 @@ class Scanner:
             d = self.client.details(item)
         except Exception as e:
             log.warning("Couldn't open item %s, using estimated shipping: %s", item.id, e)
-            return evaluate(item, pool, rules, query)
+            return assess(item, pool, rules, query)
         pickup = not d.shipping_available or is_pickup_only(f"{item.title}\n{d.description}")
         log.info("Item %s: shipping %s%s", item.id,
                  "unknown" if d.shipping is None else f"{d.shipping:.2f}", ", pickup only" if pickup else "")
-        return evaluate(item, pool, rules, query, shipping=d.shipping,
-                        pickup_only=pickup, city=d.city)
+        return assess(item, pool, rules, query, shipping=d.shipping,
+                      pickup_only=pickup, city=d.city)
 
     def scan(self) -> list[Deal]:
         deals: list[Deal] = []
+        self.checked, self.failed_searches, self.near_misses = 0, 0, []
         for s in self.cfg.searches:
             try:
                 deals += self.scan_search(s)
             except Exception as e:  # one broken search shouldn't kill the rest
+                self.failed_searches += 1
                 log.error("Search '%s' failed: %s", s.query, e)
         if self.first_run:
             log.info("First run: saved %d current listings as seen, alerts start next scan",
@@ -137,4 +148,20 @@ class Scanner:
         self.seen.save()
         self.pools.save()
         deals.sort(key=lambda d: (d.rating, d.profit), reverse=True)
+        self.near_misses.sort(key=lambda m: (m[1].closeness, m[1].profit), reverse=True)
+        log.info("Checked %d new listing(s), %d near miss(es)", self.checked, len(self.near_misses))
+        for query, m in self.near_misses[:5]:
+            log.info("Near miss: %s", describe_miss(query, m))
         return deals
+
+    @property
+    def failed(self) -> bool:
+        """Every search errored, e.g. Vinted blocking us."""
+        return self.failed_searches == len(self.cfg.searches)
+
+
+def describe_miss(query: str, m: Deal) -> str:
+    c = m.item.currency
+    return (f"'{m.item.title[:50]}' [{query}] pay {m.item.total_price + m.shipping:.2f} {c} incl. shipping, "
+            f"value {m.market_value:.2f}, profit {m.profit:.2f}, ROI {m.roi:.1f}%, rating {m.rating}, "
+            f"blocked by {', '.join(m.blocked)} {m.item.url}")

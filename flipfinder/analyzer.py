@@ -26,6 +26,8 @@ class Deal:
     packaging: float = 0.0         # resell_costs: your box/packaging when you sell it on
     pickup_only: bool = False
     city: str = ""
+    blocked: list[str] = field(default_factory=list)   # rules it fails; empty for a real deal
+    closeness: float = 1.0         # 0-1, how close a blocked listing came to passing
 
 
 @dataclass
@@ -283,11 +285,14 @@ def normalize_text(text: str) -> list[str]:
     return re.sub(r"[^a-z0-9]+", " ", t).split()
 
 
-def evaluate(item: Item, pool: list[Item], rules: Rules, query: str = "",
-             shipping: float | None = None, pickup_only: bool = False, city: str = "") -> Deal | None:
+def assess(item: Item, pool: list[Item], rules: Rules, query: str = "",
+           shipping: float | None = None, pickup_only: bool = False, city: str = "") -> Deal | None:
     """
-    Returns a Deal if the item passes every rule, otherwise None. `shipping` is the
-    real delivery price from the item page; without it the config estimate is used.
+    Works out the numbers for any listing that has a market value, deal or not.
+    Returns None when there's nothing to compare it with (excluded, irrelevant,
+    no comparable model); otherwise a Deal whose `blocked` lists the rules it fails.
+    `shipping` is the real delivery price from the item page; without it the
+    config estimate is used.
     """
     if is_excluded(item, rules.exclude_keywords):
         return None
@@ -301,13 +306,38 @@ def evaluate(item: Item, pool: list[Item], rules: Rules, query: str = "",
     cost = item.total_price + ship
     profit = round(value - cost - rules.resell_costs, 2)
     roi = round(profit / cost * 100, 1) if cost > 0 else 0.0
-    if profit < rules.min_profit or roi < rules.min_roi or roi > rules.max_roi:
-        return None
     rating = rate(profit, roi, n, rules)
+    blocked = []
+    if profit < rules.min_profit:
+        blocked.append(f"profit under min_profit {rules.min_profit:g}")
+    if roi < rules.min_roi:
+        blocked.append(f"ROI under min_roi {rules.min_roi:g}%")
+    if roi > rules.max_roi:
+        blocked.append(f"ROI over max_roi {rules.max_roi:g}%")
     if rating < rules.min_rating:
-        return None
+        blocked.append(f"rating under min_rating {rules.min_rating}")
     by_price = sorted(comps, key=lambda p: p.price)
     sample = [by_price[i * (n - 1) // 4] for i in range(5)]   # cheapest, quartiles, priciest
-    return Deal(item, value, n, profit, roi, rating, basis, sample,
+    deal = Deal(item, value, n, profit, roi, rating, basis, sample,
                 shipping=round(ship, 2), shipping_known=pickup_only or shipping is not None,
-                packaging=rules.resell_costs, pickup_only=pickup_only, city=city)
+                packaging=rules.resell_costs, pickup_only=pickup_only, city=city, blocked=blocked)
+    # How close it came: the weakest of profit/ROI/rating as a share of what the rule needs
+    deal.closeness = round(min(
+        1.0,
+        max(profit, 0) / rules.min_profit if rules.min_profit > 0 else 1.0,
+        max(roi, 0) / rules.min_roi if rules.min_roi > 0 else 1.0,
+        rating / rules.min_rating if rules.min_rating > 0 else 1.0,
+    ), 3)
+    return deal
+
+
+def evaluate(item: Item, pool: list[Item], rules: Rules, query: str = "",
+             shipping: float | None = None, pickup_only: bool = False, city: str = "") -> Deal | None:
+    """Returns a Deal if the item passes every rule, otherwise None."""
+    deal = assess(item, pool, rules, query, shipping, pickup_only, city)
+    return deal if deal and not deal.blocked else None
+
+
+def is_near_miss(deal: Deal | None) -> bool:
+    """Blocked only by being not quite good enough (not by looking too good to be true)."""
+    return bool(deal and deal.blocked and not any("max_roi" in b for b in deal.blocked))
