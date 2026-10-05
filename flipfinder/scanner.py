@@ -21,6 +21,9 @@ log = logging.getLogger(__name__)
 # expire together and push a run past the workflow timeout, so only this many are
 # rebuilt per run; the rest keep their older pool until their turn.
 MAX_POOL_REBUILDS = 4
+# A newly added search alerts on at most this many of the deals already listed
+# (the best ones); the rest of its current listings are just remembered.
+SEED_ALERTS = 3
 
 
 class PoolCache:
@@ -147,11 +150,14 @@ class Scanner:
 
     # --- price pools -----------------------------------------------------------
 
-    def _vinted_pool(self, s: Search) -> list[Item] | None:
-        """The price pool, or None if it doesn't exist yet and this run's rebuilds are used up."""
+    def _vinted_pool(self, s: Search, force: bool = False) -> list[Item] | None:
+        """
+        The price pool, or None if it doesn't exist yet and this run's rebuilds are used
+        up. `force` builds it anyway (a new search's first run).
+        """
         key = _key(s)
         pool = self.pools.get(key)
-        if pool is None and self.pool_rebuilds >= MAX_POOL_REBUILDS:
+        if pool is None and self.pool_rebuilds >= MAX_POOL_REBUILDS and not force:
             old = self.pools.get(key, any_age=True)
             if old is None:
                 return None
@@ -217,13 +223,7 @@ class Scanner:
         fresh = [i for i in newest + ebay_newest if i.key not in self.seen]
         log.info("'%s': %d Vinted + %d eBay listings, %d new", s.query, len(newest), len(ebay_newest), len(fresh))
         if not self.first_run and not self.known.has(s):
-            # A search added to config.yaml: remember what's listed now instead of
-            # alerting on its whole backlog
-            for item in fresh:
-                self.seen.add(item.key)
-            self.known.add(s)
-            log.info("'%s' is new: saved %d current listings as seen, alerts start next scan",
-                     s.query, len(fresh))
+            self._seed(s, newest, ebay_newest, fresh)
             return []
         self.known.add(s)
         if not fresh:
@@ -266,6 +266,50 @@ class Scanner:
                 self.near_misses.append((s.query, deal))
         return deals
 
+    def _seed(self, s: Search, newest: list[Item], ebay_newest: list[Item], fresh: list[Item]):
+        """
+        A search added to config.yaml: its current listings are a backlog, not news. Keep
+        the ones that already look like deals as candidates (only the best SEED_ALERTS of
+        all new searches get sent, after real shipping is checked) and remember the rest.
+        """
+        pool = self._vinted_pool(s, force=True)
+        if self.ebay:
+            try:
+                pool = pool + self._ebay_pool(s)
+            except Exception as e:
+                log.error("eBay price pool '%s' failed: %s", s.query, e)
+        pool = _merge(pool, newest, ebay_newest)
+        rules = self._rules(s)
+        found = 0
+        for item in fresh:
+            self.seen.add(item.key)
+            deal = assess(item, pool, rules, s.query)   # estimated shipping for now
+            if deal and not deal.blocked:
+                self.seed_candidates.append((s, item, pool, rules))
+                found += 1
+        self.known.add(s)
+        log.info("'%s' is new: %d current listings remembered, %d already look like deals "
+                 "(the best %d of all new searches get sent)", s.query, len(fresh), found, SEED_ALERTS)
+
+    def _best_seed_deals(self) -> list[Deal]:
+        """Real shipping for the strongest candidates, then the top SEED_ALERTS that still pass."""
+        ranked = []
+        for s, item, pool, rules in self.seed_candidates:
+            d = assess(item, pool, rules, s.query)
+            ranked.append(((d.rating, d.profit), s, item, pool, rules))
+        ranked.sort(key=lambda r: r[0], reverse=True)
+        out = []
+        for _, s, item, pool, rules in ranked[:SEED_ALERTS * 2]:
+            deal = (assess(item, pool, rules, s.query) if item.source == "ebay"
+                    else self._with_details(item, pool, rules, s.query))
+            if deal and not deal.blocked:
+                out.append(deal)
+            if len(out) == SEED_ALERTS:
+                break
+        log.info("New searches: %d listings already looked like deals, sending the best %d",
+                 len(self.seed_candidates), len(out))
+        return out
+
     def _with_details(self, item: Item, pool: list[Item], rules, query: str) -> Deal | None:
         try:
             d = self.client.details(item)
@@ -282,6 +326,7 @@ class Scanner:
         deals: list[Deal] = []
         self.checked, self.failed_searches, self.near_misses = 0, 0, []
         self.pool_rebuilds = 0
+        self.seed_candidates = []
         self.ebay_due = bool(self.ebay) and self.ebay_state.due(self.cfg.ebay.interval_minutes)
         self.first_ebay = self.ebay_due and not self.seen.has_platform("ebay")
         calls_before = self.ebay.calls if self.ebay else 0
@@ -291,6 +336,8 @@ class Scanner:
             except Exception as e:  # one broken search shouldn't kill the rest
                 self.failed_searches += 1
                 log.error("Search '%s' failed: %s", s.query, e)
+        if self.seed_candidates:
+            deals += self._best_seed_deals()
         if self.first_run:
             log.info("First run: saved %d current listings as seen, alerts start next scan",
                      len(self.seen.data))

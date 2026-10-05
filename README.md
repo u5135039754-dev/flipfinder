@@ -116,9 +116,9 @@ Everything lives in `config.yaml`, with comments. The ones you'll touch most:
   where different brands sell the same thing (graphics cards).
 
 Listings are only compared with the same model: model numbers, storage (128GB vs 256GB), sizes
-(41mm/45mm), generations and suffixes like Pro, Max, Mini, Plus, OLED and Ti have to match. A newly
-added search starts silently (its current listings are just remembered), and at most 4 price pools
-are rebuilt per run so a run stays well under the workflow timeout.
+(41mm/45mm), generations and suffixes like Pro, Max, Mini, Plus, OLED and Ti have to match. When you
+add searches, the first run sends only the best 3 deals already listed across them and remembers the
+rest, and after that at most 4 price pools are rebuilt per run so runs stay short.
 
 ## Tests
 

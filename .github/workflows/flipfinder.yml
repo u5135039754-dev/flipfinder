@@ -13,7 +13,7 @@ concurrency:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 15   # normal runs take ~3 min; the first run after adding many searches longer
     steps:
       - uses: actions/checkout@v4
 

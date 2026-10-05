@@ -512,25 +512,33 @@ def test_fallback_never_contradicts_model_numbers():
     assert find_comparables(cand, others, 8, q) == ([], "no comparable model")
 
 
-def test_new_search_starts_silently_and_pool_rebuilds_are_capped(tmp_path: Path):
+class FakeVinted:
+    """Pool listings at 300, newest at 100-104: every new listing looks like a deal."""
+
+    def __init__(self):
+        self.detail_calls = 0
+
+    def search(self, query, order="newest_first", page=1, **kw):
+        if order == "relevance":
+            return [titled(abs(hash((query, n))) % 10**9, f"{query} 128GB", 300, "X") for n in range(10)]
+        return [titled(abs(hash((query, "new", n))) % 10**9, f"{query} 128GB", 100 + n, "X") for n in range(5)]
+
+    def details(self, item):
+        from flipfinder.vinted import ItemDetails
+        self.detail_calls += 1
+        return ItemDetails(shipping=5.0)
+
+
+def _fake_scanner(tmp_path, n_searches, known_keys):
     from flipfinder import scanner as sc_mod
     from flipfinder.config import Search
-
-    class FakeVinted:
-        def __init__(self):
-            self.calls = 0
-
-        def search(self, query, order="newest_first", page=1, **kw):
-            self.calls += 1
-            return [titled(hash((query, order, page, n)) % 10**9, f"{query} 128GB", 100 + n, "X") for n in range(5)]
-
     seen = tmp_path / "seen.json"
     seen.write_text(json.dumps({"vinted:1": 1e12}))
-    (tmp_path / "searches.json").write_text(json.dumps([]))   # nothing known yet: all searches are new
     cfg = type("C", (), {})()
     cfg.rules, cfg.seen_file, cfg.pool_refresh_minutes, cfg.comparable_pages = Rules(), seen, 60, 1
-    cfg.searches = [Search(f"thing {n}") for n in range(6)]
+    cfg.searches = [Search(f"thing {n}") for n in range(n_searches)]
     cfg.ebay = type("E", (), {"enabled": False})()
+    (tmp_path / "searches.json").write_text(json.dumps(known_keys(cfg.searches)))
     s = sc_mod.Scanner.__new__(sc_mod.Scanner)
     s.cfg, s.client, s.ebay = cfg, FakeVinted(), None
     s.seen, s.first_run = SeenStore(seen), False
@@ -538,11 +546,25 @@ def test_new_search_starts_silently_and_pool_rebuilds_are_capped(tmp_path: Path)
     s.ebay_state = sc_mod.EbayState(tmp_path / "ebay.json")
     s.known = sc_mod.KnownSearches(tmp_path / "searches.json", s.pools)
     s.ebay_due = s.first_ebay = False
-    s.scan()
-    assert s.checked == 0 and len(s.seen.data) == 1 + 6 * 5       # new searches: seeded, no alerts
-    assert s.pool_rebuilds == 0
-    for x in cfg.searches:                                        # new listings arrive
-        s.seen.data = {k: v for k, v in s.seen.data.items() if k == "vinted:1"}
+    return s
+
+
+def test_new_searches_send_only_their_best_3_current_deals(tmp_path: Path):
+    from flipfinder import scanner as sc_mod
+    s = _fake_scanner(tmp_path, 6, lambda searches: [])          # all 6 searches are new
+    deals = s.scan()
+    assert len(deals) == sc_mod.SEED_ALERTS == 3                 # 30 look like deals, best 3 sent
+    assert s.client.detail_calls <= 2 * sc_mod.SEED_ALERTS       # real shipping only for the top few
+    assert all(d.shipping == 5.0 for d in deals)
+    assert s.checked == 0 and len(s.seen.data) == 1 + 6 * 5      # the whole backlog is remembered
+    assert s.scan() == []                                        # next run: nothing new
+    assert s.pool_rebuilds == 0                                  # pools were built on the first run
+
+
+def test_pool_rebuilds_are_capped_for_known_searches(tmp_path: Path):
+    from flipfinder import scanner as sc_mod
+    from flipfinder.scanner import _key
+    s = _fake_scanner(tmp_path, 6, lambda searches: [_key(x) for x in searches])   # known, no pools
     s.scan()
     assert s.pool_rebuilds == sc_mod.MAX_POOL_REBUILDS            # only 4 of 6 pools built
     assert s.checked == 4 * 5                                     # the other 2 searches wait, unseen
