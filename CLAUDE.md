@@ -7,9 +7,10 @@ Python 3.10+ app that finds underpriced Vinted listings and sends Telegram alert
 - `flipfinder/vinted.py` Vinted search client: loads the `/catalog` page and reads items from its embedded Next.js data (`/api/v2/catalog/items` is gone, 404)
 - `flipfinder/analyzer.py` market value (median of comparables matched by query relevance, brand and model tokens from titles, IQR outlier removal, same-size preference), profit, ROI, 1-10 rating, filters
 - `flipfinder/scanner.py` per-search scan, price pool cache in `data/pools.json`
-- `flipfinder/storage.py` seen item IDs in `data/seen.json` (14 day expiry)
+- `flipfinder/ebay.py` eBay Browse API client (EBAY_IT, Buy It Now, app token), searched every 15 min, calls/day in `data/ebay.json`
+- `flipfinder/storage.py` seen items in `data/seen.json` as `platform:id` (14 day expiry)
 - `flipfinder/telegram.py` message format + Bot API
-- `config.yaml` searches and rules; secrets in `.env` (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)
+- `config.yaml` searches and rules; secrets in `.env` (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, optional EBAY_CLIENT_ID, EBAY_CLIENT_SECRET)
 - `.github/workflows/flipfinder.yml` (shipped as `deploy/flipfinder.yml`, move it there) runs `main.py --once` every 5 min, `data/` persisted with actions/cache
 
 ## Commands

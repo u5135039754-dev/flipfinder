@@ -11,6 +11,7 @@ from .analyzer import Deal
 
 log = logging.getLogger(__name__)
 
+PLATFORMS = {"vinted": "Vinted", "ebay": "eBay"}
 SYMBOLS = {"EUR": "€", "GBP": "£", "USD": "$", "PLN": "zł "}
 
 
@@ -31,6 +32,8 @@ def format_deal(deal: Deal) -> str:
     ]
     if extras:
         lines.append(f"<i>{html.escape(extras)}</i>")
+    platform = PLATFORMS.get(it.source, it.source)
+    lines.append(f"🛒 <b>{platform}</b>" + (f" · {html.escape(it.location)}" if it.location else ""))
     if deal.pickup_only:
         lines.append("📍 <b>Pickup only</b>" + (f" · {html.escape(deal.city)}" if deal.city else ""))
     if deal.pickup_only:
@@ -45,13 +48,33 @@ def format_deal(deal: Deal) -> str:
         f"💶 Item price: <b>{money(it.total_price, c)}</b> (listed {money(it.price, c)})",
         delivery,
         f"🏷 Original price: <b>{money(deal.market_value, c)}</b> (median of {deal.comparables} listings)",
+        *platform_lines(deal),
         f"💰 Possible profit: <b>{money(deal.profit, c)}</b>",
         f"📈 Percentage: <b>+{deal.roi:.0f}%</b>",
         f"{stars(deal.rating)} Rating: <b>{deal.rating}/10</b>",
         "",
-        f'<a href="{html.escape(it.url)}">Open on Vinted</a>',
+        f'<a href="{html.escape(it.url)}">Open on {platform}</a>',
     ]
     return "\n".join(lines)
+
+
+def platform_lines(deal: Deal) -> list[str]:
+    """Same model's median price on each platform, and where to buy / resell."""
+    c = deal.item.currency
+    by = deal.by_platform
+    if not by or (len(by) < 2 and not deal.sell_fee):
+        return []   # nothing to compare and no fee to point out
+    prices = " · ".join(f"{PLATFORMS.get(src, src)} {money(v, c)} ({n})" for src, (v, n) in by.items())
+    lines = [f"📊 By platform: {prices}"]
+    resell = PLATFORMS.get(deal.resell_on, deal.resell_on)
+    fee = f", {money(deal.sell_fee, c)} fee included" if deal.sell_fee else ", no seller fee"
+    if len(by) > 1:
+        cheapest = min(by, key=lambda src: by[src][0])
+        lines.append(f"↔️ Cheaper to buy on {PLATFORMS.get(cheapest, cheapest)}, "
+                     f"sells for more on {resell}{fee}")
+    else:
+        lines.append(f"↔️ Resell on {resell}{fee}")
+    return lines
 
 
 class Telegram:

@@ -38,6 +38,14 @@ class Item:
     condition: str = ""
     photo: str = ""
     favourites: int = 0
+    source: str = "vinted"            # which platform it's listed on: "vinted" or "ebay"
+    shipping: float | None = None     # buyer's shipping cost when the search result has it (eBay)
+    location: str = ""
+
+    @property
+    def key(self) -> str:
+        """Unique across platforms, for the seen store."""
+        return f"{self.source}:{self.id}"
 
     @classmethod
     def from_api(cls, raw: dict, domain: str, fee_fixed: float, fee_pct: float) -> "Item | None":

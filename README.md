@@ -84,6 +84,24 @@ python main.py --dry-run --once  # one scan, prints deals instead of sending
 python main.py                   # runs forever
 ```
 
+## Optional: eBay as a second source
+
+flipFinder can also check eBay.it Buy It Now listings through eBay's official Browse API, and
+compares every listing with the same model on both Vinted and eBay. Alerts then say where it's
+listed (🛒 Vinted / 🛒 eBay), the median price on each platform, and where it's cheaper to buy
+and sells for more.
+
+1. Create a developer account at developer.ebay.com and a **Production** keyset.
+2. On the keyset's **Notifications** page, turn on "Not persisting eBay data" (flipFinder only keeps
+   listing IDs and prices, no eBay user data) and submit. eBay requires this before the first call.
+3. Put the App ID and Cert ID in `.env` as `EBAY_CLIENT_ID` and `EBAY_CLIENT_SECRET`, and add the
+   same two as GitHub repository secrets.
+
+eBay is searched at most every 15 minutes (`ebay: interval_minutes`) to stay well inside the
+daily API limit; each run logs how many calls were used today. Items located in Italy only by
+default (`ebay: item_location: IT`, or `EU`). Selling on eBay.it is free for private sellers in the
+EEA, so no fee is subtracted; set `sell_fees` in `config.yaml` if that changes for you.
+
 ## Settings
 
 Everything lives in `config.yaml`, with comments. The ones you'll touch most:

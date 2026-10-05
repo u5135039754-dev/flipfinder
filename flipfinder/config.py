@@ -24,6 +24,22 @@ class Search:
 
 
 @dataclass
+class EbaySettings:
+    """eBay Browse API. On when EBAY_CLIENT_ID and EBAY_CLIENT_SECRET are set."""
+    client_id: str = ""
+    client_secret: str = ""
+    marketplace: str = "EBAY_IT"
+    item_location: str = "IT"        # "IT" (items in Italy) or "EU"
+    interval_minutes: float = 15     # eBay is searched at most this often, to stay in the daily API limit
+    new_per_search: int = 50         # newest listings checked per search
+    pool_size: int = 200             # listings per search used for market value (one API call)
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.client_id and self.client_secret)
+
+
+@dataclass
 class Config:
     domain: str
     interval_minutes: float
@@ -37,6 +53,7 @@ class Config:
     telegram_token: str
     telegram_chat_id: str
     seen_file: Path
+    ebay: EbaySettings = field(default_factory=EbaySettings)
 
 
 def _opt_float(value) -> float | None:
@@ -59,6 +76,10 @@ def load(path: str | Path = "config.yaml") -> Config:
         resell_costs=float(r.get("resell_costs", 0)),
         shipping_cost=float(r.get("shipping_cost", 15)),
         exclude_keywords=tuple(global_excl),
+        # % and fixed fee you pay when you sell on each platform. Both are 0 for private
+        # sellers: Vinted never charges sellers, eBay.it stopped for EEA private sellers in 2026.
+        sell_fees={k: (float(v.get("percent", 0)), float(v.get("fixed", 0)))
+                   for k, v in (raw.get("sell_fees") or {}).items()},
     )
 
     searches = []
@@ -78,6 +99,7 @@ def load(path: str | Path = "config.yaml") -> Config:
         raise SystemExit("No searches in config.yaml, add at least one.")
 
     fees = raw.get("buyer_protection", {})
+    e = raw.get("ebay") or {}
     return Config(
         domain=raw.get("domain", "www.vinted.it"),
         interval_minutes=float(raw.get("interval_minutes", 5)),
@@ -91,4 +113,13 @@ def load(path: str | Path = "config.yaml") -> Config:
         telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
         seen_file=Path(raw.get("seen_file", "data/seen.json")),
+        ebay=EbaySettings(
+            client_id=os.getenv("EBAY_CLIENT_ID", ""),
+            client_secret=os.getenv("EBAY_CLIENT_SECRET", ""),
+            marketplace=e.get("marketplace", "EBAY_IT"),
+            item_location=str(e.get("item_location", "IT")),
+            interval_minutes=float(e.get("interval_minutes", 15)),
+            new_per_search=int(e.get("new_per_search", 50)),
+            pool_size=int(e.get("pool_size", 200)),
+        ),
     )

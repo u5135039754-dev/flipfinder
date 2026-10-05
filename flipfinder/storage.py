@@ -18,16 +18,22 @@ class SeenStore:
                 self.data = json.loads(path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 self.data = {}
+        # Keys are "platform:id" so IDs from different platforms can't clash.
+        # Older files only had Vinted, stored as bare IDs.
+        self.data = {(k if ":" in k else f"vinted:{k}"): v for k, v in self.data.items()}
 
     @property
     def is_empty(self) -> bool:
         return not self.data
 
-    def __contains__(self, item_id: int) -> bool:
-        return str(item_id) in self.data
+    def has_platform(self, source: str) -> bool:
+        return any(k.startswith(source + ":") for k in self.data)
 
-    def add(self, item_id: int):
-        self.data[str(item_id)] = time.time()
+    def __contains__(self, key: str) -> bool:
+        return key in self.data
+
+    def add(self, key: str):
+        self.data[key] = time.time()
 
     def save(self):
         cutoff = time.time() - KEEP_DAYS * 86400

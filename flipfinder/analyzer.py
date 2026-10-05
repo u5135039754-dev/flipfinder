@@ -28,6 +28,9 @@ class Deal:
     city: str = ""
     blocked: list[str] = field(default_factory=list)   # rules it fails; empty for a real deal
     closeness: float = 1.0         # 0-1, how close a blocked listing came to passing
+    by_platform: dict = field(default_factory=dict)   # platform -> (median, listings) when there are enough
+    resell_on: str = ""            # platform where it nets the most after fees
+    sell_fee: float = 0.0          # fee for selling it there
 
 
 @dataclass
@@ -40,6 +43,7 @@ class Rules:
     resell_costs: float = 0.0       # your own extra costs per flip (packaging, etc.)
     shipping_cost: float = 0.0      # estimate of what you pay for delivery, if Vinted doesn't say
     exclude_keywords: tuple[str, ...] = ()
+    sell_fees: dict = field(default_factory=dict)   # platform -> (percent, fixed) you pay when selling
     # rating knobs: profit/roi at which that part of the score maxes out
     rating_profit_cap: float = 50.0
     rating_roi_cap: float = 150.0
@@ -199,7 +203,7 @@ def find_comparables(item: Item, pool: list[Item], min_comparables: int,
         others = [p for p in others if is_relevant(p.title, query)]
     if item.brand:
         brand = item.brand.lower()
-        others = [p for p in others if p.brand.lower() == brand]
+        others = [p for p in others if not p.brand or p.brand.lower() == brand]
     if item.size:
         same_size = [p for p in others if p.size == item.size]
         if len(same_size) >= min_comparables:
@@ -285,6 +289,32 @@ def normalize_text(text: str) -> list[str]:
     return re.sub(r"[^a-z0-9]+", " ", t).split()
 
 
+def platform_values(comps: list[Item], min_comparables: int) -> dict:
+    """Median price per platform, for platforms with enough comparables of their own."""
+    need = max(3, min_comparables // 2)
+    out = {}
+    for src in sorted({c.source for c in comps}):
+        prices = [c.price for c in comps if c.source == src]
+        if len(prices) >= need:
+            out[src] = (round(median(prices), 2), len(prices))
+    return out
+
+
+def best_resale(value: float, by_platform: dict, fees: dict, default: str) -> tuple[str, float]:
+    """
+    Where to sell it: the platform with the highest median after its seller fee. The
+    fee is charged on the market value (the price you'd list at).
+    """
+    def fee(src: str, price: float) -> float:
+        pct, fixed = fees.get(src, (0.0, 0.0))
+        return price * pct / 100 + fixed
+
+    if not by_platform:
+        return default, fee(default, value)
+    best = max(by_platform, key=lambda src: by_platform[src][0] - fee(src, by_platform[src][0]))
+    return best, fee(best, value)
+
+
 def assess(item: Item, pool: list[Item], rules: Rules, query: str = "",
            shipping: float | None = None, pickup_only: bool = False, city: str = "") -> Deal | None:
     """
@@ -302,9 +332,13 @@ def assess(item: Item, pool: list[Item], rules: Rules, query: str = "",
     if value is None:
         return None
     n = len(comps)
+    by_platform = platform_values(comps, rules.min_comparables)
+    resell_on, sell_fee = best_resale(value, by_platform, rules.sell_fees, item.source)
+    if shipping is None and item.shipping is not None:
+        shipping = item.shipping
     ship = 0.0 if pickup_only else (shipping if shipping is not None else rules.shipping_cost)
     cost = item.total_price + ship
-    profit = round(value - cost - rules.resell_costs, 2)
+    profit = round(value - sell_fee - cost - rules.resell_costs, 2)
     roi = round(profit / cost * 100, 1) if cost > 0 else 0.0
     rating = rate(profit, roi, n, rules)
     blocked = []
@@ -320,7 +354,8 @@ def assess(item: Item, pool: list[Item], rules: Rules, query: str = "",
     sample = [by_price[i * (n - 1) // 4] for i in range(5)]   # cheapest, quartiles, priciest
     deal = Deal(item, value, n, profit, roi, rating, basis, sample,
                 shipping=round(ship, 2), shipping_known=pickup_only or shipping is not None,
-                packaging=rules.resell_costs, pickup_only=pickup_only, city=city, blocked=blocked)
+                packaging=rules.resell_costs, pickup_only=pickup_only, city=city, blocked=blocked,
+                by_platform=by_platform, resell_on=resell_on, sell_fee=round(sell_fee, 2))
     # How close it came: the weakest of profit/ROI/rating as a share of what the rule needs
     deal.closeness = round(min(
         1.0,

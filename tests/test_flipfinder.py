@@ -90,9 +90,9 @@ def test_message_format():
 
 def test_seen_store_roundtrip(tmp_path: Path):
     s = SeenStore(tmp_path / "seen.json")
-    s.add(42)
+    s.add("vinted:42")
     s.save()
-    assert 42 in SeenStore(tmp_path / "seen.json")
+    assert "vinted:42" in SeenStore(tmp_path / "seen.json")
 
 
 def test_parse_catalog_page():
@@ -309,3 +309,80 @@ def test_assess_reports_blocking_rules():
     assert not is_near_miss(too_cheap)   # blocked by max_roi: suspicious, not "almost"
     losing = assess(item(1, 99), pool([100] * 12), Rules(min_profit=25, min_roi=30))
     assert losing.profit < 0 and not is_near_miss(losing)
+
+
+# --- eBay ---
+
+EBAY_SUMMARY = {
+    "itemId": "v1|123456789012|0", "legacyItemId": "123456789012",
+    "title": "Boss DS-1 Distortion pedale", "price": {"value": "35.00", "currency": "EUR"},
+    "shippingOptions": [{"shippingCostType": "FIXED", "shippingCost": {"value": "6.90", "currency": "EUR"}},
+                        {"shippingCostType": "FIXED", "shippingCost": {"value": "4.50", "currency": "EUR"}}],
+    "itemLocation": {"city": "Torino", "country": "IT"}, "condition": "Usato",
+    "itemWebUrl": "https://www.ebay.it/itm/123456789012", "image": {"imageUrl": "https://i.ebayimg.com/x.jpg"},
+    "buyingOptions": ["FIXED_PRICE"],
+}
+
+
+def test_ebay_item_parsing():
+    from flipfinder.ebay import item_from_ebay
+    it = item_from_ebay(EBAY_SUMMARY)
+    assert (it.id, it.price, it.total_price, it.shipping, it.source, it.location) == \
+        (123456789012, 35.0, 35.0, 4.5, "ebay", "Torino, IT")
+    assert it.key == "ebay:123456789012"
+    no_ship = item_from_ebay({**EBAY_SUMMARY, "shippingOptions": [{"shippingCostType": "CALCULATED"}]})
+    assert no_ship.shipping is None
+
+
+def test_ebay_filter_buy_it_now_and_location():
+    from flipfinder.ebay import EbayClient
+    it = EbayClient("id", "secret")._filter(25, 90)
+    assert it == "buyingOptions:{FIXED_PRICE},deliveryCountry:IT,itemLocationCountry:IT,price:[25..90],priceCurrency:EUR"
+    eu = EbayClient("id", "secret", item_location="EU")._filter(None, 200)
+    assert "itemLocationRegion:EUROPEAN_UNION" in eu and "price:[..200]" in eu
+
+
+def test_vinted_and_ebay_compared_together_by_model():
+    from flipfinder.ebay import item_from_ebay
+    q = "boss"
+    vinted = [titled(100 + n, f"Boss DS-1 distortion {n}", p, "Boss") for n, p in enumerate([40, 42, 45, 44, 41])]
+    ebay = [item_from_ebay({**EBAY_SUMMARY, "legacyItemId": str(900 + n), "title": f"Pedale Boss DS-1 {n}",
+                            "price": {"value": str(p), "currency": "EUR"}}) for n, p in enumerate([55, 58, 60, 52, 57])]
+    other = [titled(300 + n, "Boss RC-30 loop station", 150, "Boss") for n in range(5)]
+    candidate = titled(1, "Boss DS-1", 15, "Boss")
+    comps, basis = find_comparables(candidate, vinted + ebay + other, 8, q)
+    assert {c.key for c in comps} == {c.key for c in vinted + ebay}   # eBay has no brand but same model
+    d = assess(candidate, vinted + ebay + other, Rules(min_comparables=8), q, shipping=5.0)
+    assert d.by_platform == {"ebay": (57.0, 5), "vinted": (42.0, 5)}
+    assert d.resell_on == "ebay" and d.sell_fee == 0
+    msg = format_deal(d)
+    assert "🛒 <b>Vinted</b>" in msg and "Cheaper to buy on Vinted, sells for more on eBay, no seller fee" in msg
+
+
+def test_seller_fee_changes_best_resale_and_profit():
+    from flipfinder.analyzer import best_resale
+    by = {"vinted": (100.0, 6), "ebay": (105.0, 6)}
+    assert best_resale(100, by, {}, "vinted") == ("ebay", 0.0)
+    where, fee = best_resale(100, by, {"ebay": (10.0, 0.35)}, "vinted")   # 105 - 10.85 < 100
+    assert where == "vinted" and fee == 0.0
+    where, fee = best_resale(100, {"ebay": (105.0, 6)}, {"ebay": (10.0, 0.35)}, "vinted")
+    assert where == "ebay" and round(fee, 2) == 10.35
+
+
+def test_seen_store_migrates_old_vinted_ids(tmp_path: Path):
+    (tmp_path / "seen.json").write_text(json.dumps({"42": 1e12, "ebay:7": 1e12}))
+    s = SeenStore(tmp_path / "seen.json")
+    assert "vinted:42" in s and "ebay:7" in s and s.has_platform("ebay")
+
+
+def test_ebay_runs_every_15_minutes(tmp_path: Path):
+    import time
+    from flipfinder.scanner import EbayState
+    st = EbayState(tmp_path / "ebay.json")
+    assert st.due(15)
+    st.record(17, scanned=True)
+    assert not st.due(15) and st.calls_today == 17
+    st.data["last_scan"] = time.time() - 15 * 60
+    assert st.due(15)
+    st.record(3, scanned=False)
+    assert st.calls_today == 20

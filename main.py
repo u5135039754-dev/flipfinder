@@ -36,7 +36,7 @@ def sample_deal() -> Deal:
 def explain(deal: Deal) -> str:
     """Why --dry-run thinks this is a deal: how comparables were picked, and a few of them."""
     lines = [f"   compared on {deal.basis}, {deal.comparables} listings, e.g.:"]
-    lines += [f"     {c.price:8.2f}  {c.title[:70]}" for c in deal.sample]
+    lines += [f"     {c.price:8.2f}  [{c.source[0].upper()}] {c.title[:66]}" for c in deal.sample]
     return "\n".join(lines)
 
 
