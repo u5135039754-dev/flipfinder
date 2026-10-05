@@ -44,6 +44,7 @@ class Rules:
     shipping_cost: float = 0.0      # estimate of what you pay for delivery, if Vinted doesn't say
     exclude_keywords: tuple[str, ...] = ()
     sell_fees: dict = field(default_factory=dict)   # platform -> (percent, fixed) you pay when selling
+    match_brand: bool = True        # off for e.g. graphics cards, where MSI/ASUS/Zotac sell the same chip
     # rating knobs: profit/roi at which that part of the score maxes out
     rating_profit_cap: float = 50.0
     rating_roi_cap: float = 150.0
@@ -51,7 +52,7 @@ class Rules:
 
 
 def is_excluded(item: Item, keywords) -> bool:
-    title = item.title.lower()
+    title = item.title.lower().replace("’", "'").replace("`", "'")   # "ne s’allume" = "ne s'allume"
     return any(re.search(rf"\b{re.escape(k.lower())}\b", title) for k in keywords)
 
 
@@ -82,7 +83,7 @@ PHRASES = [
     (re.compile(r"\bmk ?(iii|3)\b"), "mk3"),
 ]
 SYNONYMS = {
-    "lp": "lespaul", "strat": "stratocaster",
+    "lp": "lespaul", "strat": "stratocaster", "serie": "series",
     "guitar": "chitarra", "guitare": "chitarra", "guitarra": "chitarra", "gitarre": "chitarra",
     "gitaar": "chitarra", "chitarre": "chitarra",
     "acoustic": "acustica", "acoustics": "acustica", "acoustique": "acustica", "acustico": "acustica",
@@ -113,26 +114,64 @@ FILLER = set("""
     naturale cherry
     custodia case gigbag borsa bag housse funda cavo cable incluso inclusa included compreso
     regalo omaggio prezzo price trattabile spedizione shipping consegna mano ritiro
+    gen generazione generation generacion generatie gps wifi garanzia warranty fattura scontrino
+    sbloccato unlocked libero operatore batteria battery
+    mezzanotte midnight galassia starlight grafite graphite argento silver oro gold grigio gray grey
+    siderale space viola purple verde green rosa pink azzurro giallo yellow
 """.split())
+
+# Words that make a different model (and price): an iPhone 13 Pro isn't an iPhone 13,
+# a 3060 Ti isn't a 3060. They have to match exactly, like model numbers.
+MODEL_WORDS = {"pro", "max", "mini", "plus", "oled", "ti", "super", "slim", "digital", "lite",
+               "ultra", "se", "cellular", "lte", "xt"}
 
 _YEAR = re.compile(r"^(19[5-9]\d|20[0-3]\d)$")
 _WATTS = re.compile(r"^\d+(w|watt|watts)$")
 _MODEL_CORE = re.compile(r"^([a-z]+\d+)[a-z]+$")   # mg15cdr -> mg15, eg260c -> eg260
 
 
+# Done on the lowercased text before punctuation is stripped
+PRE_CLEAN = [
+    # screen sizes say nothing about the model: "10 pouces", "11 pollici", '13"'
+    (re.compile(r"\b\d+(?:[.,]\d)?\s*(?:pouces|pollici|zoll|inch|inches|pulgadas|\"|'')"), " "),
+    # decimals stay one token: "10.2" -> "10p2" (not "10" and "2")
+    (re.compile(r"\b(\d+)[.,](\d)\b"), r"\1p\2"),
+    # battery health is not a model number: "batteria 87%", "battery health: 90", "salute 100%"
+    (re.compile(r"\b(?:salute\s+)?(?:batteria|battery|bateria|batterie|akku|salute)(?:\s+health)?\s*:?\s*\d+\s*%?"), " "),
+    (re.compile(r"\d+\s*%"), " "),
+    # ordinals: "2ª", "3°", "2nd", "10th" -> plain number
+    (re.compile(r"(\d+)\s*[ªº°]"), r"\1 "),
+    (re.compile(r"\b(\d+)\s*(?:st|nd|rd|th)\b"), r"\1"),
+    (re.compile(r"\b(\d+)\s*a\s+(?=gen)"), r"\1 "),
+    (re.compile(r"\b(\d+)\s*(?:a\s*)?g[eé]n[a-zé]*"), r"\1 "),            # "8génération", "9agen"
+    (re.compile(r"\b(?:prima|first|premiere)\s+(?=gen)"), "1 "),
+    (re.compile(r"\b(?:seconda|second|deuxieme|segunda)\s+(?=gen)"), "2 "),
+    (re.compile(r"\b(?:terza|third|troisieme|tercera)\s+(?=gen)"), "3 "),
+    (re.compile(r"\bgen(?:eration|erazione|eracion|eratie)?\.?\s*(\d+)\b"), r" \1"),   # "gen 2" -> "2"
+    # sizes: "128 GB" / "128 Go" / "128 G" -> "128gb", "1 TB" / "1 To", "45 mm"
+    (re.compile(r"\b(\d+)\s*(?:gb|go|giga)\b"), r"\1gb"),
+    (re.compile(r"\b(16|32|64|128|256|512)\s*g\b"), r"\1gb"),
+    (re.compile(r"\b(\d)\s*(?:tb|to)\b"), r"\1tb"),
+    (re.compile(r"\b(\d+)\s*mm\b"), r"\1mm"),
+]
+
+
 @lru_cache(maxsize=50_000)
 def normalize(text: str) -> tuple[str, ...]:
     """Lowercase words without accents or punctuation, with equivalent spellings merged."""
-    t = unicodedata.normalize("NFKD", text.lower())
+    t = text.lower()
+    for pattern, repl in PRE_CLEAN:
+        t = pattern.sub(repl, t)
+    t = unicodedata.normalize("NFKD", t)
     t = "".join(c for c in t if not unicodedata.combining(c))
     t = re.sub(r"[^a-z0-9]+", " ", t)
     for pattern, repl in PHRASES:
         t = pattern.sub(repl, t)
     out: list[str] = []
     for w in (SYNONYMS.get(w, w) for w in t.split()):
-        # "MG 15", "DS-1" -> "mg15", "ds1"
-        if (out and w.isdigit() and len(w) <= 3 and out[-1].isalpha()
-                and len(out[-1]) <= 3 and out[-1] not in FILLER):
+        # "MG 15", "DS-1" -> "mg15", "ds1" (but "Pro 2", "SE 2" stay apart)
+        if (out and w.isdigit() and len(w) <= 3 and out[-1].isalpha() and len(out[-1]) <= 3
+                and out[-1] not in FILLER and out[-1] not in MODEL_WORDS):
             out[-1] += w
         else:
             out.append(w)
@@ -155,7 +194,8 @@ def model_tokens(title: str, query: str = "", brand: str = "") -> frozenset[str]
     skip = FILLER | MAKERS | set(normalize(query)) | set(normalize(brand))
     tokens = set()
     for w in normalize(title):
-        if w in skip or len(w) < 2 or _YEAR.match(w) or _WATTS.match(w) or _SERIAL.match(w):
+        if (w in skip or (len(w) < 2 and not w.isdigit()) or _YEAR.match(w) or _WATTS.match(w)
+                or _SERIAL.match(w)):
             continue
         tokens.add(w)
         core = _MODEL_CORE.match(w)
@@ -165,10 +205,13 @@ def model_tokens(title: str, query: str = "", brand: str = "") -> frozenset[str]
 
 
 def model_numbers(tokens: frozenset[str]) -> frozenset[str]:
-    """The tokens that name a specific model: "mg15" (from mg15cdr too), "50", "mk2", "ii"."""
+    """
+    The tokens that name a specific model: "mg15" (from mg15cdr too), "50", "mk2", "ii",
+    "128gb", and suffix words like "pro", "max", "oled", "ti".
+    """
     out = set()
     for t in tokens:
-        if t in _ROMAN:
+        if t in _ROMAN or t in MODEL_WORDS:
             out.add(t)
         elif any(c.isdigit() for c in t):
             core = _MODEL_CORE.match(t)
@@ -188,7 +231,7 @@ TIGHT_SPREAD = 0.35   # the whole pool only counts as comparables when it's this
 
 
 def find_comparables(item: Item, pool: list[Item], min_comparables: int,
-                     query: str = "") -> tuple[list[Item], str]:
+                     query: str = "", match_brand: bool = True) -> tuple[list[Item], str]:
     """
     Listings to compare against, plus a note on how they were picked.
 
@@ -201,7 +244,7 @@ def find_comparables(item: Item, pool: list[Item], min_comparables: int,
     others = [p for p in pool if p.id != item.id]
     if query:
         others = [p for p in others if is_relevant(p.title, query)]
-    if item.brand:
+    if item.brand and match_brand:
         brand = item.brand.lower()
         others = [p for p in others if not p.brand or p.brand.lower() == brand]
     if item.size:
@@ -219,8 +262,9 @@ def find_comparables(item: Item, pool: list[Item], min_comparables: int,
     mine = tokens(item)
     numbers = model_numbers(mine)
     same_number = [p for p in others if model_numbers(tokens(p)) == numbers]
+    brand_note = f" ({item.brand})" if item.brand and match_brand else ""
     if numbers and len(same_number) >= min_comparables:
-        return same_number, "model " + " ".join(sorted(numbers))
+        return same_number, "model " + " ".join(sorted(numbers)) + brand_note
     if not numbers:
         words = mine - numbers
         sharing = [p for p in same_number if words & tokens(p)]
@@ -229,14 +273,17 @@ def find_comparables(item: Item, pool: list[Item], min_comparables: int,
             return sharing, "model words " + " ".join(sorted(words & shared))
         if tight(same_number):
             return same_number, "listings without a model number (prices are tight)"
-    if tight(others):
-        return others, "whole pool (prices are tight)"
+    # Last resort, only when prices are tight, and never against a listing whose model
+    # number contradicts this one (a 128GB is never valued like a 256GB or a Pro)
+    compatible = [p for p in others if model_numbers(tokens(p)) <= numbers]
+    if tight(compatible):
+        return compatible, "whole pool (prices are tight)"
     return [], "no comparable model"
 
 
 def _comparables(item: Item, pool: list[Item], min_comparables: int,
-                 query: str) -> tuple[float | None, list[Item], str]:
-    others, basis = find_comparables(item, pool, min_comparables, query)
+                 query: str, match_brand: bool = True) -> tuple[float | None, list[Item], str]:
+    others, basis = find_comparables(item, pool, min_comparables, query, match_brand)
     kept = remove_outliers([p.price for p in others])
     if kept:
         others = [p for p in others if kept[0] <= p.price <= kept[-1]]
@@ -342,7 +389,7 @@ def assess(item: Item, pool: list[Item], rules: Rules, query: str = "",
         return None
     if query and not is_relevant(item.title, query):
         return None
-    value, comps, basis = _comparables(item, pool, rules.min_comparables, query)
+    value, comps, basis = _comparables(item, pool, rules.min_comparables, query, rules.match_brand)
     if value is None:
         return None
     n = len(comps)

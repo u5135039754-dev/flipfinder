@@ -176,7 +176,7 @@ def test_no_matching_model_and_wide_prices_means_skip():
 def test_model_numbers_must_match_exactly():
     q = "boss katana"
     candidate = titled(1, "BOSS Katana-50 MkII Gitarrenverstärker 50W – guter Zustand", 180, "Boss")
-    mk2_50 = [titled(100 + n, f"Amplificatore chitarra Boss Katana 50 mkii {n}", 200 + n, "Boss")
+    mk2_50 = [titled(100 + n, f"Amplificatore chitarra Boss Katana 50 mkii {chr(97 + n) * 2}", 200 + n, "Boss")
               for n in range(8)]
     others = [titled(200, "Ampli guitare Boss Katana 50 Gen 1 (MK1)", 150, "Boss"),
               titled(201, "Amplificatore Boss Katana 100W Mk2, per chitarra elettrica", 300, "Boss"),
@@ -184,7 +184,7 @@ def test_model_numbers_must_match_exactly():
               titled(203, "Boss Katana Head MkII + Foot Controller", 260, "Boss")]
     comps, basis = find_comparables(candidate, mk2_50 + others, 8, q)
     assert {c.id for c in comps} == {c.id for c in mk2_50}
-    assert basis == "model 50 mk2"
+    assert basis == "model 50 mk2 (Boss)"
 
 
 def test_maker_names_are_not_model_tokens():
@@ -379,8 +379,8 @@ def test_ebay_filter_buy_it_now_and_location():
 def test_vinted_and_ebay_compared_together_by_model():
     from flipfinder.ebay import item_from_ebay
     q = "boss"
-    vinted = [titled(100 + n, f"Boss DS-1 distortion {n}", p, "Boss") for n, p in enumerate([40, 42, 45, 44, 41])]
-    ebay = [item_from_ebay({**EBAY_SUMMARY, "legacyItemId": str(900 + n), "title": f"Pedale Boss DS-1 {n}",
+    vinted = [titled(100 + n, f"Boss DS-1 distortion {chr(97 + n) * 2}", p, "Boss") for n, p in enumerate([40, 42, 45, 44, 41])]
+    ebay = [item_from_ebay({**EBAY_SUMMARY, "legacyItemId": str(900 + n), "title": f"Pedale Boss DS-1 {chr(97 + n) * 2}",
                             "price": {"value": str(p), "currency": "EUR"}}) for n, p in enumerate([55, 58, 60, 52, 57])]
     other = [titled(300 + n, "Boss RC-30 loop station", 150, "Boss") for n in range(5)]
     candidate = titled(1, "Boss DS-1", 15, "Boss")
@@ -428,3 +428,139 @@ def test_summary_roi_keeps_decimal_near_threshold(tmp_path: Path):
     s.data["best_miss"] = {"title": "Squier CV 60s", "url": "https://www.vinted.it/items/1", "currency": "EUR",
                            "pay": 262.09, "value": 350.0, "profit": 77.91, "roi": 29.7, "rating": 5}
     assert "+€78 (29.7%) · blocked: ROI &lt; 30%" in s.summary_text(Rules(min_roi=30, min_rating=5))
+
+
+# --- Electronics matching ---
+
+def test_storage_battery_and_generation_normalized():
+    from flipfinder.analyzer import model_numbers
+    nums = lambda t, q: model_numbers(model_tokens(t, q))   # noqa: E731
+    assert nums("iPhone 13 Pro 128 GB batteria 87% grafite", "iphone 13 pro") == {"128gb"}
+    assert nums("iPhone 13 Pro 128GB salute batteria 100%", "iphone 13 pro") == {"128gb"}
+    assert nums("MacBook Air M1 8GB 256 GB", "macbook air m1") == {"8gb", "256gb"}
+    assert nums("Apple Watch Serie 7 45 mm GPS + Cellular", "apple watch series 7") == {"45mm", "cellular"}
+    for title in ("AirPods Pro 2ª generazione", "AirPods Pro (2nd Gen)", "Airpods pro seconda generazione",
+                  "AirPods Pro gen 2", "AirPods Pro 2"):
+        assert is_relevant(title, "airpods pro 2"), title
+    assert not is_relevant("AirPods Pro", "airpods pro 2")
+    assert is_relevant("iPad 9a generazione 64GB", "ipad 9") and is_relevant("iPad 10th gen", "ipad 10")
+
+
+def test_suffix_models_never_compared_with_base_model():
+    q = "iphone 13"
+    base = [titled(100 + n, "iPhone 13 128GB", p, "Apple") for n, p in enumerate([200, 210, 220, 230, 205, 215, 225, 235])]
+    pro = [titled(200 + n, "iPhone 13 Pro 128GB", 320, "Apple") for n in range(8)]
+    big = [titled(300 + n, "iPhone 13 256GB", 280, "Apple") for n in range(8)]
+    comps, basis = find_comparables(titled(1, "iPhone 13 128 GB batteria 89%", 150, "Apple"), base + pro + big, 8, q)
+    assert {c.id for c in comps} == {c.id for c in base} and basis == "model 128gb (Apple)"
+    comps, _ = find_comparables(titled(2, "iPhone 13 Pro 128GB", 250, "Apple"), base + pro + big, 8, q)
+    assert {c.id for c in comps} == {c.id for c in pro}
+
+
+def test_graphics_cards_compared_across_brands_but_not_ti():
+    q = "rtx 3060"
+    msi = [titled(100 + n, "MSI RTX 3060 12GB Ventus", 250, "MSI") for n in range(4)]
+    asus = [titled(200 + n, "ASUS Dual RTX 3060 12GB", 260, "ASUS") for n in range(4)]
+    ti = [titled(300 + n, "Gigabyte RTX 3060 Ti 8GB", 300, "Gigabyte") for n in range(8)]
+    cand = titled(1, "Zotac RTX 3060 12GB", 180, "Zotac")
+    assert find_comparables(cand, msi + asus + ti, 8, q, match_brand=True)[0] == []
+    comps, _ = find_comparables(cand, msi + asus + ti, 8, q, match_brand=False)
+    assert {c.id for c in comps} == {c.id for c in msi + asus}
+
+
+def test_config_shared_excludes_and_per_search_max_roi(tmp_path: Path):
+    from flipfinder import config as config_mod
+    (tmp_path / "c.yaml").write_text("""
+searches:
+  - query: iphone 13
+    exclude_keywords: &electronics [cover, icloud, "1:1"]
+  - query: airpods 3
+    exclude_keywords: [*electronics, pro]
+    max_roi: 60
+    match_brand: false
+""", encoding="utf-8")
+    c = config_mod.load(tmp_path / "c.yaml")
+    assert c.searches[0].exclude_keywords == ["cover", "icloud", "1:1"]
+    assert c.searches[1].exclude_keywords == ["cover", "icloud", "1:1", "pro"]
+    assert c.searches[1].max_roi == 60 and c.searches[1].match_brand is False
+    assert is_excluded_title("AirPods 3 replica 1:1", c.searches[0].exclude_keywords)
+
+
+def is_excluded_title(title, keywords):
+    from flipfinder.analyzer import is_excluded
+    return is_excluded(item(1, 10, title=title), keywords)
+
+
+def test_more_title_formats():
+    from flipfinder.analyzer import model_numbers
+    nums = lambda t, q: model_numbers(model_tokens(t, q))   # noqa: E731
+    assert nums("iPhone 13 Pro 128 Go Bleu", "iphone 13 pro") == {"128gb"}
+    assert nums("iPhone 13 blanc 128 G", "iphone 13") == {"128gb"}
+    assert nums("iPhone 12 5G 64GB", "iphone 12") == {"5g", "64gb"}   # network, not storage
+    assert not is_relevant("Ipad 10.2 (2021) 9a generazione", "ipad 10")
+    assert not is_relevant("Tablette iPad 10 pouces 8génération", "ipad 10")
+    assert is_relevant("Ipad 10.2 (2021) 9a generazione", "ipad 9")
+
+
+def test_fallback_never_contradicts_model_numbers():
+    q = "iphone 13"
+    others = [titled(100 + n, "iPhone 13 256GB", 260, "Apple") for n in range(10)]
+    unknown = [titled(200 + n, "iPhone 13 ottimo", p, "Apple") for n, p in enumerate([200, 205, 210, 215, 208, 212, 202, 207])]
+    cand = titled(1, "iPhone 13 128GB", 150, "Apple")
+    comps, basis = find_comparables(cand, others + unknown, 8, q)
+    assert {c.id for c in comps} == {c.id for c in unknown} and basis.startswith("whole pool")
+    assert find_comparables(cand, others, 8, q) == ([], "no comparable model")
+
+
+def test_new_search_starts_silently_and_pool_rebuilds_are_capped(tmp_path: Path):
+    from flipfinder import scanner as sc_mod
+    from flipfinder.config import Search
+
+    class FakeVinted:
+        def __init__(self):
+            self.calls = 0
+
+        def search(self, query, order="newest_first", page=1, **kw):
+            self.calls += 1
+            return [titled(hash((query, order, page, n)) % 10**9, f"{query} 128GB", 100 + n, "X") for n in range(5)]
+
+    seen = tmp_path / "seen.json"
+    seen.write_text(json.dumps({"vinted:1": 1e12}))
+    (tmp_path / "searches.json").write_text(json.dumps([]))   # nothing known yet: all searches are new
+    cfg = type("C", (), {})()
+    cfg.rules, cfg.seen_file, cfg.pool_refresh_minutes, cfg.comparable_pages = Rules(), seen, 60, 1
+    cfg.searches = [Search(f"thing {n}") for n in range(6)]
+    cfg.ebay = type("E", (), {"enabled": False})()
+    s = sc_mod.Scanner.__new__(sc_mod.Scanner)
+    s.cfg, s.client, s.ebay = cfg, FakeVinted(), None
+    s.seen, s.first_run = SeenStore(seen), False
+    s.pools = sc_mod.PoolCache(tmp_path / "pools.json", 60)
+    s.ebay_state = sc_mod.EbayState(tmp_path / "ebay.json")
+    s.known = sc_mod.KnownSearches(tmp_path / "searches.json", s.pools)
+    s.ebay_due = s.first_ebay = False
+    s.scan()
+    assert s.checked == 0 and len(s.seen.data) == 1 + 6 * 5       # new searches: seeded, no alerts
+    assert s.pool_rebuilds == 0
+    for x in cfg.searches:                                        # new listings arrive
+        s.seen.data = {k: v for k, v in s.seen.data.items() if k == "vinted:1"}
+    s.scan()
+    assert s.pool_rebuilds == sc_mod.MAX_POOL_REBUILDS            # only 4 of 6 pools built
+    assert s.checked == 4 * 5                                     # the other 2 searches wait, unseen
+    s.scan()
+    assert s.pool_rebuilds == 2 and s.checked == 2 * 5
+
+
+def test_known_searches_bootstrap_from_existing_pools(tmp_path: Path):
+    from flipfinder.config import Search
+    from flipfinder.scanner import KnownSearches, PoolCache, _key
+    pools = PoolCache(tmp_path / "pools.json", 60)
+    running, added = Search("boss katana"), Search("iphone 13")
+    pools.put(_key(running), [])
+    pools.put("ebay " + _key(added), [])          # an eBay pool doesn't make a search known
+    known = KnownSearches(tmp_path / "searches.json", pools)   # no file yet: first deploy
+    assert known.has(running) and not known.has(added)
+
+
+def test_curly_apostrophe_excluded():
+    from flipfinder.analyzer import is_excluded
+    assert is_excluded(item(1, 100, title="iPhone 12 Pro qui ne s’allume plus"), ["ne s'allume"])

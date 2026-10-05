@@ -58,8 +58,8 @@ exclude_keywords:
   - corde
   - plettri
   - tracolla
-  # smaller versions and bundles get compared to the full-size item otherwise
-  - mini
+  # bundles get compared to the single item otherwise (smaller "mini" versions are
+  # matched as their own model instead)
   - kit
   - set
   - pack
@@ -170,3 +170,201 @@ searches:
     exclude_keywords: [telecomando, remote, staffa, supporto, cavo]
     shipping_cost: 9
     resell_costs: 4
+
+  # ---------------------------------------------------------------------------
+  # Electronics. Each search is limited to Vinted's category for the device, which
+  # already drops most cases, cables and chargers sold on their own. Storage, chip,
+  # size and suffixes (Pro/Max/Plus/Ti/OLED...) must match exactly to compare.
+  # Price ranges from live vinted.it listings (Oct 2026): floor ~ cheapest real
+  # devices, ceiling ~ median, so a deal has room under the market.
+
+  # Phones (category 3661, "Telefoni cellulari")
+  - query: iphone 12
+    price_from: 90
+    price_to: 180
+    filters: {catalog: [3661]}
+    # "solo ..." = the accessory on its own; "iPhone con custodia e caricatore" still counts,
+    # and price_from keeps cheap accessory listings out
+    exclude_keywords: &electronics [solo custodia, solo cover, solo caricatore, solo cavo, case only,
+                                    scatola vuota, box only, pellicola, icloud, bloccato, account, per pezzi, ricambi, schermo rotto,
+                                    display rotto, non funziona, replica, copia, aaa, "1:1",
+                                    # the same in the other languages vinted.it shows
+                                    "ne s'allume", ne fonctionne, en panne, hs, défectueux, bloqué, pièces,
+                                    no funciona, no enciende, averiado, bloqueado, bloqueada, piezas,
+                                    não funciona, defekt, kaputt, gesperrt, kapot, broken, not working,
+                                    locked, for parts]
+    max_roi: 60            # far below market is usually iCloud-locked or a scam
+    shipping_cost: 5
+    resell_costs: 2
+  - query: iphone 12 pro
+    price_from: 120
+    price_to: 240
+    filters: {catalog: [3661]}
+    exclude_keywords: *electronics
+    max_roi: 60            # far below market is usually iCloud-locked or a scam
+    shipping_cost: 5
+    resell_costs: 2
+  - query: iphone 13
+    price_from: 140
+    price_to: 250
+    filters: {catalog: [3661]}
+    exclude_keywords: *electronics
+    max_roi: 60            # far below market is usually iCloud-locked or a scam
+    shipping_cost: 5
+    resell_costs: 2
+  - query: iphone 13 pro
+    price_from: 200
+    price_to: 320
+    filters: {catalog: [3661]}
+    exclude_keywords: *electronics
+    max_roi: 60            # far below market is usually iCloud-locked or a scam
+    shipping_cost: 5
+    resell_costs: 2
+  - query: iphone 14
+    price_from: 180
+    price_to: 300
+    filters: {catalog: [3661]}
+    exclude_keywords: *electronics
+    max_roi: 60            # far below market is usually iCloud-locked or a scam
+    shipping_cost: 5
+    resell_costs: 2
+  - query: iphone 14 pro
+    price_from: 260
+    price_to: 420
+    filters: {catalog: [3661]}
+    exclude_keywords: *electronics
+    max_roi: 60            # far below market is usually iCloud-locked or a scam
+    shipping_cost: 5
+    resell_costs: 2
+  - query: iphone 15
+    price_from: 260
+    price_to: 450
+    filters: {catalog: [3661]}
+    exclude_keywords: *electronics
+    max_roi: 60            # far below market is usually iCloud-locked or a scam
+    shipping_cost: 5
+    resell_costs: 2
+  - query: iphone 15 pro
+    price_from: 350
+    price_to: 550
+    filters: {catalog: [3661]}
+    exclude_keywords: *electronics
+    max_roi: 60            # far below market is usually iCloud-locked or a scam
+    shipping_cost: 5
+    resell_costs: 2
+
+  # AirPods (category 3678). Fakes are everywhere: below this floor almost all are
+  # copies, and anything "too cheap" is more likely fake than a deal, hence max_roi 50.
+  - query: airpods pro 2
+    price_from: 70
+    price_to: 140
+    filters: {catalog: [3678]}
+    exclude_keywords: *electronics
+    max_roi: 50
+    shipping_cost: 4
+    resell_costs: 2
+
+  # Apple Watch (category 3035, "Smartwatch")
+  - query: apple watch series 7
+    price_from: 60
+    price_to: 130
+    filters: {catalog: [3035]}
+    exclude_keywords: [*electronics, cinturino]
+    shipping_cost: 4
+    resell_costs: 2
+  - query: apple watch series 8
+    price_from: 80
+    price_to: 170
+    filters: {catalog: [3035]}
+    exclude_keywords: [*electronics, cinturino]
+    shipping_cost: 4
+    resell_costs: 2
+  - query: apple watch series 9
+    price_from: 120
+    price_to: 220
+    filters: {catalog: [3035]}
+    exclude_keywords: [*electronics, cinturino]
+    shipping_cost: 4
+    resell_costs: 2
+  - query: apple watch se
+    price_from: 60
+    price_to: 130
+    filters: {catalog: [3035]}
+    exclude_keywords: [*electronics, cinturino]
+    shipping_cost: 4
+    resell_costs: 2
+
+  # iPad (category 3728, "Tablet")
+  - query: ipad 9
+    price_from: 100
+    price_to: 200
+    filters: {catalog: [3728]}
+    exclude_keywords: [*electronics, pro, air]
+    shipping_cost: 6
+    resell_costs: 2
+  - query: ipad 10
+    price_from: 160
+    price_to: 300
+    filters: {catalog: [3728]}
+    exclude_keywords: [*electronics, pro, air]
+    shipping_cost: 6
+    resell_costs: 2
+
+  # MacBook (category 3580, "Computer portatili")
+  - query: macbook air m1
+    price_from: 300
+    price_to: 500
+    filters: {catalog: [3580]}
+    exclude_keywords: *electronics
+    shipping_cost: 7
+    resell_costs: 2
+  - query: macbook air m2
+    price_from: 450
+    price_to: 700
+    filters: {catalog: [3580]}
+    exclude_keywords: *electronics
+    shipping_cost: 7
+    resell_costs: 2
+
+  # Graphics cards (category 3602). MSI, ASUS, Gigabyte... sell the same chip, so
+  # compare across brands; VRAM and Ti/Super still have to match.
+  - query: rtx 3060
+    price_from: 160
+    price_to: 280
+    filters: {catalog: [3602]}
+    exclude_keywords: *electronics
+    match_brand: false
+    shipping_cost: 7
+    resell_costs: 2
+  - query: rtx 3070
+    price_from: 200
+    price_to: 330
+    filters: {catalog: [3602]}
+    exclude_keywords: *electronics
+    match_brand: false
+    shipping_cost: 7
+    resell_costs: 2
+  - query: rtx 4060
+    price_from: 200
+    price_to: 320
+    filters: {catalog: [3602]}
+    exclude_keywords: *electronics
+    match_brand: false
+    shipping_cost: 7
+    resell_costs: 2
+
+  # Consoles (category 3025, "Console")
+  - query: ps5
+    price_from: 200
+    price_to: 400
+    filters: {catalog: [3025]}
+    exclude_keywords: [*electronics, portal, portable, portátil, portatil]   # PlayStation Portal is a different device
+    shipping_cost: 10      # bigger and heavier than the €3-7 small parcels
+    resell_costs: 2
+  - query: nintendo switch oled
+    price_from: 120
+    price_to: 230
+    filters: {catalog: [3025]}
+    exclude_keywords: *electronics
+    shipping_cost: 7
+    resell_costs: 2

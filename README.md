@@ -109,7 +109,16 @@ Everything lives in `config.yaml`, with comments. The ones you'll touch most:
 - `searches`: what to look for. Specific queries work way better ("nike dunk low" instead of "nike"), because the market value comes from that same search.
 - `price_to`: max price you'd pay for that search.
 - `rules.min_profit`, `rules.min_roi`, `rules.min_rating`: how picky the alerts are.
-- `exclude_keywords`: skip titles with these words.
+- `exclude_keywords`: skip titles with these words. Per search they can include a shared list
+  through a YAML anchor, e.g. `exclude_keywords: [*electronics, portal]`.
+- Per search you can also set `filters: {catalog: [ID]}` (Vinted's category, from the URL when you
+  pick a category on the site), `shipping_cost`, `resell_costs`, `max_roi`, and `match_brand: false`
+  where different brands sell the same thing (graphics cards).
+
+Listings are only compared with the same model: model numbers, storage (128GB vs 256GB), sizes
+(41mm/45mm), generations and suffixes like Pro, Max, Mini, Plus, OLED and Ti have to match. A newly
+added search starts silently (its current listings are just remembered), and at most 4 price pools
+are rebuilt per run so a run stays well under the workflow timeout.
 
 ## Tests
 

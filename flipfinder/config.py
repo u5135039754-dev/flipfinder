@@ -21,6 +21,8 @@ class Search:
     exclude_keywords: list[str] = field(default_factory=list)
     shipping_cost: float | None = None   # overrides rules.shipping_cost for this search
     resell_costs: float | None = None    # overrides rules.resell_costs for this search
+    max_roi: float | None = None         # overrides rules.max_roi (lower where fakes are common)
+    match_brand: bool = True             # false: compare across brands (graphics cards)
 
 
 @dataclass
@@ -54,6 +56,14 @@ class Config:
     telegram_chat_id: str
     seen_file: Path
     ebay: EbaySettings = field(default_factory=EbaySettings)
+
+
+def _flat(values) -> list[str]:
+    """Exclude lists may contain other lists (a shared list via a YAML anchor plus extras)."""
+    out = []
+    for v in values:
+        out += _flat(v) if isinstance(v, list) else [str(v)]
+    return out
 
 
 def _opt_float(value) -> float | None:
@@ -91,9 +101,11 @@ def load(path: str | Path = "config.yaml") -> Config:
             price_from=s.get("price_from"),
             price_to=s.get("price_to"),
             filters=s.get("filters", {}) or {},
-            exclude_keywords=s.get("exclude_keywords", []) or [],
+            exclude_keywords=_flat(s.get("exclude_keywords", []) or []),
             shipping_cost=_opt_float(s.get("shipping_cost")),
             resell_costs=_opt_float(s.get("resell_costs")),
+            max_roi=_opt_float(s.get("max_roi")),
+            match_brand=bool(s.get("match_brand", True)),
         ))
     if not searches:
         raise SystemExit("No searches in config.yaml, add at least one.")

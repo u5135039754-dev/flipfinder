@@ -17,6 +17,11 @@ from .vinted import Item, VintedClient
 
 log = logging.getLogger(__name__)
 
+# Rebuilding a price pool costs 3 page loads (~11 s). With many searches they'd all
+# expire together and push a run past the workflow timeout, so only this many are
+# rebuilt per run; the rest keep their older pool until their turn.
+MAX_POOL_REBUILDS = 4
+
 
 class PoolCache:
     """Comparable listings per search, saved to disk so cloud runs can reuse them."""
@@ -30,6 +35,9 @@ class PoolCache:
                 self.data = json.loads(path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 self.data = {}
+
+    def has(self, key: str) -> bool:
+        return key in self.data
 
     def get(self, key: str, any_age: bool = False) -> list[Item] | None:
         entry = self.data.get(key)
@@ -75,6 +83,32 @@ class EbayState:
         self.path.write_text(json.dumps(self.data), encoding="utf-8")
 
 
+class KnownSearches:
+    """Searches that have run before, so a newly added one starts silently."""
+
+    def __init__(self, path: Path, pools: "PoolCache"):
+        self.path = path
+        self.keys: set[str] = set()
+        if path.exists():
+            try:
+                self.keys = set(json.loads(path.read_text(encoding="utf-8")))
+            except (json.JSONDecodeError, OSError):
+                pass
+        else:
+            # Before this file existed, a search that ran has a price pool
+            self.keys = {k for k in pools.data if not k.startswith("ebay ")}
+
+    def has(self, s: "Search") -> bool:
+        return _key(s) in self.keys
+
+    def add(self, s: "Search"):
+        self.keys.add(_key(s))
+
+    def save(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(sorted(self.keys)), encoding="utf-8")
+
+
 def _key(s: Search) -> str:
     return json.dumps([s.query, s.price_from, s.price_to, s.filters], sort_keys=True)
 
@@ -101,8 +135,10 @@ class Scanner:
         self.seen = SeenStore(cfg.seen_file)
         self.first_run = self.seen.is_empty
         self.pools = PoolCache(data_dir / "pools.json", cfg.pool_refresh_minutes)
+        self.known = KnownSearches(data_dir / "searches.json", self.pools)
         self.ebay_state = EbayState(data_dir / "ebay.json")
         self.ebay_due = False
+        self.pool_rebuilds = 0
         self.first_ebay = False
         # filled by each scan(), for logs and the daily summary
         self.checked = 0
@@ -111,16 +147,30 @@ class Scanner:
 
     # --- price pools -----------------------------------------------------------
 
-    def _vinted_pool(self, s: Search) -> list[Item]:
+    def _vinted_pool(self, s: Search) -> list[Item] | None:
+        """The price pool, or None if it doesn't exist yet and this run's rebuilds are used up."""
         key = _key(s)
         pool = self.pools.get(key)
+        if pool is None and self.pool_rebuilds >= MAX_POOL_REBUILDS:
+            old = self.pools.get(key, any_age=True)
+            if old is None:
+                return None
+            return old   # a bit stale, refreshed in a later run
         if pool is None:
+            self.pool_rebuilds += 1
             log.info("Building price pool for '%s'", s.query)
             pool = []
             for page in range(1, self.cfg.comparable_pages + 1):
                 # no price_to here: we want the full market, not just cheap ones
-                batch = self.client.search(s.query, order="relevance", page=page,
-                                           price_from=s.price_from, extra=s.filters)
+                try:
+                    batch = self.client.search(s.query, order="relevance", page=page,
+                                               price_from=s.price_from, extra=s.filters)
+                except Exception as e:
+                    if page == 1:
+                        raise
+                    log.warning("'%s': price pool page %d failed (%s), using %d listings",
+                                s.query, page, e, len(pool))
+                    break
                 pool += batch
                 if len(batch) < 96:
                     break
@@ -149,7 +199,9 @@ class Scanner:
             rules = replace(rules, shipping_cost=s.shipping_cost)
         if s.resell_costs is not None:
             rules = replace(rules, resell_costs=s.resell_costs)
-        return rules
+        if s.max_roi is not None:
+            rules = replace(rules, max_roi=s.max_roi)
+        return replace(rules, match_brand=s.match_brand)
 
     def scan_search(self, s: Search) -> list[Deal]:
         newest = self.client.search(s.query, order="newest_first",
@@ -164,9 +216,24 @@ class Scanner:
                 log.error("eBay search '%s' failed: %s", s.query, e)
         fresh = [i for i in newest + ebay_newest if i.key not in self.seen]
         log.info("'%s': %d Vinted + %d eBay listings, %d new", s.query, len(newest), len(ebay_newest), len(fresh))
+        if not self.first_run and not self.known.has(s):
+            # A search added to config.yaml: remember what's listed now instead of
+            # alerting on its whole backlog
+            for item in fresh:
+                self.seen.add(item.key)
+            self.known.add(s)
+            log.info("'%s' is new: saved %d current listings as seen, alerts start next scan",
+                     s.query, len(fresh))
+            return []
+        self.known.add(s)
         if not fresh:
             return []
         pool = self._vinted_pool(s)
+        if pool is None:
+            # no price pool yet and this run's rebuilds are used up: leave these
+            # listings unseen so the next run checks them
+            log.info("'%s': price pool waits for the next run", s.query)
+            return []
         if self.ebay:
             try:
                 pool = pool + self._ebay_pool(s)
@@ -214,6 +281,7 @@ class Scanner:
     def scan(self) -> list[Deal]:
         deals: list[Deal] = []
         self.checked, self.failed_searches, self.near_misses = 0, 0, []
+        self.pool_rebuilds = 0
         self.ebay_due = bool(self.ebay) and self.ebay_state.due(self.cfg.ebay.interval_minutes)
         self.first_ebay = self.ebay_due and not self.seen.has_platform("ebay")
         calls_before = self.ebay.calls if self.ebay else 0
@@ -237,6 +305,7 @@ class Scanner:
                      f"{self.cfg.ebay.interval_minutes:g} min)", self.ebay_state.calls_today)
         self.seen.save()
         self.pools.save()
+        self.known.save()
         deals.sort(key=lambda d: (d.rating, d.profit), reverse=True)
         self.near_misses.sort(key=lambda m: (m[1].closeness, m[1].profit), reverse=True)
         log.info("Checked %d new listing(s), %d near miss(es)", self.checked, len(self.near_misses))
