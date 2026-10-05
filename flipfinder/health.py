@@ -20,6 +20,11 @@ SUMMARY_HOUR = 9
 RUNS_PER_HOUR = 12   # cron-job.org (and the backup GitHub cron) trigger a run every 5 minutes
 
 
+def pct(value: float) -> str:
+    """29.7 -> "29.7%", 21.0 -> "21%" (a rounded 30% next to "ROI < 30%" reads like a bug)."""
+    return f"{value:.1f}".rstrip("0").rstrip(".") + "%"
+
+
 def miss_record(query: str, m: Deal) -> dict:
     return {
         "title": m.item.title, "url": m.item.url, "query": query, "currency": m.item.currency,
@@ -91,7 +96,7 @@ class RunStats:
             lines += [
                 f'Closest miss: <a href="{html.escape(m["url"], quote=True)}">{html.escape(m["title"][:60])}</a>',
                 f"{sym}{m['pay']:,.0f} → worth {sym}{m['value']:,.0f} · +{sym}{m['profit']:,.0f} "
-                f"({m['roi']:.0f}%) · blocked: {html.escape(', '.join(blocked))}",
+                f"({pct(m['roi'])}) · blocked: {html.escape(', '.join(blocked))}",
             ]
         else:
             lines.append("No near misses")

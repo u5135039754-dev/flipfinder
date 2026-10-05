@@ -298,6 +298,7 @@ def _summary_stats(tmp_path, miss_title="Squier Affinity Strat <Nero & Bianco>")
 
 def test_summary_format(tmp_path: Path):
     from datetime import datetime, timezone
+    from flipfinder.health import pct
     s, close = _summary_stats(tmp_path)
     text = s.summary_text(Rules(min_profit=25, min_roi=30, min_rating=3),
                           datetime(2026, 10, 5, 7, 0, tzinfo=timezone.utc))
@@ -310,7 +311,7 @@ def test_summary_format(tmp_path: Path):
     assert "](" not in text
     assert close.blocked == ["ROI < 30%"]
     assert lines[3] == (f"€{close.item.total_price:.0f} → worth €160 · +€{close.profit:.0f} "
-                        f"({close.roi:.0f}%) · blocked: ROI &lt; 30%")
+                        f"({pct(close.roi)}) · blocked: ROI &lt; 30%")
     assert len(lines) == 4   # 271 of the expected 288 runs is fine, no warning
 
 
@@ -419,3 +420,11 @@ def test_ebay_runs_every_15_minutes(tmp_path: Path):
     assert st.due(15)
     st.record(3, scanned=False)
     assert st.calls_today == 20
+
+
+def test_summary_roi_keeps_decimal_near_threshold(tmp_path: Path):
+    from flipfinder.health import RunStats
+    s = RunStats(tmp_path / "stats.json")
+    s.data["best_miss"] = {"title": "Squier CV 60s", "url": "https://www.vinted.it/items/1", "currency": "EUR",
+                           "pay": 262.09, "value": 350.0, "profit": 77.91, "roi": 29.7, "rating": 5}
+    assert "+€78 (29.7%) · blocked: ROI &lt; 30%" in s.summary_text(Rules(min_roi=30, min_rating=5))
