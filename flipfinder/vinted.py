@@ -38,9 +38,14 @@ class Item:
     condition: str = ""
     photo: str = ""
     favourites: int = 0
-    source: str = "vinted"            # which platform it's listed on: "vinted" or "ebay"
-    shipping: float | None = None     # buyer's shipping cost when the search result has it (eBay)
+    source: str = "vinted"            # which platform it's listed on: "vinted", "ebay" or "subito"
+    shipping: float | None = None     # what getting it costs when the listing says (eBay shipping, Subito pickup/shipping)
     location: str = ""
+    lat: float | None = None          # Subito: the town's coordinates
+    lon: float | None = None
+    distance_km: float | None = None  # Subito: from the home town
+    delivery: str = ""                # Subito: "pickup" (travel cost) or "shipping"
+    negotiable: bool = False          # Subito: "trattabile"
 
     @property
     def key(self) -> str:

@@ -14,6 +14,18 @@ ebay:
   interval_minutes: 20
   pool_refresh_minutes: 180
 
+# Subito.it, local pickup only: new listings in the province, kept if the town is within
+# radius_km of center. Market value uses Italy-wide Subito listings plus Vinted and eBay.
+subito:
+  enabled: true
+  region: 5                  # Home region (Subito's id)
+  province: 2                # Hometown
+  center: [44.5000, 11.3000] # Hometown
+  radius_km: 30
+  travel_cost: 5             # going to pick it up
+  town_travel_costs: {Southtown: 8, Westtown: 8}
+  pool_refresh_minutes: 180
+
 # Vinted adds a buyer protection fee on top of the price.
 # If the API gives the real total we use that, otherwise this estimate.
 buyer_protection:
@@ -39,6 +51,8 @@ exclude_keywords:
   - rotto
   - rotta
   - difettoso
+  - guasto
+  - guasta
   - non funzionante
   - per ricambi
   # toys and kids' stuff
@@ -167,12 +181,16 @@ searches:
 
   # Soundbars
   - query: soundbar sony    # every Sony soundbar, each compared with the same model (HT-G700 with HT-G700s)
+    subito_category: 11     # Audio/Video
+    ebay_category: 14969    # Home audio e impianti Hi-Fi
     price_from: 80
     price_to: 250
     exclude_keywords: [telecomando, remote, staffa, supporto, cavo]
     shipping_cost: 9
     resell_costs: 4
   - query: sony g700        # catches G700 listings that don't say "soundbar"
+    subito_category: 11     # Audio/Video
+    ebay_category: 14969    # Home audio e impianti Hi-Fi
     price_from: 80
     price_to: 250
     exclude_keywords: [telecomando, remote, staffa, supporto, cavo]
@@ -366,7 +384,8 @@ searches:
     price_from: 200
     price_to: 400
     filters: {catalog: [3025]}
-    exclude_keywords: [*electronics, portal, portable, portátil, portatil]   # PlayStation Portal is a different device
+    exclude_keywords: [*electronics, portal, portable, portátil, portatil,   # PlayStation Portal is a different device
+                       vr2, victrix, turtle beach, volante]           # accessories eBay files under consoles
     shipping_cost: 10      # bigger and heavier than the €3-7 small parcels
     resell_costs: 2
   - query: nintendo switch oled

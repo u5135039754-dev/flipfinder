@@ -9,9 +9,11 @@ from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .analyzer import Deal, Rules, assess, is_near_miss, is_pickup_only
+from .analyzer import Deal, Rules, assess, is_near_miss, is_pickup_only, is_relevant
 from .config import Config, Search
+from .ebay import CATEGORY_FOR_VINTED_CATALOG as EBAY_CATEGORY_FOR_VINTED_CATALOG
 from .ebay import EbayClient
+from .subito import CATEGORY_FOR_VINTED_CATALOG, SubitoClient
 from .storage import SeenStore
 from .vinted import Item, VintedClient
 
@@ -24,6 +26,9 @@ MAX_POOL_REBUILDS = 4
 # A newly added search alerts on at most this many of the deals already listed
 # (the best ones); the rest of its current listings are just remembered.
 SEED_ALERTS = 3
+# Subito and eBay price pools are one call each; at most this many are rebuilt per run
+MAX_SUBITO_POOLS = 6
+MAX_EBAY_POOLS = 10
 
 
 class PoolCache:
@@ -135,6 +140,15 @@ class Scanner:
         e = cfg.ebay
         self.ebay = EbayClient(e.client_id, e.client_secret, marketplace=e.marketplace,
                                item_location=e.item_location) if e.enabled else None
+        sb = cfg.subito
+        self.subito = SubitoClient(region=sb.region, province=sb.province, center=sb.center,
+                                   radius_km=sb.radius_km, travel_cost=sb.travel_cost,
+                                   town_travel_costs=sb.town_travel_costs,
+                                   request_delay=cfg.request_delay) if sb.enabled else None
+        self.subito_new: list[Item] = []
+        self.first_subito = False
+        self.subito_pools = 0
+        self.ebay_pools = 0
         data_dir = cfg.seen_file.parent
         self.seen = SeenStore(cfg.seen_file)
         self.first_run = self.seen.is_empty
@@ -186,16 +200,64 @@ class Scanner:
             self.pools.put(key, pool)
         return pool
 
+    def _ebay_category(self, s: Search) -> int:
+        if s.ebay_category is not None:
+            return s.ebay_category
+        for cat in s.filters.get("catalog", []) or []:
+            if int(cat) in EBAY_CATEGORY_FOR_VINTED_CATALOG:
+                return EBAY_CATEGORY_FOR_VINTED_CATALOG[int(cat)]
+        return self.cfg.ebay.default_category
+
     def _ebay_pool(self, s: Search) -> list[Item]:
-        key = "ebay " + _key(s)
+        cat = self._ebay_category(s)
+        key = f"ebay {cat} " + _key(s)   # the category is in the key: pools from before it are ignored
         pool = self.pools.get(key, max_age_min=self.cfg.ebay.pool_refresh_minutes)
-        if pool is None and self.ebay_due:
+        if pool is None and self.ebay_due and self.ebay_pools < MAX_EBAY_POOLS:
+            self.ebay_pools += 1
             log.info("Building eBay price pool for '%s'", s.query)
             pool = self.ebay.search(s.query, newest=False, price_from=s.price_from,
-                                    limit=self.cfg.ebay.pool_size)
+                                    limit=self.cfg.ebay.pool_size, category=cat)
             self.pools.put(key, pool)
         # between eBay scans an older pool is fine for comparing Vinted listings
         return pool if pool is not None else (self.pools.get(key, any_age=True) or [])
+
+    def _subito_category(self, s: Search) -> int:
+        if s.subito_category is not None:
+            return s.subito_category
+        for cat in s.filters.get("catalog", []) or []:
+            if int(cat) in CATEGORY_FOR_VINTED_CATALOG:
+                return CATEGORY_FOR_VINTED_CATALOG[int(cat)]
+        return self.cfg.subito.default_category
+
+    def _subito_pool(self, s: Search) -> list[Item]:
+        """Italy-wide Subito listings for market value; an older pool is fine meanwhile."""
+        key = "subito " + _key(s)
+        pool = self.pools.get(key, max_age_min=self.cfg.subito.pool_refresh_minutes)
+        if pool is None and self.subito_pools < MAX_SUBITO_POOLS:
+            self.subito_pools += 1
+            log.info("Building Subito price pool for '%s'", s.query)
+            pool = self.subito.pool(s.query, self._subito_category(s), s.price_from)
+            self.pools.put(key, pool)
+        return pool if pool is not None else (self.pools.get(key, any_age=True) or [])
+
+    def _other_pools(self, s: Search) -> list[Item]:
+        """eBay and Subito pools; trouble with either shouldn't stop the scan."""
+        out: list[Item] = []
+        for name, get in (("eBay", self._ebay_pool if self.ebay else None),
+                          ("Subito", self._subito_pool if self.subito else None)):
+            if get:
+                try:
+                    out += get(s)
+                except Exception as e:
+                    log.error("%s price pool '%s' failed: %s", name, s.query, e)
+        return out
+
+    def _subito_for(self, s: Search) -> list[Item]:
+        """This run's new local Subito listings that belong to this search."""
+        return [i for i in self.subito_new
+                if is_relevant(i.title, s.query)
+                and (s.price_from is None or i.price >= s.price_from)
+                and (s.price_to is None or i.price <= s.price_to)]
 
     # --- scanning ----------------------------------------------------------------
 
@@ -218,13 +280,16 @@ class Scanner:
         if self.ebay and self.ebay_due:
             try:
                 ebay_newest = self.ebay.search(s.query, price_from=s.price_from, price_to=s.price_to,
-                                               limit=self.cfg.ebay.new_per_search)
+                                               limit=self.cfg.ebay.new_per_search,
+                                               category=self._ebay_category(s))
             except Exception as e:   # eBay trouble shouldn't stop the Vinted scan
                 log.error("eBay search '%s' failed: %s", s.query, e)
-        fresh = [i for i in newest + ebay_newest if i.key not in self.seen]
-        log.info("'%s': %d Vinted + %d eBay listings, %d new", s.query, len(newest), len(ebay_newest), len(fresh))
+        local = self._subito_for(s) if self.subito else []
+        fresh = [i for i in newest + ebay_newest + local if i.key not in self.seen]
+        log.info("'%s': %d Vinted + %d eBay + %d Subito listings, %d new",
+                 s.query, len(newest), len(ebay_newest), len(local), len(fresh))
         if not self.first_run and not self.known.has(s):
-            self._seed(s, newest, ebay_newest, fresh)
+            self._seed(s, newest + ebay_newest + local, fresh)
             return []
         self.known.add(s)
         if not fresh:
@@ -235,12 +300,7 @@ class Scanner:
             # listings unseen so the next run checks them
             log.info("'%s': price pool waits for the next run", s.query)
             return []
-        if self.ebay:
-            try:
-                pool = pool + self._ebay_pool(s)
-            except Exception as e:
-                log.error("eBay price pool '%s' failed: %s", s.query, e)
-        pool = _merge(pool, newest, ebay_newest)
+        pool = _merge(pool, self._other_pools(s), newest, ebay_newest, local)
         rules = self._rules(s)
 
         deals = []
@@ -250,9 +310,16 @@ class Scanner:
                 # Nothing seen yet from this platform: remember what's listed now
                 # instead of alerting on all of it
                 continue
+            if item.source == "subito" and self.first_subito:
+                # First Subito pass: like a new search, only the best few already-listed
+                # deals get sent
+                deal = assess(item, pool, rules, s.query)
+                if deal and not deal.blocked:
+                    self.seed_candidates.append((s, item, pool, rules))
+                continue
             self.checked += 1
-            if item.source == "ebay":
-                deal = assess(item, pool, rules, s.query)   # shipping comes with the listing
+            if item.source in ("ebay", "subito"):
+                deal = assess(item, pool, rules, s.query)   # cost to get it comes with the listing
             else:
                 # Vinted shipping is only on the item page, so only open it for listings
                 # that would be a deal even with free shipping (a handful per scan)
@@ -267,19 +334,13 @@ class Scanner:
                 self.near_misses.append((s.query, deal))
         return deals
 
-    def _seed(self, s: Search, newest: list[Item], ebay_newest: list[Item], fresh: list[Item]):
+    def _seed(self, s: Search, listed: list[Item], fresh: list[Item]):
         """
         A search added to config.yaml: its current listings are a backlog, not news. Keep
         the ones that already look like deals as candidates (only the best SEED_ALERTS of
         all new searches get sent, after real shipping is checked) and remember the rest.
         """
-        pool = self._vinted_pool(s, force=True)
-        if self.ebay:
-            try:
-                pool = pool + self._ebay_pool(s)
-            except Exception as e:
-                log.error("eBay price pool '%s' failed: %s", s.query, e)
-        pool = _merge(pool, newest, ebay_newest)
+        pool = _merge(self._vinted_pool(s, force=True), self._other_pools(s), listed)
         rules = self._rules(s)
         found = 0
         for item in fresh:
@@ -301,13 +362,13 @@ class Scanner:
         ranked.sort(key=lambda r: r[0], reverse=True)
         out = []
         for _, s, item, pool, rules in ranked[:SEED_ALERTS * 2]:
-            deal = (assess(item, pool, rules, s.query) if item.source == "ebay"
-                    else self._with_details(item, pool, rules, s.query))
+            deal = (self._with_details(item, pool, rules, s.query) if item.source == "vinted"
+                    else assess(item, pool, rules, s.query))
             if deal and not deal.blocked:
                 out.append(deal)
             if len(out) == SEED_ALERTS:
                 break
-        log.info("New searches: %d listings already looked like deals, sending the best %d",
+        log.info("New searches/platforms: %d listings already looked like deals, sending the best %d",
                  len(self.seed_candidates), len(out))
         return out
 
@@ -331,6 +392,8 @@ class Scanner:
         self.ebay_due = bool(self.ebay) and self.ebay_state.due(self.cfg.ebay.interval_minutes)
         self.first_ebay = self.ebay_due and not self.seen.has_platform("ebay")
         calls_before = self.ebay.calls if self.ebay else 0
+        self.subito_pools = self.ebay_pools = 0
+        self._fetch_subito()
         for s in self.cfg.searches:
             try:
                 deals += self.scan_search(s)
@@ -345,6 +408,10 @@ class Scanner:
             self.first_run = self.seen.is_empty
         elif self.first_ebay:
             log.info("First eBay scan: saved current eBay listings as seen, eBay alerts start next scan")
+        if self.subito:
+            log.info("Subito: %d new local listing(s) in %g km, %d API calls this run%s",
+                     len(self.subito_new), self.cfg.subito.radius_km, self.subito.calls - self._subito_calls0,
+                     " (first pass: only the best already-listed deals are sent)" if self.first_subito else "")
         if self.ebay:
             self.ebay_state.record(self.ebay.calls - calls_before, scanned=self.ebay_due)
             self.ebay_state.save()
@@ -361,13 +428,29 @@ class Scanner:
             log.info("Near miss: %s", describe_miss(query, m))
         return deals
 
+    def _fetch_subito(self):
+        """Newest local Subito listings, one call per category the searches use."""
+        self.subito_new, self.first_subito = [], False
+        if not self.subito:
+            return
+        self._subito_calls0 = self.subito.calls
+        found: dict[str, Item] = {}
+        for cat in sorted({self._subito_category(s) for s in self.cfg.searches}):
+            try:
+                for i in self.subito.newest_in_area(cat):
+                    found.setdefault(i.key, i)
+            except Exception as e:   # Subito trouble shouldn't stop the Vinted/eBay scan
+                log.error("Subito category %s failed: %s", cat, e)
+        self.subito_new = list(found.values())
+        self.first_subito = bool(self.subito_new) and not self.seen.has_platform("subito")
+
     @property
     def failed(self) -> bool:
         """Every search errored, e.g. Vinted blocking us."""
         return self.failed_searches == len(self.cfg.searches)
 
 
-PLATFORM_NAMES = {"vinted": "Vinted", "ebay": "eBay"}
+PLATFORM_NAMES = {"vinted": "Vinted", "ebay": "eBay", "subito": "Subito"}
 
 
 def describe_miss(query: str, m: Deal) -> str:

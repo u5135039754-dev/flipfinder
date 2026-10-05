@@ -546,6 +546,7 @@ def _fake_scanner(tmp_path, n_searches, known_keys):
     s.ebay_state = sc_mod.EbayState(tmp_path / "ebay.json")
     s.known = sc_mod.KnownSearches(tmp_path / "searches.json", s.pools)
     s.ebay_due = s.first_ebay = False
+    s.subito, s.subito_new, s.first_subito, s.subito_pools = None, [], False, 0
     return s
 
 
@@ -600,3 +601,100 @@ def test_ebay_schedule_defaults_and_separate_pool_age(tmp_path: Path):
     pools.data["ebay x"]["ts"] = time.time() - 2 * 3600          # 2 hours old
     assert pools.get("ebay x") is None                            # too old for Vinted's 60 min
     assert pools.get("ebay x", max_age_min=180) == []             # fine for eBay's 3 h
+
+
+# --- Subito ---
+
+def subito_ad(n, subject, price, town="Hometown", lat=44.500500, lon=11.300800, ships=False, ship_cost=None,
+              body="", category=("39", "Strumenti Musicali")):
+    features = [{"uri": "/price", "values": [{"key": str(price), "value": f"{price} €"}]},
+                {"uri": "/item_condition", "values": [{"key": "30", "value": "Ottimo - poco usato e ben conservato"}]},
+                {"uri": "/item_shippable", "values": [{"key": "1" if ships else "0", "value": "Sì" if ships else "No"}]}]
+    if ship_cost is not None:
+        features.append({"uri": "/item_shipping_cost", "values": [{"key": str(ship_cost), "value": f"{ship_cost} €"}]})
+    return {"urn": f"id:ad:abc-{n}:list:{660000000 + n}", "subject": subject, "body": body,
+            "category": {"key": category[0], "value": category[1]},
+            "geo": {"town": {"value": town, "lat": lat, "lon": lon}},
+            "urls": {"default": f"https://www.subito.it/strumenti-musicali/x-{660000000 + n}.htm"},
+            "features": features, "images": []}
+
+
+def test_subito_parsing_area_delivery_and_negotiable():
+    from flipfinder.subito import SubitoClient, item_from_subito
+    c = SubitoClient(town_travel_costs={"Southtown": 8, "Westtown": 8})
+    it = item_from_subito(subito_ad(1, "Fender Stratocaster Player", 450, body="Prezzo trattabile"))
+    assert (it.id, it.price, it.source, it.condition, it.negotiable, it.key) ==         (660000001, 450.0, "subito", "Ottimo", True, "subito:660000001")
+    northtown = item_from_subito(subito_ad(2, "x", 10, "Northtown", 44.5745, 11.3000))
+    southtown = item_from_subito(subito_ad(3, "x", 10, "Southtown", 44.3150, 11.3000))
+    fartown = item_from_subito(subito_ad(4, "x", 10, "Fartown", 44.9500, 11.3000))
+    assert c.in_area(northtown) and c.in_area(southtown) and not c.in_area(fartown)
+    assert 7 < northtown.distance_km < 9 and 19 < southtown.distance_km < 22 and fartown.distance_km > 45
+    assert (c.delivery(northtown).shipping, northtown.delivery) == (5.0, "pickup")
+    assert c.delivery(southtown).shipping == 8.0                       # town override
+    cheap_ship = item_from_subito(subito_ad(5, "x", 10, "Southtown", 44.3150, 11.3000, ships=True, ship_cost=6))
+    c.in_area(cheap_ship)
+    assert (c.delivery(cheap_ship).shipping, cheap_ship.delivery) == (6.0, "shipping")   # cheaper than €8 travel
+    for body in ("Non trattabile", "Prezzo non è trattabile", "prezzo fisso, ritiro a mano", "Non tratto"):
+        assert not item_from_subito(subito_ad(6, "Boss DS-1", 40, body=body)).negotiable, body
+    assert item_from_subito(subito_ad(6, "Boss DS-1", 40, body="45€ tratt.")).negotiable
+
+
+def test_subito_alert_lines():
+    from flipfinder.subito import SubitoClient, item_from_subito
+    c = SubitoClient()
+    it = item_from_subito(subito_ad(7, "Boss DS-1 distortion", 20, "Northtown", 44.5745, 11.3000, body="trattabile"))
+    c.in_area(it); c.delivery(it)
+    p = pool([60] * 12)
+    for x in p:
+        x.title = "Boss DS-1 distortion"
+    d = assess(it, p, Rules(resell_costs=1), "boss")
+    msg = format_deal(d)
+    assert "🛒 <b>Subito</b> · Northtown (8 km)" in msg and "💬 Negotiable" in msg
+    assert "🚗 Pickup + packaging: <b>€6.00</b> (travel to Northtown)" in msg
+    assert d.shipping == 5.0 and d.profit == round(60 - 20 - 5 - 1, 2)
+
+
+def test_first_subito_pass_sends_only_best_3(tmp_path: Path):
+    from flipfinder import scanner as sc_mod
+    from flipfinder.scanner import _key
+    from flipfinder.subito import item_from_subito
+    s = _fake_scanner(tmp_path, 2, lambda searches: [_key(x) for x in searches])
+    s.pools.put(_key(s.cfg.searches[0]), [titled(900 + n, "thing 0 128GB", 300, "X") for n in range(10)])
+    s.pools.put(_key(s.cfg.searches[1]), [titled(950 + n, "thing 1 128GB", 300, "X") for n in range(10)])
+    local = [item_from_subito(subito_ad(10 + n, f"thing {n % 2} 128GB", 100 + n)) for n in range(8)]
+    for i in local:
+        i.shipping, i.delivery, i.distance_km = 5.0, "pickup", 0.0
+
+    class FakeSubito:
+        calls = 0
+        def newest_in_area(self, cat):
+            return local
+        def pool(self, *a, **kw):
+            return []
+    s.subito = FakeSubito()
+    s.cfg.subito = type("SB", (), {"default_category": 39, "pool_refresh_minutes": 180, "radius_km": 30})()
+    deals = s.scan()
+    subito_deals = [d for d in deals if d.item.source == "subito"]
+    assert len(subito_deals) == sc_mod.SEED_ALERTS                    # 8 qualify, best 3 sent
+    assert all(f"subito:{i.id}" in s.seen for i in local)              # the rest remembered
+    assert s.scan() == [] or all(d.item.source != "subito" for d in s.scan())
+
+
+def test_ebay_category_from_vinted_catalog_or_config():
+    from flipfinder.config import Search
+    from flipfinder.scanner import Scanner
+    s = Scanner.__new__(Scanner)
+    s.cfg = type("C", (), {"ebay": type("E", (), {"default_category": 3858})()})()
+    assert s._ebay_category(Search("iphone 13", filters={"catalog": [3661]})) == 9355
+    assert s._ebay_category(Search("rtx 3060", filters={"catalog": [3602]})) == 27386
+    assert s._ebay_category(Search("fender player stratocaster")) == 3858
+    assert s._ebay_category(Search("soundbar sony", ebay_category=14969)) == 14969
+
+
+def test_subito_skips_damaged_condition():
+    from flipfinder.subito import SubitoClient
+    c = SubitoClient()
+    ok, damaged = subito_ad(20, "iPhone 13 128GB", 200), subito_ad(21, "iPhone 13 128GB", 160)
+    damaged["features"][1]["values"][0]["value"] = "Danneggiato - non funzionante o con parti rotte"
+    c._get = lambda params: [ok, damaged]
+    assert [i.id for i in c.newest_in_area(12)] == [660000020]

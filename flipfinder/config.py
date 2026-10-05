@@ -23,6 +23,8 @@ class Search:
     resell_costs: float | None = None    # overrides rules.resell_costs for this search
     max_roi: float | None = None         # overrides rules.max_roi (lower where fakes are common)
     match_brand: bool = True             # false: compare across brands (graphics cards)
+    subito_category: int | None = None   # Subito category; by default from the Vinted catalog filter
+    ebay_category: int | None = None     # eBay.it category; by default from the Vinted catalog filter
 
 
 @dataclass
@@ -36,10 +38,25 @@ class EbaySettings:
     pool_refresh_minutes: float = 180   # eBay price pools are refreshed this often
     new_per_search: int = 50         # newest listings checked per search
     pool_size: int = 200             # listings per search used for market value (one API call)
+    default_category: int = 3858     # Chitarre e bassi, for searches without a category
 
     @property
     def enabled(self) -> bool:
         return bool(self.client_id and self.client_secret)
+
+
+@dataclass
+class SubitoSettings:
+    """Subito.it, local listings only (pickup). Off unless `subito: enabled: true`."""
+    enabled: bool = False
+    region: int = 5                  # Subito region id (5 = Home region)
+    province: int = 2                # Subito province id (2 = Hometown)
+    center: tuple[float, float] = (44.5000, 11.3000)   # home town coordinates (Hometown)
+    radius_km: float = 30
+    travel_cost: float = 5           # going to pick it up
+    town_travel_costs: dict = field(default_factory=dict)   # e.g. {"Southtown": 8}
+    default_category: int = 39       # Strumenti Musicali, for searches without a category
+    pool_refresh_minutes: float = 180
 
 
 @dataclass
@@ -57,6 +74,7 @@ class Config:
     telegram_chat_id: str
     seen_file: Path
     ebay: EbaySettings = field(default_factory=EbaySettings)
+    subito: SubitoSettings = field(default_factory=SubitoSettings)
 
 
 def _flat(values) -> list[str]:
@@ -107,12 +125,15 @@ def load(path: str | Path = "config.yaml") -> Config:
             resell_costs=_opt_float(s.get("resell_costs")),
             max_roi=_opt_float(s.get("max_roi")),
             match_brand=bool(s.get("match_brand", True)),
+            subito_category=int(s["subito_category"]) if s.get("subito_category") is not None else None,
+            ebay_category=int(s["ebay_category"]) if s.get("ebay_category") is not None else None,
         ))
     if not searches:
         raise SystemExit("No searches in config.yaml, add at least one.")
 
     fees = raw.get("buyer_protection", {})
     e = raw.get("ebay") or {}
+    sb = raw.get("subito") or {}
     return Config(
         domain=raw.get("domain", "www.vinted.it"),
         interval_minutes=float(raw.get("interval_minutes", 5)),
@@ -135,5 +156,17 @@ def load(path: str | Path = "config.yaml") -> Config:
             pool_refresh_minutes=float(e.get("pool_refresh_minutes", 180)),
             new_per_search=int(e.get("new_per_search", 50)),
             pool_size=int(e.get("pool_size", 200)),
+            default_category=int(e.get("default_category", 3858)),
+        ),
+        subito=SubitoSettings(
+            enabled=bool(sb.get("enabled", False)),
+            region=int(sb.get("region", 5)),
+            province=int(sb.get("province", 2)),
+            center=tuple(float(x) for x in sb.get("center", (44.5000, 11.3000))),
+            radius_km=float(sb.get("radius_km", 30)),
+            travel_cost=float(sb.get("travel_cost", 5)),
+            town_travel_costs={str(k): float(v) for k, v in (sb.get("town_travel_costs") or {}).items()},
+            default_category=int(sb.get("default_category", 39)),
+            pool_refresh_minutes=float(sb.get("pool_refresh_minutes", 180)),
         ),
     )

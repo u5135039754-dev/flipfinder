@@ -11,7 +11,7 @@ from .analyzer import Deal
 
 log = logging.getLogger(__name__)
 
-PLATFORMS = {"vinted": "Vinted", "ebay": "eBay"}
+PLATFORMS = {"vinted": "Vinted", "ebay": "eBay", "subito": "Subito"}
 SYMBOLS = {"EUR": "€", "GBP": "£", "USD": "$", "PLN": "zł "}
 
 
@@ -33,10 +33,16 @@ def format_deal(deal: Deal) -> str:
     if extras:
         lines.append(f"<i>{html.escape(extras)}</i>")
     platform = PLATFORMS.get(it.source, it.source)
-    lines.append(f"🛒 <b>{platform}</b>" + (f" · {html.escape(it.location)}" if it.location else ""))
+    where = html.escape(it.location) + (f" ({it.distance_km:.0f} km)" if it.distance_km is not None else "")
+    lines.append(f"🛒 <b>{platform}</b>" + (f" · {where}" if it.location else ""))
+    if it.negotiable:
+        lines.append("💬 Negotiable")
     if deal.pickup_only:
         lines.append("📍 <b>Pickup only</b>" + (f" · {html.escape(deal.city)}" if deal.city else ""))
-    if deal.pickup_only:
+    if it.delivery == "pickup":
+        delivery = (f"🚗 Pickup + packaging: <b>{money(deal.shipping + deal.packaging, c)}</b> "
+                    f"(travel to {html.escape(it.location)})")
+    elif deal.pickup_only:
         delivery = f"📦 Packaging: <b>{money(deal.packaging, c)}</b> (no shipping, pickup)"
     elif deal.shipping_known:
         delivery = f"📦 Shipping + packaging: <b>{money(deal.shipping + deal.packaging, c)}</b>"
@@ -82,12 +88,12 @@ class Telegram:
         self.base = f"https://api.telegram.org/bot{token}"
         self.chat_id = chat_id
 
-    def _post(self, method: str, payload: dict) -> bool:
+    def _post(self, method: str, payload: dict, quiet: bool = False) -> bool:
         try:
             r = requests.post(f"{self.base}/{method}", json=payload, timeout=20)
             if r.ok:
                 return True
-            log.error("Telegram %s failed: %s %s", method, r.status_code, r.text[:200])
+            (log.warning if quiet else log.error)("Telegram %s failed: %s %s", method, r.status_code, r.text[:200])
         except requests.RequestException as e:
             log.error("Telegram %s error: %s", method, e)
         return False
@@ -101,10 +107,11 @@ class Telegram:
     def send_deal(self, deal: Deal) -> bool:
         text = format_deal(deal)
         if deal.item.photo:
+            # Telegram can't load some listing photos (e.g. .webp); the text alert follows anyway
             ok = self._post("sendPhoto", {
                 "chat_id": self.chat_id, "photo": deal.item.photo,
                 "caption": text, "parse_mode": "HTML",
-            })
+            }, quiet=True)
             if ok:
                 return True
         return self.send_text(text)

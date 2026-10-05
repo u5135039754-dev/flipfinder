@@ -22,6 +22,19 @@ TOKEN_URL = "https://api.ebay.com/identity/v1/oauth2/token"
 SEARCH_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search"
 SCOPE = "https://api.ebay.com/oauth/api_scope"
 
+# Without a category, eBay results are mostly accessories and parts (for "iphone 13":
+# 131,614 accessories vs 2,351 phones). Vinted catalog filter -> eBay.it category.
+CATEGORY_FOR_VINTED_CATALOG = {
+    3661: 9355,      # phones -> Cellulari e smartphone
+    3678: 112529,    # earphones -> Auricolari e cuffie
+    3035: 178893,    # smartwatches -> Smartwatch
+    3728: 171485,    # tablets -> Tablet e eBook reader
+    3580: 175672,    # laptops -> Notebook, laptop e portatili
+    3602: 27386,     # graphics cards -> Schede video e grafiche
+    3025: 139971,    # consoles -> Console
+    4840: 3858,      # pedals -> Chitarre e bassi
+}
+
 
 def item_from_ebay(raw: dict) -> Item | None:
     price = raw.get("price") or {}
@@ -65,7 +78,7 @@ class EbayClient:
     marketplace: str = "EBAY_IT"
     item_location: str = "IT"          # "IT" or "EU"
     delivery_country: str = "IT"
-    request_delay: float = 1.0
+    request_delay: float = 0.3         # official API, limited per day rather than per second
     calls: int = 0                     # API calls made by this client (searches + tokens)
     session: requests.Session = field(default_factory=requests.Session)
 
@@ -100,8 +113,11 @@ class EbayClient:
         return ",".join(parts)
 
     def search(self, query: str, *, newest: bool = True, price_from: float | None = None,
-               price_to: float | None = None, limit: int = 50, offset: int = 0) -> list[Item]:
+               price_to: float | None = None, limit: int = 50, offset: int = 0,
+               category: int | None = None) -> list[Item]:
         params = {"q": query, "filter": self._filter(price_from, price_to), "limit": limit, "offset": offset}
+        if category:
+            params["category_ids"] = str(category)
         if newest:
             params["sort"] = "newlyListed"
         headers = {
