@@ -338,6 +338,13 @@ def evaluate(item: Item, pool: list[Item], rules: Rules, query: str = "",
     return deal if deal and not deal.blocked else None
 
 
+NEAR_MISS_CLOSENESS = 0.5
+
+
 def is_near_miss(deal: Deal | None) -> bool:
-    """Blocked only by being not quite good enough (not by looking too good to be true)."""
-    return bool(deal and deal.blocked and not any("max_roi" in b for b in deal.blocked))
+    """
+    Blocked, but at least halfway on its weakest rule (profit, ROI or rating), and not
+    blocked by max_roi (that's "too good to be true", not "almost").
+    """
+    return bool(deal and deal.blocked and deal.closeness >= NEAR_MISS_CLOSENESS
+                and not any("max_roi" in b for b in deal.blocked))

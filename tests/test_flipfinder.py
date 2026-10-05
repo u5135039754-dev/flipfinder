@@ -307,3 +307,5 @@ def test_assess_reports_blocking_rules():
     assert evaluate(item(1, 80), pool([100] * 12), Rules(min_profit=25, min_roi=30)) is None
     too_cheap = assess(item(1, 5), pool([100] * 12), Rules())
     assert not is_near_miss(too_cheap)   # blocked by max_roi: suspicious, not "almost"
+    losing = assess(item(1, 99), pool([100] * 12), Rules(min_profit=25, min_roi=30))
+    assert losing.profit < 0 and not is_near_miss(losing)
