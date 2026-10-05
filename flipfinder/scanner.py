@@ -42,9 +42,10 @@ class PoolCache:
     def has(self, key: str) -> bool:
         return key in self.data
 
-    def get(self, key: str, any_age: bool = False) -> list[Item] | None:
+    def get(self, key: str, any_age: bool = False, max_age_min: float | None = None) -> list[Item] | None:
         entry = self.data.get(key)
-        if not entry or (not any_age and time.time() - entry["ts"] > self.max_age):
+        max_age = self.max_age if max_age_min is None else max_age_min * 60
+        if not entry or (not any_age and time.time() - entry["ts"] > max_age):
             return None
         return [Item(**i) for i in entry["items"]]
 
@@ -187,7 +188,7 @@ class Scanner:
 
     def _ebay_pool(self, s: Search) -> list[Item]:
         key = "ebay " + _key(s)
-        pool = self.pools.get(key)
+        pool = self.pools.get(key, max_age_min=self.cfg.ebay.pool_refresh_minutes)
         if pool is None and self.ebay_due:
             log.info("Building eBay price pool for '%s'", s.query)
             pool = self.ebay.search(s.query, newest=False, price_from=s.price_from,

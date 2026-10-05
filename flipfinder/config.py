@@ -32,7 +32,8 @@ class EbaySettings:
     client_secret: str = ""
     marketplace: str = "EBAY_IT"
     item_location: str = "IT"        # "IT" (items in Italy) or "EU"
-    interval_minutes: float = 15     # eBay is searched at most this often, to stay in the daily API limit
+    interval_minutes: float = 20     # eBay is searched at most this often, to stay in the daily API limit
+    pool_refresh_minutes: float = 180   # eBay price pools are refreshed this often
     new_per_search: int = 50         # newest listings checked per search
     pool_size: int = 200             # listings per search used for market value (one API call)
 
@@ -130,7 +131,8 @@ def load(path: str | Path = "config.yaml") -> Config:
             client_secret=os.getenv("EBAY_CLIENT_SECRET", ""),
             marketplace=e.get("marketplace", "EBAY_IT"),
             item_location=str(e.get("item_location", "IT")),
-            interval_minutes=float(e.get("interval_minutes", 15)),
+            interval_minutes=float(e.get("interval_minutes", 20)),
+            pool_refresh_minutes=float(e.get("pool_refresh_minutes", 180)),
             new_per_search=int(e.get("new_per_search", 50)),
             pool_size=int(e.get("pool_size", 200)),
         ),

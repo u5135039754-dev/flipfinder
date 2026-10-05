@@ -586,3 +586,17 @@ def test_known_searches_bootstrap_from_existing_pools(tmp_path: Path):
 def test_curly_apostrophe_excluded():
     from flipfinder.analyzer import is_excluded
     assert is_excluded(item(1, 100, title="iPhone 12 Pro qui ne s’allume plus"), ["ne s'allume"])
+
+
+def test_ebay_schedule_defaults_and_separate_pool_age(tmp_path: Path):
+    import time
+    from flipfinder import config as config_mod
+    from flipfinder.scanner import PoolCache
+    (tmp_path / "c.yaml").write_text("searches: [{query: boss}]\n", encoding="utf-8")
+    c = config_mod.load(tmp_path / "c.yaml")
+    assert (c.ebay.interval_minutes, c.ebay.pool_refresh_minutes) == (20, 180)
+    pools = PoolCache(tmp_path / "pools.json", 60)
+    pools.put("ebay x", [])
+    pools.data["ebay x"]["ts"] = time.time() - 2 * 3600          # 2 hours old
+    assert pools.get("ebay x") is None                            # too old for Vinted's 60 min
+    assert pools.get("ebay x", max_age_min=180) == []             # fine for eBay's 3 h

@@ -6,6 +6,14 @@ request_delay: 2             # seconds between Vinted requests, don't go lower
 comparable_pages: 3          # pages of listings used to work out market value
 pool_refresh_minutes: 60     # how often market value gets recalculated
 
+# eBay.it (official Browse API), on when EBAY_CLIENT_ID / EBAY_CLIENT_SECRET are set.
+# The API allows 5,000 calls a day. Each eBay pass costs one call per search, and each
+# pool refresh another: 38 searches every 20 min + pools every 3 h = ~3,050 calls a day.
+ebay:
+  item_location: IT          # IT, or EU for items anywhere in the EU that ship to Italy
+  interval_minutes: 20
+  pool_refresh_minutes: 180
+
 # Vinted adds a buyer protection fee on top of the price.
 # If the API gives the real total we use that, otherwise this estimate.
 buyer_protection:

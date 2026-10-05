@@ -97,8 +97,9 @@ and sells for more.
 3. Put the App ID and Cert ID in `.env` as `EBAY_CLIENT_ID` and `EBAY_CLIENT_SECRET`, and add the
    same two as GitHub repository secrets.
 
-eBay is searched at most every 15 minutes (`ebay: interval_minutes`) to stay well inside the
-daily API limit; each run logs how many calls were used today. Items located in Italy only by
+eBay is searched at most every 20 minutes and its price pools are refreshed every 3 hours
+(`ebay: interval_minutes`, `pool_refresh_minutes`), about 3,050 of the 5,000 daily API calls with
+38 searches; each run logs how many calls were used today. Items located in Italy only by
 default (`ebay: item_location: IT`, or `EU`). Selling on eBay.it is free for private sellers in the
 EEA, so no fee is subtracted; set `sell_fees` in `config.yaml` if that changes for you.
 
