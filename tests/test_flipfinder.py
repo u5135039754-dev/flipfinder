@@ -1211,3 +1211,183 @@ def test_workflow_uses_latest_main_and_keeps_own_settings():
     save = next(x for x in steps if x.get("name", "").startswith("Save Telegram"))
     assert "-X theirs" in save["run"] and "deals.json" in save["run"]
     assert wf["permissions"]["contents"] == "write"
+
+
+# --- Group features, part 2 ---
+
+def test_quiet_hours_italy_time():
+    from datetime import datetime, timezone
+    from flipfinder.group import ROME, in_quiet_hours
+    at = lambda h, m: datetime(2026, 10, 7, h, m, tzinfo=ROME)   # noqa: E731
+    assert not in_quiet_hours(at(23, 59)) and in_quiet_hours(at(0, 0))
+    assert in_quiet_hours(at(7, 29)) and not in_quiet_hours(at(7, 30))
+    assert in_quiet_hours(datetime(2026, 1, 15, 6, 0, tzinfo=timezone.utc))      # 07:00 in Rome (winter)
+    assert not in_quiet_hours(datetime(2026, 7, 15, 6, 0, tzinfo=timezone.utc))  # 08:00 in Rome (summer)
+
+
+def test_reminder_schedule(tmp_path: Path):
+    from flipfinder.group import due_reminders
+    book, key = _book_with_deal(tmp_path)
+    d = book.data["deals"][key]
+    t0 = 1_000_000.0
+    d.update(status="claimed", who="Marco", who_id=555, claimed_at=t0)
+    assert due_reminders(book, t0 + 23 * 3600) == []
+    assert due_reminders(book, t0 + 25 * 3600) == [("ping", key)]
+    d["pinged_at"] = t0 + 25 * 3600
+    assert due_reminders(book, t0 + 30 * 3600) == []                    # pinged once
+    assert due_reminders(book, t0 + 49 * 3600) == [("release", key)]
+    d["kept_at"] = t0 + 30 * 3600                                       # "keep it" restarts the clock
+    assert due_reminders(book, t0 + 49 * 3600) == []
+    d.update(status="bought", bought_at=t0)
+    assert due_reminders(book, t0 + 2 * 86400) == [] and due_reminders(book, t0 + 3 * 86400) == [("list", key)]
+    d.update(status="listed", listed_at=t0)
+    assert due_reminders(book, t0 + 13 * 86400) == [] and due_reminders(book, t0 + 14 * 86400) == [("cut", key)]
+    d["cut_at"] = t0 + 14 * 86400
+    assert due_reminders(book, t0 + 18 * 86400) == [] and due_reminders(book, t0 + 21 * 86400) == [("cut", key)]
+
+
+def run_reminders(tmp_path, book, now, value=None, updates=()):
+    import os
+    from flipfinder.commands import COMMANDS_VERSION, Commands, load_settings
+    tg = FakeTG(list(updates))
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        s = load_settings(tmp_path / "settings.json")
+        s["commands_version"] = COMMANDS_VERSION
+        s["allowed_users"] = [555]
+        c = Commands(tg, cmd_cfg(tmp_path), s, book=book, value_fn=lambda d: value)
+        c.run()
+        c.reminders(now)
+    finally:
+        os.chdir(cwd)
+    return tg
+
+
+def test_reminders_ping_keep_release_nudge_and_cut(tmp_path: Path):
+    import time as _t
+    book, key = _book_with_deal(tmp_path)
+    d = book.data["deals"][key]
+    now = _t.time()
+    d.update(status="claimed", who="Marco", who_id=555, claimed_at=now - 25 * 3600)
+    tg = run_reminders(tmp_path, book, now)
+    ping = tg.sent()[0]
+    assert 'href="tg://user?id=555">Marco</a>, still on it?' in ping["text"]
+    assert [b["callback_data"] for b in ping["reply_markup"]["inline_keyboard"][0]] == [f"keep:{key}", f"rel:{key}"]
+    run_reminders(tmp_path, book, now, updates=[tap(f"keep:{key}", user=777), tap(f"keep:{key}", user=555)])
+    assert d.get("kept_at") and d["status"] == "claimed"
+    d.update(claimed_at=now - 50 * 3600, kept_at=now - 49 * 3600)   # 49 h since the last "keep it"
+    tg = run_reminders(tmp_path, book, now)
+    assert d["status"] == "new" and "who" not in d
+    assert "is free again" in tg.sent()[0]["text"] and tg.sent("editMessageText")       # deal message updated
+    d.update(status="bought", who="Marco", who_id=555, paid=30, bought_at=now - 3 * 86400)
+    tg = run_reminders(tmp_path, book, now)
+    assert "Time to list it?" in tg.sent()[0]["text"] and f"/sell {d['n']}" in tg.sent()[0]["text"]
+    d.update(status="listed", listed_at=now - 15 * 86400)
+    tg = run_reminders(tmp_path, book, now, value=52.0)
+    cut = tg.sent()[0]["text"]
+    assert "listed for 15 days" in cut and "€52" in cut and "<b>€50</b>" in cut
+
+
+def topic_msg(text, thread, created_name=None, user=OWNER):
+    m = msg(text, user=user, chat=-100444)
+    m["message"].update(message_thread_id=thread, is_topic_message=True)
+    if created_name:
+        m["message"]["reply_to_message"] = {"message_id": thread, "forum_topic_created": {"name": created_name}}
+    return m
+
+
+def test_topics_learned_from_messages_and_topic_command(tmp_path: Path):
+    tg, c, cfg, changed = run_cmds(tmp_path, [
+        topic_msg("/topic", 11, "🎸 Guitars"),
+        topic_msg("/help", 22, "📱 Electronics"),       # any command in a topic teaches its id
+        topic_msg("/topic summary", 44, "Riepilogo"),     # a topic with another name, named explicitly
+        msg("/topic"),                                     # not in a topic
+    ])
+    assert c.settings["topics"] == {"guitars": 11, "electronics": 22, "summary": 44}
+    texts = [p["text"] for m, p in tg.calls if m == "sendMessage"]
+    assert any("This topic is now <b>Guitars</b>" in t for t in texts)
+    assert any("Send /topic inside a group topic" in t for t in texts)
+    assert changed
+
+
+def test_send_to_uses_topic_in_group_only_and_falls_back(monkeypatch):
+    import flipfinder.telegram as tgm
+    sent = []
+
+    def post(url, json=None, timeout=None):
+        sent.append(dict(json))
+        if json.get("message_thread_id") == 99:
+            return FakeResponse(False, {"ok": False, "description": "Bad Request: message thread not found"})
+        return FakeResponse(True, {"ok": True, "result": {"message_id": 1, "chat": {"id": json["chat_id"]}}})
+    monkeypatch.setattr(tgm.requests, "post", post)
+    tg = tgm.Telegram("TOKEN", "1000001,-100444")
+    tg.topics = {"guitars": 11, "summary": 99}
+    tg.send_text("deal", topic="guitars")
+    assert "message_thread_id" not in sent[0] and sent[1]["message_thread_id"] == 11
+    sent.clear()
+    assert tg.send_text("summary", ["-100444"], topic="summary")
+    assert sent[0]["message_thread_id"] == 99 and "message_thread_id" not in sent[1]   # retried in General
+
+
+def test_sell_listing_by_number_or_name_in_three_languages(tmp_path: Path):
+    book, key = _book_with_deal(tmp_path)
+    d = book.data["deals"][key]
+    d.update(status="bought", who="Marco", who_id=555, paid=30, condition="Ottime",
+             title="🔥🔥 BOSS DS-1 Distortion pedale chitarra originale made in Taiwan anni 90 perfetto")
+    tg = run_with_book(tmp_path, book, [msg(f"/sell {d['n']}"), msg("/sell boss ds-1 en"), msg("/sell ds-1 uk"),
+                                        msg("/sell zoom g1x")])
+    it, en, uk, missing = [p["text"] for p in tg.sent()]
+    title = it.split("<code>")[1].split("</code>")[0]
+    assert len(title) <= 60 and "🔥" not in title and title.startswith("BOSS DS-1 Distortion")
+    assert "Condizioni: Ottime" in it and "Prezzo consigliato: <b>€60</b>" in it and "vendita veloce" in it
+    assert "Condition: very good" in en and "Suggested price" in en
+    assert "Стан: дуже добрий" in uk
+    assert "No deal matching" in missing
+
+
+def test_weekly_report_once_on_sunday_evening(tmp_path: Path):
+    from datetime import datetime
+    from flipfinder.group import ROME, weekly_due, weekly_report
+    book, key = _book_with_deal(tmp_path)
+    sun = datetime(2026, 10, 11, 20, 5, tzinfo=ROME)
+    t = sun.timestamp()
+    d = book.data["deals"][key]
+    d.update(status="sold", who="Marco", who_id=555, paid=30, sold_for=75, sent=t - 86400,
+             claimed_at=t - 80000, bought_at=t - 70000, sold_at=t - 3600, query="boss ds 1")
+    book.data["deals"]["vinted:2"] = {"n": 2, "title": "Big Muff", "url": "u2", "status": "new", "sent": t - 5000,
+                                      "query": "big muff", "votes": {}, "messages": [], "text": ""}
+    book.data["feedback"] = [{"key": "vinted:2", "at": t - 4000}, {"key": "vinted:2", "at": t - 3000},
+                             {"key": key, "at": t - 2000}]
+    assert not weekly_due(book, datetime(2026, 10, 11, 19, 59, tzinfo=ROME))
+    assert weekly_due(book, sun) and not weekly_due(book, datetime(2026, 10, 12, 20, 5, tzinfo=ROME))
+    text = weekly_report(book, sun)
+    assert "Deals found: 2 · claimed: 1 · bought: 1 · sold: 1" in text
+    assert "Marco €45.00" in text and "Best flip" in text and "€30.00 → €75.00 (+€45.00)" in text
+    assert "Most down-voted search: <b>big muff</b> (2×)" in text
+    book.data["last_weekly"] = sun.date().isoformat()
+    assert not weekly_due(book, sun)
+
+
+def test_quiet_queue_sends_best_first_with_limit(tmp_path: Path):
+    from flipfinder.dealbook import DealBook
+    book = DealBook(tmp_path / "deals.json")
+    pool_ = [titled(100 + i, "Boss DS-1", 100, "Boss") for i in range(12)]
+    for i, price in enumerate([45, 30, 38], 1):
+        book.queue(evaluate(titled(i, "Boss DS-1", price, "Boss"), pool_, Rules()), "alert")
+    order = [book.data["deals"][k]["item"]["price"] for k in book.take_queue(2)]
+    assert order == [30, 38]                                            # best (most profit) first
+    assert len(book.data["queue"]) == 1                                 # the rest waits for the next run
+    assert all(d["messages"] == [] and d["text"].startswith("alert\n🔢 #") for d in book.data["deals"].values())
+
+
+
+def test_old_deals_get_numbers_on_load(tmp_path: Path):
+    from flipfinder.dealbook import DealBook
+    (tmp_path / "deals.json").write_text(json.dumps({"deals": {
+        "vinted:2": {"title": "B", "url": "u", "status": "new", "sent": 20, "votes": {}, "messages": [], "text": ""},
+        "vinted:1": {"title": "A", "url": "u", "status": "claimed", "sent": 10, "votes": {}, "messages": [], "text": ""},
+    }}), encoding="utf-8")
+    b = DealBook(tmp_path / "deals.json")
+    assert b.data["deals"]["vinted:1"]["n"] == 1 and b.data["deals"]["vinted:2"]["n"] == 2 and b.data["next_n"] == 2
+    assert b.find("1")[0] == "vinted:1" and b.changed

@@ -139,6 +139,21 @@ this month and per person. /pool 300 starts a shared pool: 💸 Bought takes fro
 it, and while it's set it is the budget for budget-mode searches. All of this is kept in
 `deals.json`, committed back by the workflow. Only allowed users can press the buttons.
 
+### Topics, reminders, quiet hours, weekly report
+
+- **Topics:** turn on Topics in the group and create Guitars, Electronics, Budget and Summary, then
+  send /topic once in each (or /topic guitars to name one). Deals post in their category's topic;
+  the daily summary, weekly report and failure alerts in Summary. The private chat gets everything.
+- **Reminders:** a claim with no update for 24 h pings its owner (keep it or release it) and is
+  released after 48 h; something bought but not listed after 3 days gets a nudge; something listed
+  but not sold after 14 days gets a price-cut suggestion based on the current market value.
+- **/sell 12** (or a name) writes a ready-to-copy listing: title, honest description to complete,
+  a suggested price and a quick-sale price. Add en or uk for English or Ukrainian.
+- **Quiet hours:** no deal alerts 00:00-07:30 Italy time; deals found overnight are sent at 07:30,
+  best first. Failure alerts still go out.
+- **Weekly report** on Sunday at 20:00 in Summary: deals found/claimed/bought/sold, profit per
+  person, the best flip and the most down-voted search.
+
 ## Budget mode
 
 Searches with `budget: true` only alert when everything you pay (price, buyer fee, shipping or

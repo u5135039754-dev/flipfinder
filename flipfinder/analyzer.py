@@ -31,6 +31,8 @@ class Deal:
     missing_part: float = 0.0      # cost of a battery/charger the listing says is missing
     budget: bool = False
     check: str = ""
+    query: str = ""                # the search that found it (set by the scanner)
+    group: str = ""                # its category, for the group topic
 
     @property
     def per_euro(self) -> float:

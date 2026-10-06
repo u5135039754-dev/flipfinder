@@ -101,6 +101,7 @@ class Telegram:
         self.base = f"https://api.telegram.org/bot{token}"
         self.chat_ids = parse_chat_ids(chat_ids) if isinstance(chat_ids, str) else [str(c) for c in chat_ids]
         self.migrations: dict[str, str] = {}   # group -> supergroup ids learned this run
+        self.topics: dict[str, int] = {}       # group topic ("guitars", "summary"...) -> message_thread_id
 
     @property
     def chat_id(self) -> str:
@@ -139,37 +140,60 @@ class Telegram:
         """Any Bot API method; returns its result, or None on failure."""
         return self._request(method, payload, quiet=True)[1]
 
-    def send_text(self, text: str, chat_ids=None, buttons: dict | None = None) -> bool:
+    @staticmethod
+    def is_group(chat) -> bool:
+        return str(chat).startswith("-")
+
+    def send_to(self, chat, text: str, buttons: dict | None = None, topic: str | None = None,
+                reply_to: int | None = None, photo: str | None = None):
+        """One message to one chat; in the group it goes to `topic` (General if unknown). Returns it."""
+        chat = self.migrations.get(str(chat), str(chat))
+        payload = {"chat_id": chat, "parse_mode": "HTML"}
+        if photo:
+            payload.update(photo=photo, caption=text)
+        else:
+            payload.update(text=text, disable_web_page_preview=False)
+        if buttons:
+            payload["reply_markup"] = buttons
+        thread = self.topics.get(topic) if topic and self.is_group(chat) else None
+        if thread:
+            payload["message_thread_id"] = thread
+        if reply_to:
+            payload["reply_parameters"] = {"message_id": reply_to, "allow_sending_without_reply": True}
+        method = "sendPhoto" if photo else "sendMessage"
+        ok, res = self._request(method, payload, quiet=True)
+        if not ok and thread:
+            # the topic was deleted or the id is wrong: General is better than nothing
+            payload.pop("message_thread_id")
+            ok, res = self._request(method, payload, quiet=True)
+        if not ok and not photo:
+            log.error("Telegram %s to %s failed", method, chat)
+        return res if ok else None
+
+    def send_text(self, text: str, chat_ids=None, buttons: dict | None = None, topic: str | None = None) -> bool:
         """Sends to every chat (or the given ones); True if at least one got it."""
         sent = False
         for chat in list(chat_ids or self.chat_ids):
-            payload = {"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": False}
-            if buttons:
-                payload["reply_markup"] = buttons
-            sent = self._post("sendMessage", payload) or sent
+            sent = self.send_to(chat, text, buttons, topic) is not None or sent
         return sent
 
-    def send_deal(self, deal: Deal, buttons: dict | None = None, text: str | None = None) -> list[dict]:
+    def send_deal(self, deal: Deal, buttons: dict | None = None, text: str | None = None,
+                  topic: str | None = None) -> list[dict]:
         """Sends the alert to every chat; returns where it landed ({chat, id, photo}) for later edits."""
-        text = text or format_deal(deal)
+        return self.send_alert(text or format_deal(deal), deal.item.photo, buttons, topic)
+
+    def send_alert(self, text: str, photo: str = "", buttons: dict | None = None,
+                   topic: str | None = None) -> list[dict]:
         buttons = buttons or CLAIM_BUTTON
         out = []
         for chat in list(self.chat_ids):
             res = None
-            if deal.item.photo and len(text) <= 1024:   # photo captions max out at 1024 chars
+            if photo and len(text) <= 1024:   # photo captions max out at 1024 chars
                 # Telegram can't load some listing photos (e.g. .webp); the text alert follows anyway
-                ok, res = self._request("sendPhoto", {
-                    "chat_id": chat, "photo": deal.item.photo, "caption": text,
-                    "parse_mode": "HTML", "reply_markup": buttons,
-                }, quiet=True)
-                if ok:
-                    out.append({"chat": str(res["chat"]["id"]), "id": res["message_id"], "photo": True})
-                    continue
-            chat = self.migrations.get(chat, chat)
-            ok, res = self._request("sendMessage", {
-                "chat_id": chat, "text": text, "parse_mode": "HTML",
-                "disable_web_page_preview": False, "reply_markup": buttons,
-            })
-            if ok:
-                out.append({"chat": str(res["chat"]["id"]), "id": res["message_id"], "photo": False})
+                res = self.send_to(chat, text, buttons, topic, photo=photo)
+            if res is None:
+                res = self.send_to(chat, text, buttons, topic)
+            if res is not None:
+                out.append({"chat": str(res["chat"]["id"]), "id": res["message_id"], "photo": "photo" in res,
+                            "thread": res.get("message_thread_id")})
         return out

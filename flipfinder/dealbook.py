@@ -36,6 +36,15 @@ class DealBook:
             except (json.JSONDecodeError, OSError):
                 log.error("deals.json is unreadable, starting a new one")
         self.changed = False
+        # deals recorded before numbering get numbers in the order they were found
+        unnumbered = sorted((d.get("sent", 0), k) for k, d in self.data["deals"].items() if "n" not in d)
+        if unnumbered:
+            n = max([d["n"] for d in self.data["deals"].values() if "n" in d] + [self.data.get("next_n", 0)])
+            for _, k in unnumbered:
+                n += 1
+                self.data["deals"][k]["n"] = n
+            self.data["next_n"] = n
+            self.changed = True
 
     def save(self):
         # deals nobody touched (no claim, no votes) are dropped after 30 days
@@ -51,16 +60,65 @@ class DealBook:
             self.changed = False
 
     # --- recording sent deals
-    def record(self, deal, text: str, messages: list[dict]):
-        """A deal alert went out: remember it and where (so buttons can edit every copy)."""
+    def record(self, deal, text: str, messages: list[dict]) -> str:
+        """
+        A deal alert is going out: remember it (numbered, "#12") and where it landed, so
+        buttons can edit every copy. Returns the alert text with its number.
+        """
+        from dataclasses import asdict
         it = deal.item
-        d = self.data["deals"].setdefault(it.key, {
-            "title": it.title, "url": it.url, "source": it.source, "status": "new",
-            "cost": deal.cost or round(it.total_price + deal.shipping, 2), "value": deal.market_value,
-            "profit": deal.profit, "sent": time.time(), "text": text, "messages": [], "votes": {},
-        })
+        if it.key not in self.data["deals"]:
+            self.data["next_n"] = n = self.data.get("next_n", len(self.data["deals"])) + 1
+            sample = sorted(c.price for c in (deal.sample or []))
+            self.data["deals"][it.key] = {
+                "n": n, "title": it.title, "url": it.url, "source": it.source, "status": "new",
+                "cost": deal.cost or round(it.total_price + deal.shipping, 2), "value": deal.market_value,
+                "low": sample[1] if len(sample) > 1 else None,   # ~25th percentile: a quick-sale price
+                "profit": deal.profit, "sent": time.time(), "text": text + f"\n🔢 #{n}", "messages": [],
+                "votes": {}, "query": getattr(deal, "query", ""), "group": getattr(deal, "group", ""),
+                "condition": it.condition, "photo": it.photo, "item": asdict(it),
+                "score": [int(deal.budget), round(deal.per_euro, 4) if deal.budget else 0, deal.rating, deal.profit],
+            }
+        d = self.data["deals"][it.key]
         d["messages"] += messages
         self.changed = True
+        return d["text"]
+
+    # --- quiet hours: deals wait in a queue until morning
+    def queue(self, deal, text: str):
+        self.record(deal, text, [])
+        if deal.item.key not in self.data.setdefault("queue", []):
+            self.data["queue"].append(deal.item.key)
+        self.changed = True
+
+    def take_queue(self, limit: int | None = None) -> list[str]:
+        """
+        Queued deal keys, best first (budget deals by profit per euro, the rest by rating);
+        anything over `limit` stays queued for the next run.
+        """
+        keys = [k for k in self.data.get("queue", []) if k in self.data["deals"]]
+        keys.sort(key=lambda k: self.data["deals"][k].get("score", [0, 0, 0, 0]), reverse=True)
+        take = keys[:limit] if limit else keys
+        self.data["queue"] = keys[len(take):]
+        self.changed = self.changed or bool(take)
+        return take
+
+    def find(self, ref: str) -> tuple[str, dict] | None:
+        """A deal by number ("12", "#12") or name (best title match, things in stock first)."""
+        ref = ref.strip().lstrip("#")
+        deals = self.data["deals"]
+        if ref.isdigit():
+            return next(((k, d) for k, d in deals.items() if d.get("n") == int(ref)), None)
+        words = [w for w in ref.lower().split() if w]
+        if not words:
+            return None
+        def score(kd):
+            k, d = kd
+            title = d["title"].lower()
+            return (all(w in title for w in words), d["status"] in ("bought", "listed"),
+                    sum(w in title for w in words), d.get("sent", 0))
+        best = max(deals.items(), key=score, default=None)
+        return best if best and any(w in best[1]["title"].lower() for w in words) else None
 
     # --- pool
     @property
@@ -101,7 +159,7 @@ class DealBook:
         st = d["status"]
         if st == "new":
             return ""
-        line = f"{STATUS[st]} by {html.escape(d['who'])}"
+        line = (f"#{d['n']} · " if d.get("n") else "") + f"{STATUS[st]} by {html.escape(d['who'])}"
         if d.get("paid") is not None:
             line += f" · paid {euro(d['paid'])}"
         if st == "sold" and d.get("sold_for") is not None:

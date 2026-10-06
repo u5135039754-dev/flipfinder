@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 
 OWNER_ID = 1000001
 SETTINGS_FILE = Path("settings.json")
-COMMANDS_VERSION = 2      # bump when the list below changes, so it's registered again
+COMMANDS_VERSION = 3      # bump when the list below changes, so it's registered again
 
 COMMANDS = [
     ("help", "List all commands"),
@@ -37,6 +37,8 @@ COMMANDS = [
     ("add", "Add a search: /add \"zoom g1x four\" 20 60"),
     ("remove", "Remove a search: /remove zoom g1x four"),
     ("stock", "Items we own now (bought or listed), who has them, what we paid"),
+    ("sell", "Ready-to-copy listing: /sell 12 or /sell boss ds-1 (add en or uk for English/Ukrainian)"),
+    ("topic", "Send in a group topic to make it the Guitars/Electronics/Budget/Summary topic"),
     ("profit", "Profit in total, this month and per person"),
     ("pool", "Shared money: /pool shows it, /pool 300 sets the starting amount"),
     ("allow", "Owner only: let another user use commands: /allow 123456789"),
@@ -122,10 +124,11 @@ def query_and_range(args: list[str]) -> tuple[str, float, float]:
 # --- the bot -------------------------------------------------------------------------
 
 class Commands:
-    def __init__(self, tg, cfg, settings: dict, stats_path: Path | None = None, book=None):
+    def __init__(self, tg, cfg, settings: dict, stats_path: Path | None = None, book=None, value_fn=None):
         from .dealbook import DealBook
         self.tg, self.cfg, self.settings = tg, cfg, settings
         self.stats_path = stats_path
+        self.value_fn = value_fn or (lambda d: None)   # current market value of a recorded deal
         self.book = book if book is not None else DealBook()
         self.changed = False
 
@@ -183,6 +186,7 @@ class Commands:
         chat = msg["chat"]["id"]
         if not self.allowed(user):
             return   # not someone we take commands from: ignore quietly
+        self.learn_topic(msg, quiet=True)
         if not text.startswith("/"):
             return self.on_price_reply(chat, user, text)
         head, _, rest = text.partition(" ")
@@ -191,7 +195,10 @@ class Commands:
         if handler is None:
             return self.reply(chat, f"I don't know /{html.escape(cmd)}. Try /help")
         try:
-            handler(chat, split_args(rest), user)
+            if cmd == "topic":
+                handler(chat, split_args(rest), user, msg)
+            else:
+                handler(chat, split_args(rest), user)
         except ValueError as e:
             self.reply(chat, f"⚠️ {html.escape(str(e))}")
 
@@ -465,13 +472,130 @@ class Commands:
         self.refresh_deal(key)
         self.reply(chat, done + (f" · pool now €{pool:,.2f}" if pool is not None else ""))
 
+    # --- group topics
+    def learn_topic(self, msg: dict, name: str | None = None, quiet: bool = False) -> str | None:
+        """
+        A message in a topic tells us the topic's id, and (via the topic's first message)
+        its name. Guitars/Electronics/Budget/Summary are matched by name.
+        """
+        from .group import TOPIC_NAMES
+        thread = msg.get("message_thread_id")
+        if not msg.get("is_topic_message") or not thread:
+            return None
+        created = ((msg.get("reply_to_message") or {}).get("forum_topic_created") or {}).get("name", "")
+        wanted = (name or created).lower()
+        key = next((k for k in TOPIC_NAMES if k in wanted or wanted.startswith(k[:4])), None) if wanted else None
+        if key and self.settings.setdefault("topics", {}).get(key) != thread:
+            self.settings["topics"][key] = thread
+            self.tg.topics = dict(self.settings["topics"])
+            self.changed = True
+            log.info("Telegram topic %s = thread %s", key, thread)
+        return key
+
+    def cmd_topic(self, chat, args, user, msg=None):
+        from .group import TOPIC_NAMES
+        if not (msg or {}).get("is_topic_message"):
+            raise ValueError("Send /topic inside a group topic (Guitars, Electronics, Budget or Summary)")
+        key = self.learn_topic(msg, " ".join(args) if args else None)
+        if not key:
+            raise ValueError("I couldn't tell which topic this is. Use /topic guitars, /topic electronics, "
+                             "/topic budget or /topic summary")
+        known = ", ".join(TOPIC_NAMES[k] for k in TOPIC_NAMES if k in self.settings.get("topics", {}))
+        self.tg.call("sendMessage", {"chat_id": chat, "message_thread_id": msg["message_thread_id"],
+                                     "text": f"✅ This topic is now <b>{TOPIC_NAMES[key]}</b>. Set so far: {known}",
+                                     "parse_mode": "HTML"})
+
+    # --- /sell
+    def cmd_sell(self, chat, args, user):
+        from .group import sell_listing
+        lang = "it"
+        if args and args[-1].lower() in ("en", "uk", "ua", "it"):
+            lang = {"ua": "uk"}.get(args[-1].lower(), args[-1].lower())
+            args = args[:-1]
+        if not args:
+            raise ValueError("Which item? /sell 12 or /sell boss ds-1 (add en or uk for English/Ukrainian)")
+        found = self.book.find(" ".join(args))
+        if not found:
+            raise ValueError(f"No deal matching \"{' '.join(args)}\". /stock lists what we have")
+        key, d = found
+        self.reply(chat, sell_listing(d, self.value_fn(d), lang))
+
+    # --- reminders (called once per run, after commands)
+    def on_keep_release(self, cq: dict, user, kind: str, key: str):
+        d = self.book.data["deals"].get(key)
+        if d is None or d["status"] != "claimed":
+            return self.answer(cq, "That's already sorted")
+        if user not in (d.get("who_id"), OWNER_ID):
+            return self.answer(cq, f"That's {d.get('who', 'someone else')}'s")
+        if kind == "keep":
+            d["kept_at"] = time.time()
+            self.book.changed = True
+            return self.answer(cq, "✋ Kept, you have another 24 h")
+        self.release(key, "released it")
+        return self.answer(cq, "❌ Released for someone else")
+
+    def release(self, key: str, why: str):
+        d = self.book.data["deals"][key]
+        who = d.get("who", "someone")
+        for f in ("who", "who_id", "claimed_at", "kept_at", "pinged_at"):
+            d.pop(f, None)
+        d["status"] = "new"
+        self.book.changed = True
+        self.refresh_deal(key)
+        self.post_about(key, f"⌛ #{d.get('n', '?')} {html.escape(d['title'][:50])} is free again "
+                             f"({html.escape(who)} {why}). Tap ✋ to claim it.")
+
+    def post_about(self, key: str, text: str, buttons: dict | None = None):
+        """A note about a deal: in the group, in its topic, as a reply to the deal; else the private chat."""
+        from .group import TOPIC_FOR_GROUP
+        d = self.book.data["deals"][key]
+        msgs = d.get("messages", [])
+        group = next((m for m in msgs if str(m["chat"]).startswith("-")), None)
+        target = group or (msgs[0] if msgs else None)
+        chat = target["chat"] if target else (self.tg.chat_ids[0] if getattr(self.tg, "chat_ids", None) else None)
+        if chat is None:
+            return
+        topic = TOPIC_FOR_GROUP.get(d.get("group", ""))
+        if hasattr(self.tg, "send_to"):
+            self.tg.send_to(chat, text, buttons, topic, reply_to=target["id"] if target else None)
+        else:
+            self._call("sendMessage", {"chat_id": chat, "text": text, "parse_mode": "HTML",
+                                       **({"reply_markup": buttons} if buttons else {})})
+
+    def reminders(self, now: float | None = None):
+        from .group import due_reminders, mention, prices_for
+        now = now or time.time()
+        for kind, key in due_reminders(self.book, now):
+            d = self.book.data["deals"][key]
+            n, title = d.get("n", "?"), html.escape(d["title"][:50])
+            if kind == "ping":
+                d["pinged_at"] = now
+                self.post_about(key, f"{mention(d.get('who', ''), d.get('who_id'))}, still on it? "
+                                     f"(#{n} {title}) Tap ✋ to keep it or ❌ to release it.",
+                                {"inline_keyboard": [[{"text": "✋ Keep it", "callback_data": f"keep:{key}"},
+                                                      {"text": "❌ Release", "callback_data": f"rel:{key}"}]]})
+            elif kind == "release":
+                self.release(key, "didn't update it for 48 h")
+            elif kind == "list":
+                d["nudged_at"] = now
+                self.post_about(key, f"📦 {mention(d.get('who', ''), d.get('who_id'))}, #{n} {title} was bought "
+                                     f"{(now - d['bought_at']) / 86400:.0f} days ago. Time to list it? "
+                                     f"/sell {n} writes the listing.")
+            elif kind == "cut":
+                d["cut_at"] = now
+                value, price, quick = prices_for(d, self.value_fn(d))
+                self.post_about(key, f"🏷 #{n} {title} has been listed for {(now - d['listed_at']) / 86400:.0f} "
+                                     f"days. Market value now about €{value:,.0f}: try <b>€{price:g}</b>, or "
+                                     f"<b>€{quick:g}</b> to sell it quickly.")
+            self.book.changed = True
+
     def cmd_stock(self, chat, args, user):
         items = self.book.stock()
         if not items:
             return self.reply(chat, "📦 Nothing in stock right now")
         lines = ["📦 <b>In stock</b>"]
         for d in items:
-            lines.append(f"{'💸' if d['status'] == 'bought' else '🏷'} <a href=\"{html.escape(d['url'])}\">"
+            lines.append(f"{'💸' if d['status'] == 'bought' else '🏷'} #{d.get('n', '?')} <a href=\"{html.escape(d['url'])}\">"
                          f"{html.escape(d['title'][:50])}</a> · {html.escape(d['who'])} · paid €{(d.get('paid') or 0):,.2f}")
         lines.append(f"\nTied up: €{sum(d.get('paid') or 0 for d in items):,.2f}")
         self.reply(chat, "\n".join(lines))
@@ -539,6 +663,8 @@ class Commands:
         kind, _, key = data.partition(":")
         if kind == "pay":
             return self.on_use_cost(cq, chat, user, key)
+        if kind in ("keep", "rel"):
+            return self.on_keep_release(cq, user, kind, key)
         if kind in ("c", "b", "l", "s", "up", "dn", "m"):
             return self.on_deal_button(cq, chat, user, kind, key)
         by_id = {search_id(s.query): s for s in self.cfg.searches}

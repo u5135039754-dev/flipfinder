@@ -17,7 +17,10 @@ import time
 
 from flipfinder import config as config_mod
 from flipfinder.commands import OWNER_ID, Commands, effective_budget, load_settings, save_settings, set_budget
+from flipfinder.analyzer import market_value
 from flipfinder.dealbook import DealBook
+from flipfinder.group import TOPIC_FOR_GROUP, in_quiet_hours, now_rome, weekly_due, weekly_report
+from flipfinder.scanner import _key
 from flipfinder.analyzer import Deal
 from flipfinder.health import FAIL_ALERT_AFTER, RunStats, miss_record
 from flipfinder.scanner import Scanner, describe_miss
@@ -79,7 +82,13 @@ def main() -> int:
         if tg:
             # Telegram commands (settings.json) first, so this scan already uses them
             try:
-                if Commands(tg, cfg, load_settings(), cfg.seen_file.parent / "stats.json", book).run():
+                settings = load_settings()
+                tg.topics = {k: int(v) for k, v in settings.get("topics", {}).items()}
+                cmds = Commands(tg, cfg, settings, cfg.seen_file.parent / "stats.json", book,
+                                value_fn=lambda d: current_value(d, cfg, scanner))
+                changed = cmds.run()
+                cmds.reminders()   # 24 h / 48 h claims, unlisted buys, unsold listings
+                if changed:
                     cfg = config_mod.load(args.config)
                     scanner = Scanner(cfg)
             except Exception:
@@ -95,21 +104,38 @@ def main() -> int:
             deals, ok, error = [], False, f"the scan crashed: {type(e).__name__}: {e}"
         logging.info("Found %d deal(s)", len(deals))
         sent = 0
+        quiet = bool(tg) and in_quiet_hours()
+        if tg and not quiet:
+            # deals found overnight, best first
+            for key in book.take_queue(MAX_ALERTS_PER_SCAN):
+                d = book.data["deals"][key]
+                if d["status"] == "new":
+                    where = tg.send_alert(d["text"], d.get("photo", ""), book.keyboard(key),
+                                          TOPIC_FOR_GROUP.get(d.get("group", "")))
+                    d["messages"] += where
+                    sent += bool(where)
         for deal in deals[:MAX_ALERTS_PER_SCAN]:
-            if tg:
-                text = format_deal(deal)
-                book.record(deal, text, [])
-                where = tg.send_deal(deal, book.keyboard(deal.item.key), text)
+            if tg and quiet:
+                book.queue(deal, format_deal(deal))   # 00:00-07:30: sent at 07:30
+            elif tg:
+                text = book.record(deal, format_deal(deal), [])
+                where = tg.send_deal(deal, book.keyboard(deal.item.key), text, TOPIC_FOR_GROUP.get(deal.group))
                 book.record(deal, text, where)
                 sent += bool(where)
             else:
                 print("\n" + format_deal(deal) + "\n" + explain(deal) + "\n")
+        if quiet and deals:
+            logging.info("Quiet hours: %d deal(s) queued for 07:30", min(len(deals), MAX_ALERTS_PER_SCAN))
         if stats is None and scanner.near_misses:
             print("Closest near misses:")
             for query, m in scanner.near_misses[:5]:
                 print("  " + describe_miss(query, m))
         if stats is not None:
             report(stats, tg, ok, error, scanner, sent)
+        if book is not None and weekly_due(book):
+            if tg.send_text(weekly_report(book), topic="summary"):
+                book.data["last_weekly"] = now_rome().date().isoformat()
+                book.changed = True
         if tg and tg.migrations:
             remember_migrations(tg)
         if book:
@@ -117,6 +143,22 @@ def main() -> int:
         if args.once:
             return 0 if ok else 1
         time.sleep(cfg.interval_minutes * 60)
+
+
+def current_value(d: dict, cfg, scanner: Scanner) -> float | None:
+    """Market value of a recorded deal from the price pools we already have (no new requests)."""
+    s = next((x for x in cfg.searches if x.query == d.get("query")), None)
+    if s is None or not d.get("item"):
+        return None
+    pools = scanner.pools
+    pool = (pools.get(_key(s), any_age=True) or []) + (pools.get("subito " + _key(s), any_age=True) or [])
+    if scanner.ebay:
+        pool += pools.get(f"ebay {scanner._ebay_category(s)} " + _key(s), any_age=True) or []
+    try:
+        value, _ = market_value(Item(**d["item"]), pool, cfg.rules.min_comparables, s.query)
+    except (TypeError, ValueError):
+        return None
+    return value
 
 
 def remember_migrations(tg: Telegram):
@@ -136,15 +178,15 @@ def report(stats: RunStats, tg: Telegram, ok: bool, error: str, scanner: Scanner
     if ok:
         streak = stats.record_success()
         if streak:
-            tg.send_text(f"✅ flipFinder is working again after {streak} failed runs.")
+            tg.send_text(f"✅ flipFinder is working again after {streak} failed runs.", topic="summary")
         best = scanner.near_misses[0] if scanner.near_misses else None
         stats.record_run(scanner.checked, sent, miss_record(*best) if best else None)
     elif stats.record_failure():
         tg.send_text(f"⚠️ <b>flipFinder: the last {FAIL_ALERT_AFTER} runs failed.</b>\n"
                      f"Latest: {html.escape(error)}\n"
-                     "You'll get a message when it works again.")
+                     "You'll get a message when it works again.", topic="summary")
     if stats.summary_due():
-        if tg.send_text(stats.summary_text(scanner.cfg.rules)):
+        if tg.send_text(stats.summary_text(scanner.cfg.rules), topic="summary"):
             stats.mark_summary_sent()
     stats.save()
 

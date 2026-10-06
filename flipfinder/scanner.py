@@ -138,6 +138,13 @@ class KnownSearches:
         self.path.write_text(json.dumps(self.last), encoding="utf-8")
 
 
+def tag(deal: Deal, s: Search) -> Deal:
+    """Which search found it, and its category (for the group topic)."""
+    from .commands import search_group
+    deal.query, deal.group = s.query, search_group(s)
+    return deal
+
+
 def _sid(s: Search) -> str:
     """A search's identity: query + filters. Changing its price range keeps it the same search."""
     return json.dumps([s.query, s.filters], sort_keys=True)
@@ -374,7 +381,7 @@ class Scanner:
                 deals.append(deal)
             elif is_near_miss(deal):
                 self.near_misses.append((s.query, deal))
-        return deals
+        return [tag(d, s) for d in deals]
 
     def _seed(self, s: Search, listed: list[Item], fresh: list[Item]):
         """
@@ -407,7 +414,7 @@ class Scanner:
             deal = (self._with_details(item, pool, rules, s.query) if item.source == "vinted"
                     else assess(item, pool, rules, s.query))
             if deal and not deal.blocked:
-                out.append(deal)
+                out.append(tag(deal, s))
             if len(out) == SEED_ALERTS:
                 break
         log.info("New searches/platforms: %d listings already looked like deals, sending the best %d",
