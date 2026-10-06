@@ -18,7 +18,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15   # normal runs take ~3 min; the first run after adding many searches longer
     steps:
+      # the newest main, not the commit the run was triggered on: the previous run may have
+      # just committed settings.json / deals.json
       - uses: actions/checkout@v4
+        with:
+          ref: main
 
       - uses: actions/setup-python@v5
         with:
@@ -42,16 +46,17 @@ jobs:
           EBAY_CLIENT_SECRET: ${{ secrets.EBAY_CLIENT_SECRET }}
         run: python main.py --once
 
-      # Settings changed from Telegram are committed back so they survive
-      - name: Save Telegram settings
+      # Settings and deal tracking changed from Telegram are committed back so they survive
+      - name: Save Telegram settings and deals
         if: always()
         run: |
-          if [ -f settings.json ] && [ -n "$(git status --porcelain settings.json)" ]; then
+          if [ -n "$(git status --porcelain settings.json deals.json 2>/dev/null)" ]; then
             git config user.name "flipfinder-bot"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add settings.json
-            git commit -m "Update settings from Telegram"
-            git pull --rebase origin main && git push origin HEAD:main
+            for f in settings.json deals.json; do [ -f "$f" ] && git add "$f"; done
+            git commit -m "Update settings/deals from Telegram"
+            # if main moved meanwhile, keep this run's settings/deals ("theirs" = the commit replayed)
+            git pull --rebase -X theirs origin main && git push origin HEAD:main
           fi
 
       - uses: actions/cache/save@v4

@@ -73,6 +73,8 @@ class EbayState:
                 self.data.update(json.loads(path.read_text(encoding="utf-8")))
             except (json.JSONDecodeError, OSError):
                 pass
+        # searches whose eBay listings have been seen once (None: not tracked yet, see Scanner)
+        self.seeded: set[str] | None = set(self.data["seeded"]) if "seeded" in self.data else None
 
     def due(self, interval_min: float) -> bool:
         return time.time() - self.data["last_scan"] >= interval_min * 60 - 30   # a little slack for run jitter
@@ -88,6 +90,8 @@ class EbayState:
         return self.data["calls"].get(datetime.now(timezone.utc).date().isoformat(), 0)
 
     def save(self):
+        if self.seeded is not None:
+            self.data["seeded"] = sorted(self.seeded)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(self.data), encoding="utf-8")
 
@@ -320,6 +324,8 @@ class Scanner:
                                                category=self._ebay_category(s))
             except Exception as e:   # eBay trouble shouldn't stop the Vinted scan
                 log.error("eBay search '%s' failed: %s", s.query, e)
+            else:
+                ebay_newest = self._seed_ebay(s, ebay_newest)
         local = self._subito_for(s) if self.subito else []
         fresh = [i for i in newest + ebay_newest + local if i.key not in self.seen]
         log.info("'%s': %d Vinted + %d eBay + %d Subito listings, %d new",
@@ -407,6 +413,23 @@ class Scanner:
         log.info("New searches/platforms: %d listings already looked like deals, sending the best %d",
                  len(self.seed_candidates), len(out))
         return out
+
+    def _seed_ebay(self, s: Search, items: list[Item]) -> list[Item]:
+        """
+        A search's first eBay pass (e.g. added while eBay was off-cycle): its current eBay
+        listings are a backlog, so they're remembered without alerting.
+        """
+        st = self.ebay_state
+        if st.seeded is None:
+            # first run with this tracking: searches that already ran had their eBay passes
+            st.seeded = {_sid(x) for x in self.cfg.searches if self.known.has(x)}
+        if _sid(s) in st.seeded or self.first_ebay:
+            return items
+        for i in items:
+            self.seen.add(i.key)
+        st.seeded.add(_sid(s))
+        log.info("'%s': first eBay pass, %d current eBay listings remembered", s.query, len(items))
+        return []
 
     def _with_details(self, item: Item, pool: list[Item], rules, query: str) -> Deal | None:
         try:

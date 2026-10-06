@@ -149,18 +149,27 @@ class Telegram:
             sent = self._post("sendMessage", payload) or sent
         return sent
 
-    def send_deal(self, deal: Deal) -> bool:
-        text = format_deal(deal)
-        sent = False
+    def send_deal(self, deal: Deal, buttons: dict | None = None, text: str | None = None) -> list[dict]:
+        """Sends the alert to every chat; returns where it landed ({chat, id, photo}) for later edits."""
+        text = text or format_deal(deal)
+        buttons = buttons or CLAIM_BUTTON
+        out = []
         for chat in list(self.chat_ids):
-            ok = False
-            if deal.item.photo:
+            res = None
+            if deal.item.photo and len(text) <= 1024:   # photo captions max out at 1024 chars
                 # Telegram can't load some listing photos (e.g. .webp); the text alert follows anyway
-                ok = self._post("sendPhoto", {
+                ok, res = self._request("sendPhoto", {
                     "chat_id": chat, "photo": deal.item.photo, "caption": text,
-                    "parse_mode": "HTML", "reply_markup": CLAIM_BUTTON,
+                    "parse_mode": "HTML", "reply_markup": buttons,
                 }, quiet=True)
-            if not ok:
-                ok = self.send_text(text, [self.migrations.get(chat, chat)], CLAIM_BUTTON)
-            sent = ok or sent
-        return sent
+                if ok:
+                    out.append({"chat": str(res["chat"]["id"]), "id": res["message_id"], "photo": True})
+                    continue
+            chat = self.migrations.get(chat, chat)
+            ok, res = self._request("sendMessage", {
+                "chat_id": chat, "text": text, "parse_mode": "HTML",
+                "disable_web_page_preview": False, "reply_markup": buttons,
+            })
+            if ok:
+                out.append({"chat": str(res["chat"]["id"]), "id": res["message_id"], "photo": False})
+        return out

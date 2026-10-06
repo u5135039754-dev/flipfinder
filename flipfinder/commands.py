@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 
 OWNER_ID = 1000001
 SETTINGS_FILE = Path("settings.json")
-COMMANDS_VERSION = 1      # bump when the list below changes, so it's registered again
+COMMANDS_VERSION = 2      # bump when the list below changes, so it's registered again
 
 COMMANDS = [
     ("help", "List all commands"),
@@ -36,6 +36,9 @@ COMMANDS = [
     ("setrule", "Change a rule: /setrule min_roi 25"),
     ("add", "Add a search: /add \"zoom g1x four\" 20 60"),
     ("remove", "Remove a search: /remove zoom g1x four"),
+    ("stock", "Items we own now (bought or listed), who has them, what we paid"),
+    ("profit", "Profit in total, this month and per person"),
+    ("pool", "Shared money: /pool shows it, /pool 300 sets the starting amount"),
     ("allow", "Owner only: let another user use commands: /allow 123456789"),
 ]
 RULES = {   # name: (type, min, max) for /setrule
@@ -119,9 +122,11 @@ def query_and_range(args: list[str]) -> tuple[str, float, float]:
 # --- the bot -------------------------------------------------------------------------
 
 class Commands:
-    def __init__(self, tg, cfg, settings: dict, stats_path: Path | None = None):
+    def __init__(self, tg, cfg, settings: dict, stats_path: Path | None = None, book=None):
+        from .dealbook import DealBook
         self.tg, self.cfg, self.settings = tg, cfg, settings
         self.stats_path = stats_path
+        self.book = book if book is not None else DealBook()
         self.changed = False
 
     # --- Telegram plumbing
@@ -168,6 +173,7 @@ class Commands:
             log.info("Telegram: handled %d update(s)%s", len(updates), ", settings changed" if self.changed else "")
         if self.changed:
             save_settings(self.settings)
+        self.book.save()
         return self.changed
 
     # --- messages
@@ -175,8 +181,10 @@ class Commands:
         text = (msg.get("text") or "").strip()
         user = (msg.get("from") or {}).get("id")
         chat = msg["chat"]["id"]
-        if not text.startswith("/") or not self.allowed(user):
-            return   # not a command, or not someone we take commands from: ignore quietly
+        if not self.allowed(user):
+            return   # not someone we take commands from: ignore quietly
+        if not text.startswith("/"):
+            return self.on_price_reply(chat, user, text)
         head, _, rest = text.partition(" ")
         cmd = head[1:].split("@")[0].lower()
         handler = getattr(self, f"cmd_{cmd}", None)
@@ -262,9 +270,13 @@ class Commands:
         if not 1 <= amount <= 100_000:
             raise ValueError("The budget must be between €1 and €100,000")
         self.settings["budget"] = amount
-        self.cfg.budget = amount
+        self.cfg.budget_setting = amount
+        pool = self.book.pool
+        set_budget(self.cfg, effective_budget(amount, pool))
         self.changed = True
-        self.reply(chat, f"✅ Budget is now €{amount:g} (budget-mode searches only)")
+        note = (f"\nℹ️ The pool is €{pool:,.2f}, so the limit in effect is €{self.cfg.budget:,.2f} "
+                "(the smaller of the two)." if pool is not None and pool < amount else "")
+        self.reply(chat, f"✅ Budget is now €{amount:g} (budget-mode searches only){note}")
 
     def cmd_rules(self, chat, args, user):
         r = self.cfg.rules
@@ -331,6 +343,173 @@ class Commands:
             self.changed = True
         self.reply(chat, f"✅ User {uid} can now use commands")
 
+    # --- deal lifecycle: ✋ Claim -> 💸 Bought -> 🏷 Listed -> ✅ Sold
+    def answer(self, cq: dict, text: str):
+        self._call("answerCallbackQuery", {"callback_query_id": cq.get("id"), "text": text})
+
+    def refresh_deal(self, key: str):
+        """Edit every copy of the deal (private chat and group) to the current status."""
+        d = self.book.data["deals"][key]
+        text, kb = self.book.full_text(key), self.book.keyboard(key)
+        for m in d.get("messages", []):
+            if m.get("photo"):
+                self._call("editMessageCaption", {"chat_id": m["chat"], "message_id": m["id"],
+                                                  "caption": text[:1024], "parse_mode": "HTML", "reply_markup": kb})
+            else:
+                self._call("editMessageText", {"chat_id": m["chat"], "message_id": m["id"], "text": text,
+                                               "parse_mode": "HTML", "reply_markup": kb})
+
+    def on_deal_button(self, cq: dict, chat, user, kind: str, key: str):
+        from .dealbook import SELLER_MESSAGE
+        deals = self.book.data["deals"]
+        d = deals.get(key)
+        if d is None:
+            return self.answer(cq, "I don't have this deal any more")
+        who = claimer_name(cq.get("from") or {})
+        if kind in ("up", "dn"):
+            vote = "up" if kind == "up" else "down"
+            d["votes"][str(user)] = vote
+            if vote == "down":
+                self.book.data["feedback"].append({"key": key, "title": d["title"], "url": d["url"], "by": who,
+                                                   "at": time.time(), "value": d.get("value"),
+                                                   "cost": d.get("cost")})
+            self.book.changed = True
+            self.refresh_deal(key)
+            return self.answer(cq, "👍 Noted" if vote == "up" else "👎 Noted, it's logged to tune the filters")
+        if kind == "m":
+            text = SELLER_MESSAGE.format(title=d["title"])
+            self.reply(chat, "📩 Copy and send this to the seller:\n\n<code>" + html.escape(text, quote=False) + "</code>\n\n"
+                             f'<a href="{html.escape(d["url"])}">Open the listing</a>')
+            return self.answer(cq, "Message ready below")
+        if kind == "c":
+            if d["status"] != "new":
+                return self.answer(cq, f"{d.get('who', 'Someone')} already has this one")
+            d.update(status="claimed", who=who, who_id=user, claimed_at=time.time())
+            self.book.changed = True
+            self.refresh_deal(key)
+            return self.answer(cq, "It's yours, good luck!")
+        # the next steps belong to whoever claimed it (or the owner)
+        if user not in (d.get("who_id"), OWNER_ID):
+            return self.answer(cq, f"{d.get('who', 'Someone else')} has this one")
+        expected = {"b": "claimed", "l": "bought", "s": "listed"}[kind]
+        if d["status"] != expected:
+            return self.answer(cq, "That step is already done")
+        if kind == "l":
+            d.update(status="listed", listed_at=time.time())
+            self.book.changed = True
+            self.refresh_deal(key)
+            return self.answer(cq, "🏷 Listed")
+        ask = "paid" if kind == "b" else "sold_for"
+        title = html.escape(d["title"][:60])
+        cost = d.get("cost") if ask == "paid" else None
+        if cost:
+            # suggest what we know it costs; a different amount can still be typed as a reply
+            q = (f"💸 How much did you pay for <b>{title}</b>?\n"
+                 f"Known total (price + buyer fee + shipping/pickup): <b>€{cost:,.2f}</b>.\n"
+                 "Tap ✅ to use it, or reply to this message with a different amount.")
+            markup = {"inline_keyboard": [[{"text": f"✅ Use €{cost:,.2f}", "callback_data": f"pay:{key}"}]]}
+        elif ask == "paid":
+            q = f"💸 How much did you pay for <b>{title}</b>? Reply with the amount, e.g. 45"
+            markup = {"force_reply": True, "input_field_placeholder": "amount in €"}
+        else:
+            q = f"✅ How much did <b>{title}</b> sell for? Reply with the amount, e.g. 80"
+            markup = {"force_reply": True, "input_field_placeholder": "amount in €"}
+        sent = self._call("sendMessage", {"chat_id": chat, "text": q, "parse_mode": "HTML", "reply_markup": markup})
+        self.book.data["pending"][str(user)] = {
+            "key": key, "ask": ask, "chat": chat,
+            "ask_msg": sent.get("message_id") if isinstance(sent, dict) else None}
+        self.book.changed = True
+        return self.answer(cq, "Tap ✅ or reply with the price" if cost else "Reply with the price")
+
+    def on_use_cost(self, cq: dict, chat, user, key: str):
+        """✅ Use €X under the "how much did you pay?" question."""
+        pending = self.book.data["pending"].get(str(user))
+        d = self.book.data["deals"].get(key)
+        if not pending or pending["key"] != key or pending["ask"] != "paid" or d is None:
+            return self.answer(cq, f"That's for {d.get('who', 'someone else') if d else 'someone else'}")
+        self.answer(cq, "Done")
+        self.apply_price(chat, user, float(d["cost"]))
+
+    def on_price_reply(self, chat, user, text: str):
+        pending = self.book.data["pending"].get(str(user))
+        if not pending or str(pending["chat"]) != str(chat):
+            return   # just chatting
+        raw = text.replace("€", "").replace(",", ".").strip()
+        try:
+            amount = float(raw)
+        except ValueError:
+            return self.reply(chat, f"⚠️ I need just the amount, e.g. 45 (got {html.escape(text[:30])!s})")
+        if not 0 <= amount <= 100_000:
+            return self.reply(chat, "⚠️ That amount doesn't look right")
+        self.apply_price(chat, user, amount)
+
+    def apply_price(self, chat, user, amount: float):
+        pending = self.book.data["pending"].pop(str(user))
+        key, ask = pending["key"], pending["ask"]
+        d = self.book.data["deals"].get(key)
+        self.book.changed = True
+        if pending.get("ask_msg"):
+            # the question is answered: drop its "✅ Use €X" button
+            self._call("editMessageReplyMarkup", {"chat_id": pending["chat"], "message_id": pending["ask_msg"],
+                                                  "reply_markup": {"inline_keyboard": []}})
+        if d is None:
+            return
+        now = time.time()
+        if ask == "paid":
+            d.update(status="bought", paid=amount, bought_at=now)
+            done = f"💸 Bought for €{amount:,.2f}"
+        else:
+            d.update(status="sold", sold_for=amount, sold_at=now)
+            done = f"✅ Sold for €{amount:,.2f}, profit €{amount - (d.get('paid') or 0):,.2f}"
+        pool = self.book.pool
+        self.refresh_deal(key)
+        self.reply(chat, done + (f" · pool now €{pool:,.2f}" if pool is not None else ""))
+
+    def cmd_stock(self, chat, args, user):
+        items = self.book.stock()
+        if not items:
+            return self.reply(chat, "📦 Nothing in stock right now")
+        lines = ["📦 <b>In stock</b>"]
+        for d in items:
+            lines.append(f"{'💸' if d['status'] == 'bought' else '🏷'} <a href=\"{html.escape(d['url'])}\">"
+                         f"{html.escape(d['title'][:50])}</a> · {html.escape(d['who'])} · paid €{(d.get('paid') or 0):,.2f}")
+        lines.append(f"\nTied up: €{sum(d.get('paid') or 0 for d in items):,.2f}")
+        self.reply(chat, "\n".join(lines))
+
+    def cmd_profit(self, chat, args, user):
+        p = self.book.profit()
+        lines = ["💰 <b>Profit</b>", f"Total: €{p['total']:,.2f} ({p['sold']} sold)", f"This month: €{p['month']:,.2f}"]
+        lines += [f"· {html.escape(who)}: €{v:,.2f}" for who, v in sorted(p["people"].items(), key=lambda x: -x[1])]
+        pool = self.book.pool
+        if pool is not None:
+            lines.append(f"\nPool: €{pool:,.2f}")
+        self.reply(chat, "\n".join(lines))
+
+    def cmd_pool(self, chat, args, user):
+        if not args:
+            pool = self.book.pool
+            setting = self.cfg.budget_setting
+            if pool is None:
+                return self.reply(chat, "No pool set (start one with /pool 300).\n"
+                                        f"Budget-mode limit: €{setting:,.2f} (/budget)")
+            return self.reply(chat, "\n".join([
+                f"💶 Pool: €{pool:,.2f} (started with €{self.book.data['pool']['start']:,.2f})",
+                f"🎯 /budget: €{setting:,.2f}",
+                f"Budget-mode limit in effect: <b>€{effective_budget(setting, pool):,.2f}</b> (the smaller of the two)",
+            ]))
+        try:
+            amount = float(args[0].replace("€", "").replace(",", "."))
+        except ValueError:
+            raise ValueError(f"The amount must be a number, I got {args[0]!r}")
+        if not 0 <= amount <= 1_000_000:
+            raise ValueError("The pool must be between €0 and €1,000,000")
+        self.book.set_pool(amount)
+        limit = effective_budget(self.cfg.budget_setting, amount)
+        set_budget(self.cfg, limit)
+        self.reply(chat, f"✅ Pool set to €{amount:,.2f}. 💸 Bought takes from it, ✅ Sold adds to it.\n"
+                         f"Budget-mode limit: €{limit:,.2f} (the smaller of the pool and /budget "
+                         f"€{self.cfg.budget_setting:,.2f})")
+
     # --- "I'm on it" on deals
     def on_claim(self, cq: dict, msg: dict, chat, data: str):
         """Anyone who can see the deal can claim it; the button then shows who did."""
@@ -353,10 +532,15 @@ class Commands:
         data = cq.get("data") or ""
         msg = cq.get("message") or {}
         chat = (msg.get("chat") or {}).get("id")
+        if not self.allowed(user):
+            return   # only allowed users can press buttons
         if data in ("claim", "claimed"):
             return self.on_claim(cq, msg, chat, data)
-        if not self.allowed(user):
-            return
+        kind, _, key = data.partition(":")
+        if kind == "pay":
+            return self.on_use_cost(cq, chat, user, key)
+        if kind in ("c", "b", "l", "s", "up", "dn", "m"):
+            return self.on_deal_button(cq, chat, user, kind, key)
         by_id = {search_id(s.query): s for s in self.cfg.searches}
         kind, _, rest = data.partition(":")
         note = ""
@@ -394,6 +578,22 @@ class Commands:
         self._call("answerCallbackQuery", {"callback_query_id": cq.get("id"), "text": note})
 
 
+def effective_budget(setting: float, pool: float | None) -> float:
+    """Budget-mode limit: the /budget value, but never more than what's in the pool."""
+    return setting if pool is None else min(setting, pool)
+
+
+def set_budget(cfg, amount: float):
+    """
+    Budget-mode budget (from /budget, or the shared pool). Budget searches look up to it,
+    in both directions, unless their max price was set by hand; they never look above it.
+    """
+    cfg.budget = max(0.0, amount)
+    for s in cfg.searches:
+        if s.budget and (s.price_to_is_budget or s.price_to is None or s.price_to > cfg.budget):
+            s.price_to, s.price_to_is_budget = cfg.budget, s.price_to_is_budget or s.price_to is None
+
+
 def claimer_name(user: dict) -> str:
     name = " ".join(x for x in (user.get("first_name"), user.get("last_name")) if x)
     return name or (f"@{user['username']}" if user.get("username") else f"user {user.get('id')}")
@@ -414,11 +614,10 @@ def apply_settings(cfg, settings: dict):
         s.enabled = s.query.lower() not in disabled
         if s.query.lower() in prices:
             s.price_from, s.price_to = prices[s.query.lower()]
+            s.price_to_is_budget = False   # set by hand: the budget only caps it
     if "budget" in settings:
-        cfg.budget = float(settings["budget"])
-        for s in cfg.searches:
-            if s.budget and (s.price_to is None or s.price_to > cfg.budget):
-                s.price_to = cfg.budget
+        cfg.budget_setting = float(settings["budget"])
+        set_budget(cfg, cfg.budget_setting)
     for name, value in settings.get("rules", {}).items():
         if name in RULES:
             setattr(cfg.rules, name, RULES[name][0](value))

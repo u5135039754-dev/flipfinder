@@ -16,7 +16,8 @@ import sys
 import time
 
 from flipfinder import config as config_mod
-from flipfinder.commands import OWNER_ID, Commands, load_settings, save_settings
+from flipfinder.commands import OWNER_ID, Commands, effective_budget, load_settings, save_settings, set_budget
+from flipfinder.dealbook import DealBook
 from flipfinder.analyzer import Deal
 from flipfinder.health import FAIL_ALERT_AFTER, RunStats, miss_record
 from flipfinder.scanner import Scanner, describe_miss
@@ -73,15 +74,18 @@ def main() -> int:
     scanner = Scanner(cfg)
     # dry runs don't touch the stats, so testing locally doesn't skew the daily summary
     stats = RunStats(cfg.seen_file.parent / "stats.json") if tg else None
+    book = DealBook() if tg else None
     while True:
         if tg:
             # Telegram commands (settings.json) first, so this scan already uses them
             try:
-                if Commands(tg, cfg, load_settings(), cfg.seen_file.parent / "stats.json").run():
+                if Commands(tg, cfg, load_settings(), cfg.seen_file.parent / "stats.json", book).run():
                     cfg = config_mod.load(args.config)
                     scanner = Scanner(cfg)
             except Exception:
                 logging.exception("Telegram commands failed")
+            # budget mode: the /budget value, but never more than the shared pool
+            set_budget(cfg, effective_budget(cfg.budget_setting, book.pool))
         try:
             deals = scanner.scan()
             ok = not scanner.failed
@@ -93,7 +97,11 @@ def main() -> int:
         sent = 0
         for deal in deals[:MAX_ALERTS_PER_SCAN]:
             if tg:
-                sent += tg.send_deal(deal)
+                text = format_deal(deal)
+                book.record(deal, text, [])
+                where = tg.send_deal(deal, book.keyboard(deal.item.key), text)
+                book.record(deal, text, where)
+                sent += bool(where)
             else:
                 print("\n" + format_deal(deal) + "\n" + explain(deal) + "\n")
         if stats is None and scanner.near_misses:
@@ -104,6 +112,8 @@ def main() -> int:
             report(stats, tg, ok, error, scanner, sent)
         if tg and tg.migrations:
             remember_migrations(tg)
+        if book:
+            book.save()
         if args.once:
             return 0 if ok else 1
         time.sleep(cfg.interval_minutes * 60)

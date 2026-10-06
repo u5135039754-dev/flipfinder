@@ -32,6 +32,7 @@ class Search:
     group: str = ""                      # category shown by the Telegram /categories command
     enabled: bool = True                 # turned off from Telegram (settings.json)
     added: bool = False                  # added from Telegram (settings.json)
+    price_to_is_budget: bool = False     # budget search whose max price follows the budget/pool
 
 
 @dataclass
@@ -81,7 +82,8 @@ class Config:
     telegram_token: str
     telegram_chat_id: str
     seen_file: Path
-    budget: float = 72                   # max total cost for budget-mode searches
+    budget: float = 72                   # max total cost for budget-mode searches (in effect)
+    budget_setting: float = 72           # the configured /budget value (the pool can lower it)
     budget_rules: dict = field(default_factory=lambda: {"min_profit": 12, "min_roi": 35, "max_roi": 150})
     ebay: EbaySettings = field(default_factory=EbaySettings)
     subito: SubitoSettings = field(default_factory=SubitoSettings)
@@ -148,7 +150,7 @@ def load(path: str | Path = "config.yaml", settings_path: str | Path | None = "s
     budget = float(raw.get("budget", 72))
     for x in searches:
         if x.budget and (x.price_to is None or x.price_to > budget):
-            x.price_to = budget
+            x.price_to, x.price_to_is_budget = budget, True
 
     fees = raw.get("buyer_protection", {})
     e = raw.get("ebay") or {}
@@ -167,6 +169,7 @@ def load(path: str | Path = "config.yaml", settings_path: str | Path | None = "s
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
         seen_file=Path(raw.get("seen_file", "data/seen.json")),
         budget=float(raw.get("budget", 72)),
+        budget_setting=float(raw.get("budget", 72)),
         budget_rules={"min_profit": 12, "min_roi": 35, "max_roi": 150, **(raw.get("budget_rules") or {})},
         ebay=EbaySettings(
             client_id=os.getenv("EBAY_CLIENT_ID", ""),

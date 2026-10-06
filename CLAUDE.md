@@ -11,6 +11,7 @@ Python 3.10+ app that finds underpriced Vinted listings and sends Telegram alert
 - `flipfinder/subito.py` Subito app JSON API (hades.subito.it, app headers; the website is Akamai-blocked): new listings per category in the home province, kept within `radius_km`, pickup travel cost vs seller shipping
 - `flipfinder/storage.py` seen items in `data/seen.json` as `platform:id` (14 day expiry)
 - `flipfinder/telegram.py` message format + Bot API; several chats (TELEGRAM_CHAT_ID comma-separated), follows group->supergroup migrations, "I'm on it" claim button
+- `flipfinder/dealbook.py` deal lifecycle (claim/bought/listed/sold), pool, 👍/👎 feedback in `deals.json` (committed by the workflow); pool = budget-mode budget when set
 - `flipfinder/commands.py` Telegram commands (getUpdates at the start of each run), owner 1000001 + /allow list; changes go to `settings.json` (overrides config.yaml, committed by the workflow)
 - `config.yaml` searches and rules; secrets in `.env` (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, optional EBAY_CLIENT_ID, EBAY_CLIENT_SECRET); Subito needs no keys (`subito: enabled`)
 - `.github/workflows/flipfinder.yml` (shipped as `deploy/flipfinder.yml`, move it there) runs `main.py --once` every 5 min, `data/` persisted with actions/cache

@@ -126,6 +126,19 @@ adds with /allow) can use them; they work in the private chat and in the group.
 "I'm on it ✋" button; whoever taps it is shown on the button. If a group is upgraded to a supergroup
 (new chat id), flipFinder switches automatically, saves it and tells the owner.
 
+## Group deal tracking
+
+Every deal has buttons: ✋ Claim → 💸 Bought (the bot asks what you paid) → 🏷 Listed → ✅ Sold (asks
+the sale price). The message, in every chat, shows the current status and who has it; only whoever
+claimed it (or the owner) moves it on. 👍/👎 votes are counted on the buttons and every 👎 is logged
+with the listing to tune the filters. 📩 Message seller replies with a ready-to-copy Italian message
+asking if it's still available and for a video of it working.
+
+/stock lists what's bought or listed, who has it and what was paid; /profit shows profit in total,
+this month and per person. /pool 300 starts a shared pool: 💸 Bought takes from it, ✅ Sold adds to
+it, and while it's set it is the budget for budget-mode searches. All of this is kept in
+`deals.json`, committed back by the workflow. Only allowed users can press the buttons.
+
 ## Budget mode
 
 Searches with `budget: true` only alert when everything you pay (price, buyer fee, shipping or

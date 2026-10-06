@@ -861,7 +861,8 @@ def run_cmds(tmp_path, updates, settings=None):
     os.chdir(tmp_path)                       # settings.json is written next to the config
     try:
         s = settings if settings is not None else load_settings(tmp_path / "settings.json")
-        s["commands_version"] = 1            # already registered
+        from flipfinder.commands import COMMANDS_VERSION
+        s["commands_version"] = COMMANDS_VERSION   # already registered
         c = Commands(tg, cfg, s)
         changed = c.run()
     finally:
@@ -954,7 +955,8 @@ def test_commands_registered_once_and_updates_confirmed(tmp_path: Path):
         c.run()
     finally:
         os.chdir(cwd)
-    assert len(tg.sent("setMyCommands")) == 2 and c.settings["commands_version"] == 1
+    from flipfinder.commands import COMMANDS_VERSION
+    assert len(tg.sent("setMyCommands")) == 2 and c.settings["commands_version"] == COMMANDS_VERSION
     confirms = [p for m, p in tg.calls if m == "getUpdates" and "offset" in p]
     assert confirms and confirms[0]["offset"] > 0
     assert "min_rating: 5" in tg.sent()[0]["text"]
@@ -988,12 +990,13 @@ def test_deals_go_to_every_chat_with_claim_button(monkeypatch):
 
     def post(url, json=None, timeout=None):
         sent.append((url.rsplit("/", 1)[1], json))
-        return FakeResponse(True, {"ok": True, "result": {"message_id": 1}})
+        return FakeResponse(True, {"ok": True, "result": {"message_id": len(sent), "chat": {"id": json["chat_id"]}}})
     monkeypatch.setattr(tgm.requests, "post", post)
     tg = tgm.Telegram("TOKEN", "1000001, -100000000002")
     assert tg.chat_ids == ["1000001", "-100000000002"] and tg.chat_id == "1000001"
     d = evaluate(item(1, 40), pool([120] * 12), Rules())
-    assert tg.send_deal(d)
+    where = tg.send_deal(d)
+    assert [w["chat"] for w in where] == ["1000001", "-100000000002"] and [w["id"] for w in where] == [1, 2]
     assert [p["chat_id"] for _, p in sent] == ["1000001", "-100000000002"]
     assert all(p["reply_markup"]["inline_keyboard"][0][0]["text"] == "I'm on it ✋" for _, p in sent)
 
@@ -1026,12 +1029,185 @@ def cmd_cfg_with_chat():
 
 
 def test_claim_button_shows_who(tmp_path: Path):
-    claim = tap("claim", user=4242)
+    claim = tap("claim", user=OWNER)                     # older alerts' single "I'm on it" button
     claim["callback_query"]["from"].update({"first_name": "Marco"})
-    tg, c, cfg, changed = run_cmds(tmp_path, [claim, tap("claimed", user=999)])
+    tg, c, cfg, changed = run_cmds(tmp_path, [tap("claim", user=4242), claim])   # 4242 isn't allowed: ignored
     edit = tg.sent("editMessageReplyMarkup")[0]
     label = edit["reply_markup"]["inline_keyboard"][0][0]
     assert label["text"].startswith("✋ Marco is on it") and label["callback_data"] == "claimed"
     answers = [p["text"] for p in tg.sent("answerCallbackQuery")]
     assert answers[0] == "It's yours, good luck!"
     assert not changed                                                      # claims don't touch settings
+
+
+
+# --- Deal lifecycle, pool, votes ---
+
+def _book_with_deal(tmp_path):
+    from flipfinder.dealbook import DealBook
+    book = DealBook(tmp_path / "deals.json")
+    d = evaluate(titled(1, "Boss DS-1 distortion", 25, "Boss"), [titled(10 + i, "Boss DS-1 distortion", 60, "Boss") for i in range(12)],
+                 Rules(min_profit=12, min_roi=35, max_roi=150))
+    book.record(d, "🔥 <b>Boss DS-1 distortion</b>", [{"chat": "111", "id": 7, "photo": False},
+                                                     {"chat": "-100", "id": 8, "photo": True}])
+    return book, d.item.key
+
+
+def run_with_book(tmp_path, book, updates):
+    import os
+    from flipfinder.commands import COMMANDS_VERSION, Commands, load_settings
+    tg = FakeTG(updates)
+    cwd = os.getcwd(); os.chdir(tmp_path)
+    try:
+        s = load_settings(tmp_path / "settings.json"); s["commands_version"] = COMMANDS_VERSION
+        s["allowed_users"] = [555]
+        Commands(tg, cmd_cfg(tmp_path), s, book=book).run()
+    finally:
+        os.chdir(cwd)
+    return tg
+
+
+def test_deal_lifecycle_with_prices_and_pool(tmp_path: Path):
+    book, key = _book_with_deal(tmp_path)
+    book.set_pool(300)
+    claim = tap(f"c:{key}", user=555); claim["callback_query"]["from"]["first_name"] = "Marco"
+    tg = run_with_book(tmp_path, book, [claim, tap(f"b:{key}", user=OWNER + 1)])
+    d = book.data["deals"][key]
+    assert d["status"] == "claimed" and d["who"] == "Marco"
+    edits = tg.sent("editMessageText") + tg.sent("editMessageCaption")
+    assert len(edits) == 2 and "✋ Claimed by Marco" in tg.sent("editMessageText")[0]["text"]
+    assert tg.sent("editMessageCaption")[0]["reply_markup"]["inline_keyboard"][0][0]["text"] == "💸 Bought (Marco)"
+    # a stranger's tap was ignored entirely; now Marco buys it: asked for the price, answers 30
+    tg = run_with_book(tmp_path, book, [tap(f"b:{key}", user=555)])
+    assert "How much did you pay" in tg.sent()[0]["text"] and "Known total" in tg.sent()[0]["text"]
+    assert tg.sent()[0]["reply_markup"]["inline_keyboard"][0][0]["text"].startswith("✅ Use €")
+    tg = run_with_book(tmp_path, book, [msg("abc", user=555), msg("30", user=555)])
+    assert "need just the amount" in tg.sent()[0]["text"]
+    assert "💸 Bought for €30.00 · pool now €270.00" in tg.sent()[1]["text"]
+    assert d["status"] == "bought" and d["paid"] == 30 and book.pool == 270
+    tg = run_with_book(tmp_path, book, [tap(f"l:{key}", user=555), tap(f"s:{key}", user=555), msg("75", user=555)])
+    assert d["status"] == "sold" and d["sold_for"] == 75 and book.pool == 345
+    assert "✅ Sold for €75.00, profit €45.00 · pool now €345.00" in tg.sent()[-1]["text"]
+    assert "✅ Sold by Marco · paid €30.00 · sold for €75.00 · profit €45.00" in book.full_text(key)
+    assert book.keyboard(key) == {"inline_keyboard": []}
+    p = book.profit()
+    assert p["total"] == 45 and p["month"] == 45 and p["people"] == {"Marco": 45} and p["sold"] == 1
+    saved = json.loads((tmp_path / "deals.json").read_text(encoding="utf-8"))
+    assert saved["deals"][key]["status"] == "sold"
+
+
+def test_only_claimer_or_owner_advances_and_strangers_ignored(tmp_path: Path):
+    book, key = _book_with_deal(tmp_path)
+    tg = run_with_book(tmp_path, book, [tap(f"c:{key}", user=555), tap(f"b:{key}", user=777),
+                                        tap(f"c:{key}", user=OWNER)])
+    answers = [p["text"] for p in tg.sent("answerCallbackQuery")]
+    assert answers == ["It's yours, good luck!", "user 555 already has this one"]   # 777 ignored
+    tg = run_with_book(tmp_path, book, [tap(f"b:{key}", user=OWNER)])                # the owner may step in
+    assert "How much did you pay" in tg.sent()[0]["text"]
+
+
+def test_votes_feedback_and_seller_message(tmp_path: Path):
+    book, key = _book_with_deal(tmp_path)
+    tg = run_with_book(tmp_path, book, [tap(f"up:{key}", user=555), tap(f"dn:{key}", user=OWNER),
+                                        tap(f"m:{key}", user=555)])
+    kb = book.keyboard(key)["inline_keyboard"][1]
+    assert [b["text"] for b in kb] == ["👍 1", "👎 1", "📩 Message seller"]
+    fb = book.data["feedback"]
+    assert len(fb) == 1 and fb[0]["title"] == "Boss DS-1 distortion" and fb[0]["url"].endswith("/items/1")
+    seller = tg.sent()[0]["text"]
+    assert "Ciao! L'articolo" in seller and "ancora disponibile" in seller and "video" in seller and "<code>" in seller
+
+
+def test_stock_profit_pool_commands_and_budget_from_pool(tmp_path: Path):
+    book, key = _book_with_deal(tmp_path)
+    book.data["deals"][key].update(status="bought", who="Marco", who_id=555, paid=30, bought_at=1e10)
+    tg = run_with_book(tmp_path, book, [msg("/pool"), msg("/pool abc"), msg("/pool 200"), msg("/stock"), msg("/profit")])
+    r = [p["text"] for p in tg.sent()]
+    assert "No pool set" in r[0] and "must be a number" in r[1] and "Pool set to €200.00" in r[2]
+    assert "Boss DS-1 distortion" in r[3] and "Marco" in r[3] and "€30.00" in r[3]
+    assert "Total: €0.00 (0 sold)" in r[4]
+    from flipfinder.commands import set_budget
+    cfg = cmd_cfg(tmp_path)
+    set_budget(cfg, book.pool)
+    assert book.pool == 170 and cfg.budget == 170   # bought after the pool started: 200 - 30
+    from flipfinder.commands import effective_budget
+    assert effective_budget(72, 170) == 72 and effective_budget(72, 50) == 50 and effective_budget(72, None) == 72
+
+
+
+def test_budget_follows_the_pool_up_and_down(tmp_path: Path):
+    from flipfinder.commands import apply_settings, set_budget
+    cfg = cmd_cfg(tmp_path)
+    ds1 = next(s for s in cfg.searches if s.query == "boss ds 1")
+    assert ds1.price_to == 72 and ds1.price_to_is_budget
+    set_budget(cfg, 241)
+    assert cfg.budget == 241 and ds1.price_to == 241          # a bigger pool raises it
+    set_budget(cfg, 50)
+    assert ds1.price_to == 50                                  # and a smaller one lowers it
+    cfg = apply_settings(cmd_cfg(tmp_path), {"prices": {"boss ds 1": [15, 40]}})
+    ds1 = next(s for s in cfg.searches if s.query == "boss ds 1")
+    set_budget(cfg, 241)
+    assert ds1.price_to == 40                                  # set by hand: kept
+    set_budget(cfg, 30)
+    assert ds1.price_to == 30                                  # but never above the budget
+
+
+
+def test_bought_suggests_known_cost(tmp_path: Path):
+    book, key = _book_with_deal(tmp_path)
+    cost = book.data["deals"][key]["cost"]
+    tg = run_with_book(tmp_path, book, [tap(f"c:{key}", user=555), tap(f"b:{key}", user=555)])
+    q = tg.sent()[0]
+    assert f"€{cost:,.2f}" in q["text"] and q["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == f"pay:{key}"
+    tg = run_with_book(tmp_path, book, [tap(f"pay:{key}", user=OWNER)])          # not the owner's question
+    assert tg.sent("answerCallbackQuery")[0]["text"].startswith("That's for")
+    tg = run_with_book(tmp_path, book, [tap(f"pay:{key}", user=555)])
+    d = book.data["deals"][key]
+    assert d["status"] == "bought" and d["paid"] == cost
+    assert f"💸 Bought for €{cost:,.2f}" in tg.sent()[-1]["text"]
+
+
+def test_bought_typed_amount_overrides_suggestion(tmp_path: Path):
+    book, key = _book_with_deal(tmp_path)
+    run_with_book(tmp_path, book, [tap(f"c:{key}", user=555), tap(f"b:{key}", user=555)])
+    run_with_book(tmp_path, book, [msg("27,50", user=555)])
+    assert book.data["deals"][key]["paid"] == 27.5
+
+
+def test_pool_shows_both_and_limit_is_the_smaller(tmp_path: Path):
+    book, key = _book_with_deal(tmp_path)
+    tg = run_with_book(tmp_path, book, [msg("/pool"), msg("/pool 50"), msg("/pool"), msg("/budget 40"), msg("/pool")])
+    r = [p["text"] for p in tg.sent()]
+    assert "No pool set" in r[0] and "Budget-mode limit: €72.00" in r[0]
+    assert "Budget-mode limit: €50.00" in r[1]
+    assert "Pool: €50.00" in r[2] and "/budget: €72.00" in r[2] and "<b>€50.00</b>" in r[2]
+    assert "Budget is now €40" in r[3]
+    assert "/budget: €40.00" in r[4] and "<b>€40.00</b>" in r[4]
+
+
+
+def test_first_ebay_pass_of_a_search_is_silent(tmp_path: Path):
+    from flipfinder.scanner import _sid
+    s = _fake_scanner(tmp_path, 2, lambda searches: [])
+    old, new = s.cfg.searches
+    s.known.add(old)                                    # ran before this tracking existed
+    items = [titled(500 + n, "thing 1 128GB", 50, "X") for n in range(3)]
+    for i in items:
+        i.source = "ebay"
+    assert s._seed_ebay(old, list(items)) == items     # already had eBay passes: checked as usual
+    s.ebay_state.seeded.discard(_sid(new))
+    assert s._seed_ebay(new, list(items)) == []        # first eBay pass for it: remembered, no alerts
+    assert all(i.key in s.seen for i in items) and _sid(new) in s.ebay_state.seeded
+    assert s._seed_ebay(new, list(items)) == items     # later passes are normal
+    s.ebay_state.save()
+    assert json.loads((tmp_path / "ebay.json").read_text())["seeded"]
+
+
+def test_workflow_uses_latest_main_and_keeps_own_settings():
+    import yaml
+    wf = yaml.safe_load(Path(".github/workflows/flipfinder.yml").read_text(encoding="utf-8"))
+    steps = wf["jobs"]["scan"]["steps"]
+    assert steps[0]["uses"].startswith("actions/checkout") and steps[0]["with"]["ref"] == "main"
+    save = next(x for x in steps if x.get("name", "").startswith("Save Telegram"))
+    assert "-X theirs" in save["run"] and "deals.json" in save["run"]
+    assert wf["permissions"]["contents"] == "write"
