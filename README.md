@@ -113,6 +113,26 @@ to get an item is the cheaper of picking it up (`travel_cost`, with per-town ove
 (all of Italy), Vinted and eBay. Subito has no public API: this uses the JSON API of its app, which
 works today but could change.
 
+## Telegram commands
+
+Change things from Telegram instead of editing files: /help, /status, /categories (buttons to turn
+searches on or off), /prices, /setprice "boss katana" 80 250, /budget 72, /rules, /setrule min_roi 25,
+/add "zoom g1x four" 20 60, /remove (asks first). Commands are read at the start of each run, so
+they take effect within about 5 minutes. Changes are saved in `settings.json`, which overrides
+`config.yaml` and is committed back to the repo by the workflow. Only the owner (and users the owner
+adds with /allow) can use them; they work in the private chat and in the group.
+
+`TELEGRAM_CHAT_ID` can list several chats, comma-separated (private chat first). Every deal has an
+"I'm on it ✋" button; whoever taps it is shown on the button. If a group is upgraded to a supergroup
+(new chat id), flipFinder switches automatically, saves it and tells the owner.
+
+## Budget mode
+
+Searches with `budget: true` only alert when everything you pay (price, buyer fee, shipping or
+pickup) fits `budget`, use `budget_rules` (min profit/ROI, a max ROI against fakes) and are ranked
+by profit per euro spent. Each can have a `check:` line, shown in the alert as what to check before
+buying.
+
 ## Settings
 
 Everything lives in `config.yaml`, with comments. The ones you'll touch most:

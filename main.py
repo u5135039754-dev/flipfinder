@@ -16,6 +16,7 @@ import sys
 import time
 
 from flipfinder import config as config_mod
+from flipfinder.commands import OWNER_ID, Commands, load_settings, save_settings
 from flipfinder.analyzer import Deal
 from flipfinder.health import FAIL_ALERT_AFTER, RunStats, miss_record
 from flipfinder.scanner import Scanner, describe_miss
@@ -73,6 +74,14 @@ def main() -> int:
     # dry runs don't touch the stats, so testing locally doesn't skew the daily summary
     stats = RunStats(cfg.seen_file.parent / "stats.json") if tg else None
     while True:
+        if tg:
+            # Telegram commands (settings.json) first, so this scan already uses them
+            try:
+                if Commands(tg, cfg, load_settings(), cfg.seen_file.parent / "stats.json").run():
+                    cfg = config_mod.load(args.config)
+                    scanner = Scanner(cfg)
+            except Exception:
+                logging.exception("Telegram commands failed")
         try:
             deals = scanner.scan()
             ok = not scanner.failed
@@ -93,9 +102,23 @@ def main() -> int:
                 print("  " + describe_miss(query, m))
         if stats is not None:
             report(stats, tg, ok, error, scanner, sent)
+        if tg and tg.migrations:
+            remember_migrations(tg)
         if args.once:
             return 0 if ok else 1
         time.sleep(cfg.interval_minutes * 60)
+
+
+def remember_migrations(tg: Telegram):
+    """A group became a supergroup: keep its new id (settings.json) and tell the owner."""
+    settings = load_settings()
+    settings.setdefault("chat_migrations", {}).update(tg.migrations)
+    save_settings(settings)
+    for old, new in tg.migrations.items():
+        tg.send_text(f"ℹ️ Your Telegram group was upgraded to a supergroup, so its chat id changed from "
+                     f"<code>{old}</code> to <code>{new}</code>. flipFinder switched to the new one "
+                     f"(saved in settings.json); update TELEGRAM_CHAT_ID when convenient.", [str(OWNER_ID)])
+    tg.migrations.clear()
 
 
 def report(stats: RunStats, tg: Telegram, ok: bool, error: str, scanner: Scanner, sent: int):

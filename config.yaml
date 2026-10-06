@@ -26,6 +26,13 @@ subito:
   town_travel_costs: {Southtown: 8, Westtown: 8}
   pool_refresh_minutes: 180
 
+# Budget mode (searches with `budget: true`): what you can spend per item, all in
+budget: 72
+budget_rules:
+  min_profit: 12
+  min_roi: 35
+  max_roi: 150               # far cheaper than this is usually a fake or broken
+
 # Vinted adds a buyer protection fee on top of the price.
 # If the API gives the real total we use that, otherwise this estimate.
 buyer_protection:
@@ -395,3 +402,241 @@ searches:
     exclude_keywords: *electronics
     shipping_cost: 7
     resell_costs: 2
+
+  # ---------------------------------------------------------------------------
+  # Budget mode: total cost (price + buyer fee + shipping, or pickup for Subito) must
+  # fit `budget`, budget_rules apply, deals are ranked by profit per euro spent.
+  # They run every 10 minutes (every other run) to keep runs short.
+
+  # Pedals (Vinted 4840, eBay Chitarre e bassi, Subito Strumenti Musicali)
+  - query: boss ds 1
+    budget: true
+    price_from: 15
+    filters: {catalog: [4840]}
+    exclude_keywords: &budget_excl [*electronics, compatibile, clone, r4, flashcard, cover only,
+                                    drift, riparazione, repair, réparation, lotto, lot, stock,
+                                    software, simulatore, emulatore]
+    shipping_cost: 5
+    resell_costs: 1
+    every_minutes: 10
+    check: &pedal_check ask for a short video of it working with sound; check the jacks and the footswitch
+  - query: boss sd 1
+    budget: true
+    price_from: 15
+    filters: {catalog: [4840]}
+    exclude_keywords: *budget_excl
+    shipping_cost: 5
+    resell_costs: 1
+    every_minutes: 10
+    check: *pedal_check
+  - query: boss bd 2
+    budget: true
+    price_from: 15
+    filters: {catalog: [4840]}
+    exclude_keywords: *budget_excl
+    shipping_cost: 5
+    resell_costs: 1
+    every_minutes: 10
+    check: *pedal_check
+  - query: boss dd 3
+    budget: true
+    price_from: 15
+    filters: {catalog: [4840]}
+    exclude_keywords: *budget_excl
+    shipping_cost: 5
+    resell_costs: 1
+    every_minutes: 10
+    check: *pedal_check
+  - query: boss dd 7
+    budget: true
+    price_from: 15
+    filters: {catalog: [4840]}
+    exclude_keywords: *budget_excl
+    shipping_cost: 5
+    resell_costs: 1
+    every_minutes: 10
+    check: *pedal_check
+  - query: boss ch 1
+    budget: true
+    price_from: 15
+    filters: {catalog: [4840]}
+    exclude_keywords: *budget_excl
+    shipping_cost: 5
+    resell_costs: 1
+    every_minutes: 10
+    check: *pedal_check
+  - query: mxr
+    budget: true
+    price_from: 15
+    filters: {catalog: [4840]}
+    exclude_keywords: *budget_excl
+    shipping_cost: 5
+    resell_costs: 1
+    every_minutes: 10
+    check: *pedal_check
+  - query: big muff
+    budget: true
+    price_from: 15
+    filters: {catalog: [4840]}
+    exclude_keywords: *budget_excl
+    shipping_cost: 5
+    resell_costs: 1
+    every_minutes: 10
+    check: ask which version it is (NYC, Nano, Russian, Op-Amp), they sell at very different prices; video with sound
+  - query: tc electronic
+    budget: true
+    price_from: 15
+    filters: {catalog: [4840]}
+    exclude_keywords: *budget_excl
+    shipping_cost: 5
+    resell_costs: 1
+    every_minutes: 10
+    check: *pedal_check
+
+  # Calculators (Vinted 5433, eBay Calcolatrici, Subito Informatica)
+  - query: ti 84 plus
+    budget: true
+    price_from: 10
+    filters: {catalog: [5433]}
+    exclude_keywords: [*budget_excl, ce]
+    shipping_cost: 5
+    resell_costs: 1
+    every_minutes: 10
+    check: ask for a photo of it switched on; check the screen has no dead lines and the keys all work
+  - query: ti 84 plus ce
+    budget: true
+    price_from: 25
+    filters: {catalog: [5433]}
+    exclude_keywords: *budget_excl
+    shipping_cost: 5
+    resell_costs: 1
+    every_minutes: 10
+    check: ask for a photo switched on, whether the battery holds charge and the USB cable is included
+  - query: casio fx cg50
+    budget: true
+    price_from: 25
+    filters: {catalog: [5433]}
+    exclude_keywords: *budget_excl
+    shipping_cost: 5
+    resell_costs: 1
+    every_minutes: 10
+    check: ask for a photo switched on; check the screen and that it's not exam-mode locked
+
+  # Compact cameras (Vinted 3075, eBay Fotocamere digitali, Subito Fotografia). A listing
+  # without battery or charger counts €15 extra to buy one.
+  - query: canon ixus
+    budget: true
+    price_from: 15
+    filters: {catalog: [3075]}
+    exclude_keywords: *budget_excl
+    missing_part_cost: 15
+    shipping_cost: 5
+    resell_costs: 1
+    every_minutes: 10
+    check: &camera_check ask for a photo it took today and the screen switched on; battery and charger included?
+  - query: canon powershot
+    budget: true
+    price_from: 15
+    filters: {catalog: [3075]}
+    exclude_keywords: *budget_excl
+    missing_part_cost: 15
+    shipping_cost: 5
+    resell_costs: 1
+    every_minutes: 10
+    check: *camera_check
+  - query: sony cybershot
+    budget: true
+    price_from: 15
+    filters: {catalog: [3075]}
+    exclude_keywords: *budget_excl
+    missing_part_cost: 15
+    shipping_cost: 5
+    resell_costs: 1
+    every_minutes: 10
+    check: *camera_check
+  - query: nikon coolpix
+    budget: true
+    price_from: 15
+    filters: {catalog: [3075]}
+    exclude_keywords: *budget_excl
+    missing_part_cost: 15
+    shipping_cost: 5
+    resell_costs: 1
+    every_minutes: 10
+    check: *camera_check
+
+  # Nintendo handhelds (Vinted 3025 consoles)
+  - query: nintendo ds lite
+    budget: true
+    price_from: 15
+    filters: {catalog: [3025]}
+    exclude_keywords: *budget_excl
+    shipping_cost: 5
+    resell_costs: 1
+    every_minutes: 10
+    check: &ds_check ask for a photo switched on; check both screens and the hinge for cracks, charger included?
+  - query: nintendo 3ds
+    budget: true
+    price_from: 30
+    filters: {catalog: [3025]}
+    exclude_keywords: [*budget_excl, 2ds]
+    shipping_cost: 5
+    resell_costs: 1
+    every_minutes: 10
+    check: *ds_check
+  - query: nintendo 2ds
+    budget: true
+    price_from: 25
+    filters: {catalog: [3025]}
+    exclude_keywords: *budget_excl
+    shipping_cost: 5
+    resell_costs: 1
+    every_minutes: 10
+    check: *ds_check
+
+  # Kindle (eBay Tablet e eBook reader, Subito Informatica)
+  - query: kindle paperwhite
+    budget: true
+    price_from: 20
+    subito_category: 10
+    ebay_category: 171485
+    exclude_keywords: [*budget_excl, custodia, cover, case, folio, sleeve, pellicola, housse, funda, hülle]
+    shipping_cost: 5
+    resell_costs: 1
+    every_minutes: 10
+    check: ask if it's deregistered from the seller's Amazon account; photo switched on, battery health
+
+  # Controllers and mouse (eBay Controller / Mouse, Subito Console / Informatica)
+  - query: dualsense
+    budget: true
+    price_from: 20
+    filters: {catalog: [3570]}   # Vinted: Controller
+    subito_category: 44
+    ebay_category: 117042
+    exclude_keywords: [*budget_excl, cover, skin, stazione, ricarica, charging, edge]
+    shipping_cost: 5
+    resell_costs: 1
+    every_minutes: 10
+    check: ask for a video of the stick test (no drift) and whether the battery still holds charge
+  - query: controller xbox series
+    budget: true
+    price_from: 20
+    filters: {catalog: [3570]}   # Vinted: Controller
+    subito_category: 44
+    ebay_category: 117042
+    exclude_keywords: [*budget_excl, cover, skin, elite]
+    shipping_cost: 5
+    resell_costs: 1
+    every_minutes: 10
+    check: ask for a video of the stick test (no drift) and whether the battery cover is included
+  - query: logitech mx master 3
+    budget: true
+    price_from: 25
+    filters: {catalog: [3588]}   # Vinted: Mouse
+    subito_category: 10
+    ebay_category: 23160
+    exclude_keywords: *budget_excl
+    shipping_cost: 5
+    resell_costs: 1
+    every_minutes: 10
+    check: ask if the USB receiver and cable are included and the scroll wheel works

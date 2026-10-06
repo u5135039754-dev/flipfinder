@@ -25,6 +25,13 @@ class Search:
     match_brand: bool = True             # false: compare across brands (graphics cards)
     subito_category: int | None = None   # Subito category; by default from the Vinted catalog filter
     ebay_category: int | None = None     # eBay.it category; by default from the Vinted catalog filter
+    budget: bool = False                 # budget mode: total cost <= config budget, budget_rules apply
+    check: str = ""                      # what to check before buying, shown in alerts
+    missing_part_cost: float = 0.0       # added when the title says no battery/charger
+    every_minutes: float = 0             # scan this search at most this often (0 = every run)
+    group: str = ""                      # category shown by the Telegram /categories command
+    enabled: bool = True                 # turned off from Telegram (settings.json)
+    added: bool = False                  # added from Telegram (settings.json)
 
 
 @dataclass
@@ -39,6 +46,7 @@ class EbaySettings:
     new_per_search: int = 50         # newest listings checked per search
     pool_size: int = 200             # listings per search used for market value (one API call)
     default_category: int = 3858     # Chitarre e bassi, for searches without a category
+    max_calls_per_day: int = 4500    # eBay allows 5,000; stop searching eBay for the day at this many
 
     @property
     def enabled(self) -> bool:
@@ -73,6 +81,8 @@ class Config:
     telegram_token: str
     telegram_chat_id: str
     seen_file: Path
+    budget: float = 72                   # max total cost for budget-mode searches
+    budget_rules: dict = field(default_factory=lambda: {"min_profit": 12, "min_roi": 35, "max_roi": 150})
     ebay: EbaySettings = field(default_factory=EbaySettings)
     subito: SubitoSettings = field(default_factory=SubitoSettings)
 
@@ -89,7 +99,7 @@ def _opt_float(value) -> float | None:
     return None if value is None else float(value)
 
 
-def load(path: str | Path = "config.yaml") -> Config:
+def load(path: str | Path = "config.yaml", settings_path: str | Path | None = "settings.json") -> Config:
     load_dotenv()
     path = Path(path)
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -127,14 +137,23 @@ def load(path: str | Path = "config.yaml") -> Config:
             match_brand=bool(s.get("match_brand", True)),
             subito_category=int(s["subito_category"]) if s.get("subito_category") is not None else None,
             ebay_category=int(s["ebay_category"]) if s.get("ebay_category") is not None else None,
+            budget=bool(s.get("budget", False)),
+            check=str(s.get("check", "")),
+            missing_part_cost=float(s.get("missing_part_cost", 0)),
+            every_minutes=float(s.get("every_minutes", 0)),
+            group=str(s.get("group", "")),
         ))
     if not searches:
         raise SystemExit("No searches in config.yaml, add at least one.")
+    budget = float(raw.get("budget", 72))
+    for x in searches:
+        if x.budget and (x.price_to is None or x.price_to > budget):
+            x.price_to = budget
 
     fees = raw.get("buyer_protection", {})
     e = raw.get("ebay") or {}
     sb = raw.get("subito") or {}
-    return Config(
+    cfg = Config(
         domain=raw.get("domain", "www.vinted.it"),
         interval_minutes=float(raw.get("interval_minutes", 5)),
         request_delay=float(raw.get("request_delay", 2)),
@@ -147,6 +166,8 @@ def load(path: str | Path = "config.yaml") -> Config:
         telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
         seen_file=Path(raw.get("seen_file", "data/seen.json")),
+        budget=float(raw.get("budget", 72)),
+        budget_rules={"min_profit": 12, "min_roi": 35, "max_roi": 150, **(raw.get("budget_rules") or {})},
         ebay=EbaySettings(
             client_id=os.getenv("EBAY_CLIENT_ID", ""),
             client_secret=os.getenv("EBAY_CLIENT_SECRET", ""),
@@ -157,6 +178,7 @@ def load(path: str | Path = "config.yaml") -> Config:
             new_per_search=int(e.get("new_per_search", 50)),
             pool_size=int(e.get("pool_size", 200)),
             default_category=int(e.get("default_category", 3858)),
+            max_calls_per_day=int(e.get("max_calls_per_day", 4500)),
         ),
         subito=SubitoSettings(
             enabled=bool(sb.get("enabled", False)),
@@ -170,3 +192,7 @@ def load(path: str | Path = "config.yaml") -> Config:
             pool_refresh_minutes=float(sb.get("pool_refresh_minutes", 180)),
         ),
     )
+    if settings_path:
+        from .commands import apply_settings, load_settings   # settings.json (Telegram) over config.yaml
+        apply_settings(cfg, load_settings(Path(settings_path)))
+    return cfg

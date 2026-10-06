@@ -48,6 +48,7 @@ class RunStats:
 
     def record_run(self, checked: int, deals_sent: int, best_miss: dict | None):
         d = self.data
+        d["last_run"] = time.time()
         d["runs"] += 1
         d["checked"] += checked
         d["deals_sent"] += deals_sent
@@ -59,6 +60,7 @@ class RunStats:
     def record_failure(self) -> bool:
         """Count a failed run. True exactly when the streak reaches the alert threshold."""
         d = self.data
+        d["last_run"] = time.time()
         d["runs"] += 1
         d["failed_runs"] += 1
         d["consecutive_failures"] += 1

@@ -55,9 +55,14 @@ def format_deal(deal: Deal) -> str:
         delivery,
         f"🏷 Original price: <b>{money(deal.market_value, c)}</b> (median of {deal.comparables} listings)",
         *platform_lines(deal),
+        *([f"🔋 No battery/charger: +{money(deal.missing_part, c)} to buy one (included)"]
+          if deal.missing_part else []),
         f"💰 Possible profit: <b>{money(deal.profit, c)}</b>",
         f"📈 Percentage: <b>+{deal.roi:.0f}%</b>",
         f"{stars(deal.rating)} Rating: <b>{deal.rating}/10</b>",
+        *([f"🎯 Budget: {money(deal.cost, c)} total · {money(deal.per_euro, c)} profit per € spent"]
+          if deal.budget else []),
+        *([f"🔍 Before buying: {html.escape(deal.check)}"] if deal.check else []),
         "",
         f'<a href="{html.escape(it.url)}">Open on {platform}</a>',
     ]
@@ -83,35 +88,79 @@ def platform_lines(deal: Deal) -> list[str]:
     return lines
 
 
+CLAIM_BUTTON = {"inline_keyboard": [[{"text": "I'm on it ✋", "callback_data": "claim"}]]}
+
+
+def parse_chat_ids(value: str) -> list[str]:
+    """TELEGRAM_CHAT_ID can list several chats: "1000001,-100000000002"."""
+    return [c.strip() for c in str(value).split(",") if c.strip()]
+
+
 class Telegram:
-    def __init__(self, token: str, chat_id: str):
+    def __init__(self, token: str, chat_ids):
         self.base = f"https://api.telegram.org/bot{token}"
-        self.chat_id = chat_id
+        self.chat_ids = parse_chat_ids(chat_ids) if isinstance(chat_ids, str) else [str(c) for c in chat_ids]
+        self.migrations: dict[str, str] = {}   # group -> supergroup ids learned this run
+
+    @property
+    def chat_id(self) -> str:
+        """The first chat (the owner's private chat), e.g. for messages only they need."""
+        return self.chat_ids[0] if self.chat_ids else ""
+
+    def _request(self, method: str, payload: dict, quiet: bool = False):
+        """POST to the Bot API; follows a group's upgrade to a supergroup. Returns (ok, result)."""
+        for _ in range(2):
+            try:
+                r = requests.post(f"{self.base}/{method}", json=payload, timeout=20)
+                data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+            except (requests.RequestException, ValueError) as e:
+                log.warning("Telegram %s error: %s", method, e)
+                return False, None
+            if r.ok and data.get("ok"):
+                return True, data.get("result", True)
+            new_id = (data.get("parameters") or {}).get("migrate_to_chat_id")
+            old_id = str(payload.get("chat_id", ""))
+            if new_id and old_id:
+                # The group was upgraded to a supergroup and has a new id: use it from now on
+                new_id = str(new_id)
+                log.warning("Telegram chat %s moved to %s, switching", old_id, new_id)
+                self.migrations[old_id] = new_id
+                self.chat_ids = [new_id if c == old_id else c for c in self.chat_ids]
+                payload = {**payload, "chat_id": new_id}
+                continue
+            (log.warning if quiet else log.error)("Telegram %s failed: %s %s", method, r.status_code, r.text[:200])
+            return False, None
+        return False, None
 
     def _post(self, method: str, payload: dict, quiet: bool = False) -> bool:
-        try:
-            r = requests.post(f"{self.base}/{method}", json=payload, timeout=20)
-            if r.ok:
-                return True
-            (log.warning if quiet else log.error)("Telegram %s failed: %s %s", method, r.status_code, r.text[:200])
-        except requests.RequestException as e:
-            log.error("Telegram %s error: %s", method, e)
-        return False
+        return self._request(method, payload, quiet)[0]
 
-    def send_text(self, text: str) -> bool:
-        return self._post("sendMessage", {
-            "chat_id": self.chat_id, "text": text, "parse_mode": "HTML",
-            "disable_web_page_preview": False,
-        })
+    def call(self, method: str, payload: dict):
+        """Any Bot API method; returns its result, or None on failure."""
+        return self._request(method, payload, quiet=True)[1]
+
+    def send_text(self, text: str, chat_ids=None, buttons: dict | None = None) -> bool:
+        """Sends to every chat (or the given ones); True if at least one got it."""
+        sent = False
+        for chat in list(chat_ids or self.chat_ids):
+            payload = {"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": False}
+            if buttons:
+                payload["reply_markup"] = buttons
+            sent = self._post("sendMessage", payload) or sent
+        return sent
 
     def send_deal(self, deal: Deal) -> bool:
         text = format_deal(deal)
-        if deal.item.photo:
-            # Telegram can't load some listing photos (e.g. .webp); the text alert follows anyway
-            ok = self._post("sendPhoto", {
-                "chat_id": self.chat_id, "photo": deal.item.photo,
-                "caption": text, "parse_mode": "HTML",
-            }, quiet=True)
-            if ok:
-                return True
-        return self.send_text(text)
+        sent = False
+        for chat in list(self.chat_ids):
+            ok = False
+            if deal.item.photo:
+                # Telegram can't load some listing photos (e.g. .webp); the text alert follows anyway
+                ok = self._post("sendPhoto", {
+                    "chat_id": chat, "photo": deal.item.photo, "caption": text,
+                    "parse_mode": "HTML", "reply_markup": CLAIM_BUTTON,
+                }, quiet=True)
+            if not ok:
+                ok = self.send_text(text, [self.migrations.get(chat, chat)], CLAIM_BUTTON)
+            sent = ok or sent
+        return sent

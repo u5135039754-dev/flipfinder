@@ -93,29 +93,60 @@ class EbayState:
 
 
 class KnownSearches:
-    """Searches that have run before, so a newly added one starts silently."""
+    """
+    Searches that have run before (so a newly added one starts silently), and when
+    each last ran (for searches that only run every N minutes).
+    """
 
     def __init__(self, path: Path, pools: "PoolCache"):
         self.path = path
-        self.keys: set[str] = set()
+        self.last: dict[str, float] = {}
         if path.exists():
             try:
-                self.keys = set(json.loads(path.read_text(encoding="utf-8")))
-            except (json.JSONDecodeError, OSError):
+                data = json.loads(path.read_text(encoding="utf-8"))
+                # older files were a plain list of keys
+                self.last = dict.fromkeys(data, 0.0) if isinstance(data, list) else dict(data)
+            except (json.JSONDecodeError, OSError, ValueError):
                 pass
         else:
             # Before this file existed, a search that ran has a price pool
-            self.keys = {k for k in pools.data if not k.startswith("ebay ")}
+            self.last = dict.fromkeys((k for k in pools.data if not k.startswith(("ebay ", "subito "))), 0.0)
+        # Older keys included the price range, so changing a price (e.g. from Telegram)
+        # made a search look new; now it's query + filters only
+        self.last = {_migrate_id(k): v for k, v in self.last.items()}
+
+    @property
+    def keys(self) -> set[str]:
+        return set(self.last)
 
     def has(self, s: "Search") -> bool:
-        return _key(s) in self.keys
+        return _sid(s) in self.last
+
+    def due(self, s: "Search") -> bool:
+        every = getattr(s, "every_minutes", 0) or 0
+        return time.time() - self.last.get(_sid(s), 0.0) >= every * 60 - 30   # slack for run jitter
 
     def add(self, s: "Search"):
-        self.keys.add(_key(s))
+        self.last[_sid(s)] = time.time()
 
     def save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(sorted(self.keys)), encoding="utf-8")
+        self.path.write_text(json.dumps(self.last), encoding="utf-8")
+
+
+def _sid(s: Search) -> str:
+    """A search's identity: query + filters. Changing its price range keeps it the same search."""
+    return json.dumps([s.query, s.filters], sort_keys=True)
+
+
+def _migrate_id(key: str) -> str:
+    try:
+        v = json.loads(key)
+    except (json.JSONDecodeError, TypeError):
+        return key
+    if isinstance(v, list) and len(v) == 4:      # old [query, price_from, price_to, filters]
+        return json.dumps([v[0], v[3]], sort_keys=True)
+    return key
 
 
 def _key(s: Search) -> str:
@@ -268,9 +299,14 @@ class Scanner:
             rules = replace(rules, shipping_cost=s.shipping_cost)
         if s.resell_costs is not None:
             rules = replace(rules, resell_costs=s.resell_costs)
+        if s.budget:
+            br = self.cfg.budget_rules
+            rules = replace(rules, min_profit=float(br["min_profit"]), min_roi=float(br["min_roi"]),
+                            max_roi=float(br["max_roi"]), max_cost=float(self.cfg.budget), budget=True)
         if s.max_roi is not None:
             rules = replace(rules, max_roi=s.max_roi)
-        return replace(rules, match_brand=s.match_brand)
+        return replace(rules, match_brand=s.match_brand, check=s.check,
+                       missing_part_cost=s.missing_part_cost)
 
     def scan_search(self, s: Search) -> list[Deal]:
         newest = self.client.search(s.query, order="newest_first",
@@ -346,7 +382,7 @@ class Scanner:
         for item in fresh:
             self.seen.add(item.key)
             deal = assess(item, pool, rules, s.query)   # estimated shipping for now
-            if deal and not deal.blocked:
+            if deal and not deal.blocked and not s.budget:   # budget searches: sent by the one-time scan
                 self.seed_candidates.append((s, item, pool, rules))
                 found += 1
         self.known.add(s)
@@ -390,11 +426,21 @@ class Scanner:
         self.pool_rebuilds = 0
         self.seed_candidates = []
         self.ebay_due = bool(self.ebay) and self.ebay_state.due(self.cfg.ebay.interval_minutes)
+        if self.ebay_due and self.ebay_state.calls_today >= self.cfg.ebay.max_calls_per_day:
+            log.warning("eBay: %d calls used today (UTC), skipping eBay until tomorrow",
+                        self.ebay_state.calls_today)
+            self.ebay_due = False
         self.first_ebay = self.ebay_due and not self.seen.has_platform("ebay")
         calls_before = self.ebay.calls if self.ebay else 0
         self.subito_pools = self.ebay_pools = 0
         self._fetch_subito()
-        for s in self.cfg.searches:
+        # budget searches first: an overlapping normal search ("boss") would otherwise mark
+        # their listings as seen under the normal rules before they're checked
+        for s in sorted(self.cfg.searches, key=lambda x: not x.budget):
+            if not s.enabled:
+                continue
+            if self.known.has(s) and not self.known.due(s):
+                continue
             try:
                 deals += self.scan_search(s)
             except Exception as e:  # one broken search shouldn't kill the rest
@@ -421,7 +467,8 @@ class Scanner:
         self.seen.save()
         self.pools.save()
         self.known.save()
-        deals.sort(key=lambda d: (d.rating, d.profit), reverse=True)
+        # budget deals by profit per euro spent, then the rest by rating
+        deals.sort(key=lambda d: (d.budget, d.per_euro if d.budget else 0, d.rating, d.profit), reverse=True)
         self.near_misses.sort(key=lambda m: (m[1].closeness, m[1].profit), reverse=True)
         log.info("Checked %d new listing(s), %d near miss(es)", self.checked, len(self.near_misses))
         for query, m in self.near_misses[:5]:
@@ -435,7 +482,7 @@ class Scanner:
             return
         self._subito_calls0 = self.subito.calls
         found: dict[str, Item] = {}
-        for cat in sorted({self._subito_category(s) for s in self.cfg.searches}):
+        for cat in sorted({self._subito_category(s) for s in self.cfg.searches if s.enabled}):
             try:
                 for i in self.subito.newest_in_area(cat):
                     found.setdefault(i.key, i)

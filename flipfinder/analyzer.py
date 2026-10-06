@@ -27,6 +27,15 @@ class Deal:
     pickup_only: bool = False
     city: str = ""
     blocked: list[str] = field(default_factory=list)   # rules it fails; empty for a real deal
+    cost: float = 0.0              # everything you pay: price + fee + shipping/pickup + missing parts
+    missing_part: float = 0.0      # cost of a battery/charger the listing says is missing
+    budget: bool = False
+    check: str = ""
+
+    @property
+    def per_euro(self) -> float:
+        """Profit for each euro spent, how budget deals are ranked."""
+        return self.profit / self.cost if self.cost > 0 else 0.0
     closeness: float = 1.0         # 0-1, how close a blocked listing came to passing
     by_platform: dict = field(default_factory=dict)   # platform -> (median, listings) when there are enough
     resell_on: str = ""            # platform where it nets the most after fees
@@ -45,6 +54,10 @@ class Rules:
     exclude_keywords: tuple[str, ...] = ()
     sell_fees: dict = field(default_factory=dict)   # platform -> (percent, fixed) you pay when selling
     match_brand: bool = True        # off for e.g. graphics cards, where MSI/ASUS/Zotac sell the same chip
+    max_cost: float | None = None   # budget: price + fee + shipping/pickup (+ missing parts) must fit
+    missing_part_cost: float = 0.0  # cameras: added when the listing says no battery/charger
+    budget: bool = False            # a budget-mode search (ranked by profit per euro spent)
+    check: str = ""                 # "what to check before buying", shown in the alert
     # rating knobs: profit/roi at which that part of the score maxes out
     rating_profit_cap: float = 50.0
     rating_roi_cap: float = 150.0
@@ -79,6 +92,7 @@ PHRASES = [
     (re.compile(r"\bles ?paul\b"), "lespaul"),
     (re.compile(r"\bht ?g ?700\b"), "g700"),
     (re.compile(r"\bclassic ?vibe\b"), "classicvibe"),
+    (re.compile(r"\bcyber ?shot\b"), "cybershot"),
     (re.compile(r"\bmk ?(ii|2)\b"), "mk2"),
     (re.compile(r"\bmk ?(iii|3)\b"), "mk3"),
 ]
@@ -123,7 +137,9 @@ FILLER = set("""
 # Words that make a different model (and price): an iPhone 13 Pro isn't an iPhone 13,
 # a 3060 Ti isn't a 3060. They have to match exactly, like model numbers.
 MODEL_WORDS = {"pro", "max", "mini", "plus", "oled", "ti", "super", "slim", "digital", "lite",
-               "ultra", "se", "cellular", "lte", "xt"}
+               "ultra", "se", "cellular", "lte", "xt", "xl",
+               # special editions sell at their own prices
+               "limited", "edition", "edizione", "custom"}
 
 _YEAR = re.compile(r"^(19[5-9]\d|20[0-3]\d)$")
 _WATTS = re.compile(r"^\d+(w|watt|watts)$")
@@ -263,14 +279,18 @@ def find_comparables(item: Item, pool: list[Item], min_comparables: int,
     numbers = model_numbers(mine)
     same_number = [p for p in others if model_numbers(tokens(p)) == numbers]
     brand_note = f" ({item.brand})" if item.brand and match_brand else ""
-    if numbers and len(same_number) >= min_comparables:
+    # A suffix on its own ("mini", "pro") isn't a model: a TC Electronic Spark Mini isn't
+    # worth what the other "mini" pedals are. It still has to match, but the listing is
+    # then treated like one without a model number.
+    real = {t for t in numbers if t not in MODEL_WORDS}
+    if real and len(same_number) >= min_comparables:
         return same_number, "model " + " ".join(sorted(numbers)) + brand_note
-    if not numbers:
+    if not real:
         words = mine - numbers
         sharing = [p for p in same_number if words & tokens(p)]
         if tight(sharing):
             shared = set().union(*(tokens(p) for p in sharing))
-            return sharing, "model words " + " ".join(sorted(words & shared))
+            return sharing, "model words " + " ".join(sorted((words & shared) | numbers))
         if tight(same_number):
             return same_number, "listings without a model number (prices are tight)"
     # Last resort, only when prices are tight, and never against a listing whose model
@@ -336,9 +356,21 @@ def normalize_text(text: str) -> list[str]:
     return re.sub(r"[^a-z0-9]+", " ", t).split()
 
 
-def blocked_reasons(profit: float, roi: float, rating: int, rules: Rules) -> list[str]:
+# "No battery", "senza caricatore", "batteria non inclusa"... in the languages vinted.it shows
+MISSING_PART = re.compile(
+    r"\b(?:senza|no|without|sans|sin|ohne|zonder)\s+(?:la\s+|il\s+|the\s+)?"
+    r"(?:batteria|batterie|battery|bateria|batería|akku|accu|caricatore|caricabatterie|charger|chargeur|"
+    r"cargador|ladeger[aä]t|alimentatore)"
+    r"|\b(?:batteria|caricatore|caricabatterie|battery|charger)\s+(?:non\s+inclus[oa]|not\s+included)",
+    re.I)
+
+
+def blocked_reasons(profit: float, roi: float, rating: int, rules: Rules,
+                    cost: float | None = None) -> list[str]:
     """Which rules a listing fails, worded with the thresholds from config.yaml."""
     out = []
+    if rules.max_cost is not None and cost is not None and cost > rules.max_cost:
+        out.append(f"cost > €{rules.max_cost:g} budget")
     if profit < rules.min_profit:
         out.append(f"profit < €{rules.min_profit:g}")
     if roi < rules.min_roi:
@@ -398,17 +430,19 @@ def assess(item: Item, pool: list[Item], rules: Rules, query: str = "",
     if shipping is None and item.shipping is not None:
         shipping = item.shipping
     ship = 0.0 if pickup_only else (shipping if shipping is not None else rules.shipping_cost)
-    cost = item.total_price + ship
+    missing = rules.missing_part_cost if rules.missing_part_cost and MISSING_PART.search(item.title) else 0.0
+    cost = item.total_price + ship + missing
     profit = round(value - sell_fee - cost - rules.resell_costs, 2)
     roi = round(profit / cost * 100, 1) if cost > 0 else 0.0
     rating = rate(profit, roi, n, rules)
-    blocked = blocked_reasons(profit, roi, rating, rules)
+    blocked = blocked_reasons(profit, roi, rating, rules, cost)
     by_price = sorted(comps, key=lambda p: p.price)
     sample = [by_price[i * (n - 1) // 4] for i in range(5)]   # cheapest, quartiles, priciest
     deal = Deal(item, value, n, profit, roi, rating, basis, sample,
                 shipping=round(ship, 2), shipping_known=pickup_only or shipping is not None,
                 packaging=rules.resell_costs, pickup_only=pickup_only, city=city, blocked=blocked,
-                by_platform=by_platform, resell_on=resell_on, sell_fee=round(sell_fee, 2))
+                by_platform=by_platform, resell_on=resell_on, sell_fee=round(sell_fee, 2),
+                cost=round(cost, 2), missing_part=missing, budget=rules.budget, check=rules.check)
     # How close it came: the weakest of profit/ROI/rating as a share of what the rule needs
     deal.closeness = round(min(
         1.0,
@@ -435,4 +469,4 @@ def is_near_miss(deal: Deal | None) -> bool:
     blocked by max_roi (that's "too good to be true", not "almost").
     """
     return bool(deal and deal.blocked and deal.profit > 0 and deal.closeness >= NEAR_MISS_CLOSENESS
-                and not any(b.startswith("ROI >") for b in deal.blocked))
+                and not any(b.startswith(("ROI >", "cost >")) for b in deal.blocked))

@@ -34,6 +34,8 @@ CATEGORY_FOR_VINTED_CATALOG = {
     3728: 10, 3580: 10, 3602: 10,     # tablets, laptops, graphics cards -> Informatica
     3025: 44,                         # consoles -> Console e Videogiochi
     4840: 39,                         # pedals -> Strumenti Musicali
+    5433: 10,                         # calculators -> Informatica
+    3075: 40,                         # digital cameras -> Fotografia
 }
 NEGOTIABLE = re.compile(r"\btrattabil[ei]\b|\bprezzo\s+tratt\b|\btratt\.", re.I)
 NOT_NEGOTIABLE = re.compile(r"\bnon\s+(?:è\s+|e\s+)?trattabil|\bprezzo\s+fisso\b|\bnon\s+tratto\b", re.I)

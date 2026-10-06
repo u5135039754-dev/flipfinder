@@ -698,3 +698,340 @@ def test_subito_skips_damaged_condition():
     damaged["features"][1]["values"][0]["value"] = "Danneggiato - non funzionante o con parti rotte"
     c._get = lambda params: [ok, damaged]
     assert [i.id for i in c.newest_in_area(12)] == [660000020]
+
+
+# --- Budget mode ---
+
+def test_budget_total_cost_and_rules():
+    rules = Rules(min_profit=12, min_roi=35, max_roi=150, max_cost=72, budget=True)
+    p = pool([110] * 12)
+    ok = assess(item(1, 60), p, rules, shipping=5.0)            # 63.70 + 5 = 68.70 total
+    assert ok.cost == 68.7 and not ok.blocked and ok.budget
+    over = assess(item(2, 66), p, rules, shipping=5.0)          # 70 + 5 = 74.0 > 72
+    assert "cost > €72 budget" in over.blocked
+    from flipfinder.analyzer import is_near_miss
+    assert not is_near_miss(over)                               # over budget isn't "almost"
+    fake = assess(item(3, 20), p, rules, shipping=5.0)          # far too cheap
+    assert any(b.startswith("ROI >") for b in fake.blocked)
+    assert round(ok.per_euro, 3) == round(ok.profit / ok.cost, 3)
+
+
+def test_camera_missing_battery_adds_cost():
+    from flipfinder.analyzer import MISSING_PART
+    for t in ("Canon IXUS 185 senza batteria", "Sony Cyber-shot no charger", "Nikon Coolpix S3700 batteria non inclusa",
+              "Canon PowerShot sans chargeur"):
+        assert MISSING_PART.search(t), t
+    assert not MISSING_PART.search("Canon IXUS 185 con batteria e caricatore")
+    rules = Rules(min_profit=12, min_roi=35, max_roi=150, max_cost=72, missing_part_cost=15)
+    p = [titled(100 + n, "Canon IXUS 185", 80, "Canon") for n in range(12)]
+    full = assess(titled(1, "Canon IXUS 185", 30, "Canon"), p, rules, shipping=5.0)
+    bare = assess(titled(2, "Canon IXUS 185 senza batteria", 30, "Canon"), p, rules, shipping=5.0)
+    assert bare.missing_part == 15 and bare.cost == full.cost + 15 and bare.profit == round(full.profit - 15, 2)
+    assert "🔋 No battery/charger: +€15.00" in format_deal(bare)
+
+
+def test_budget_config_and_alert_lines(tmp_path: Path):
+    from flipfinder import config as config_mod
+    (tmp_path / "c.yaml").write_text("""
+budget: 60
+budget_rules: {min_profit: 12}
+searches:
+  - query: boss ds 1
+    budget: true
+    check: ask for a short video of it working
+    every_minutes: 10
+  - query: boss katana
+""", encoding="utf-8")
+    c = config_mod.load(tmp_path / "c.yaml")
+    b, n = c.searches
+    assert (b.budget, b.price_to, b.every_minutes, b.check) == (True, 60, 10, "ask for a short video of it working")
+    assert (n.budget, n.price_to) == (False, None)
+    assert c.budget_rules == {"min_profit": 12, "min_roi": 35, "max_roi": 150}
+    d = assess(titled(1, "Boss DS-1", 25, "Boss"), [titled(10 + i, "Boss DS-1", 55, "Boss") for i in range(12)],
+               Rules(min_profit=12, min_roi=35, max_roi=150, max_cost=60, budget=True,
+                     check="ask for a short video of it working"), "boss ds 1", shipping=5.0)
+    msg = format_deal(d)
+    assert "🎯 Budget: €" in msg and "profit per € spent" in msg
+    assert "🔍 Before buying: ask for a short video of it working" in msg
+
+
+def test_budget_searches_run_first_and_every_n_minutes(tmp_path: Path):
+    from flipfinder.config import Search
+    from flipfinder.scanner import _sid
+    s = _fake_scanner(tmp_path, 0, lambda searches: [])
+    normal, budget = Search("thing 0"), Search("thing 1", budget=True, every_minutes=10)
+    s.cfg.searches = [normal, budget]
+    s.known.add(normal); s.known.add(budget)
+    s.known.last[_sid(budget)] = 0       # due
+    s.cfg.budget, s.cfg.budget_rules = 72, {"min_profit": 12, "min_roi": 35, "max_roi": 150}
+    order = []
+    s.scan_search = lambda x: order.append(x.query) or []
+    s.scan()
+    assert order == ["thing 1", "thing 0"]                      # budget first
+    s.known.add(budget)                                          # just ran
+    order.clear(); s.scan()
+    assert order == ["thing 0"]                                  # not due again for 10 min
+
+
+def test_suffix_alone_is_not_a_model_and_editions_are_separate():
+    q = "tc electronic"
+    others = [titled(100 + n, f"TC Electronic {m} mini", p, "TC Electronic")
+              for n, (m, p) in enumerate([("Skysurfer", 58), ("Hall of Fame", 69), ("Flashback", 79), ("Mimiq", 107),
+                                          ("Flashback X4", 120), ("Ditto", 55), ("Spark", 40), ("Hall of Fame", 72)])]
+    spark = titled(1, "Spark mini boost TC Electronic", 36, "TC Electronic")
+    assert find_comparables(spark, others, 8, q)[0] == []        # not valued against other "mini" pedals
+    q = "dualsense"
+    plain = [titled(200 + n, "Controller DualSense PS5 nero", p, "Sony") for n, p in enumerate([40, 42, 45, 43, 44, 41, 46, 40])]
+    special = [titled(300 + n, "DualSense PS5 Limited Edition GTA", 160, "Sony") for n in range(8)]
+    comps, _ = find_comparables(titled(1, "DualSense PS5 bianco", 25, "Sony"), plain + special, 8, q)
+    assert {c.id for c in comps} == {c.id for c in plain}
+
+
+def test_ebay_skipped_for_the_day_at_the_call_cap(tmp_path: Path):
+    s = _fake_scanner(tmp_path, 0, lambda searches: [])
+    s.ebay = type("FakeEbay", (), {"calls": 0})()       # "configured"
+    s.cfg.ebay = type("E", (), {"interval_minutes": 20, "max_calls_per_day": 4500})()
+    s.cfg.budget, s.cfg.budget_rules = 72, {"min_profit": 12, "min_roi": 35, "max_roi": 150}
+    s.ebay_state.record(4500, scanned=False)
+    s.scan()
+    assert s.ebay_due is False
+
+
+# --- Telegram commands ---
+
+OWNER = 1000001
+
+
+class FakeTG:
+    """Records Bot API calls; getUpdates returns the queued updates once."""
+
+    def __init__(self, updates):
+        self.updates, self.calls = updates, []
+
+    def call(self, method, payload):
+        self.calls.append((method, payload))
+        if method == "getUpdates":
+            if "offset" in payload:
+                return []
+            out, self.updates = self.updates, []
+            return out
+        return True
+
+    def sent(self, method="sendMessage"):
+        return [p for m, p in self.calls if m == method]
+
+
+def msg(text, user=OWNER, chat=111, uid=[0]):
+    uid[0] += 1
+    return {"update_id": uid[0], "message": {"text": text, "from": {"id": user}, "chat": {"id": chat}}}
+
+
+def tap(data, user=OWNER, chat=111, uid=[1000]):
+    uid[0] += 1
+    return {"update_id": uid[0], "callback_query": {"id": f"cq{uid[0]}", "data": data, "from": {"id": user},
+                                                    "message": {"chat": {"id": chat}, "message_id": 55}}}
+
+
+def cmd_cfg(tmp_path):
+    from flipfinder import config as config_mod
+    (tmp_path / "c.yaml").write_text("""
+rules: {min_profit: 25, min_roi: 30, min_rating: 5, max_roi: 120}
+budget: 72
+searches:
+  - query: boss katana
+    price_from: 80
+    price_to: 300
+  - query: iphone 13
+    price_from: 140
+    price_to: 250
+    filters: {catalog: [3661]}
+  - query: boss ds 1
+    budget: true
+    price_from: 15
+""", encoding="utf-8")
+    return config_mod.load(tmp_path / "c.yaml", settings_path=None)
+
+
+def run_cmds(tmp_path, updates, settings=None):
+    import os
+    from flipfinder.commands import Commands, load_settings
+    cfg = cmd_cfg(tmp_path)
+    tg = FakeTG(updates)
+    cwd = os.getcwd()
+    os.chdir(tmp_path)                       # settings.json is written next to the config
+    try:
+        s = settings if settings is not None else load_settings(tmp_path / "settings.json")
+        s["commands_version"] = 1            # already registered
+        c = Commands(tg, cfg, s)
+        changed = c.run()
+    finally:
+        os.chdir(cwd)
+    return tg, c, cfg, changed
+
+
+def test_setprice_validates_and_saves(tmp_path: Path):
+    tg, c, cfg, changed = run_cmds(tmp_path, [
+        msg('/setprice "boss katana" 90 260'),
+        msg("/setprice boss katana 300 100"),
+        msg("/setprice boss katana ten 100"),
+        msg("/setprice boss katna 90 260"),
+        msg("/setprice boss ds 1 10 90"),
+    ])
+    replies = [p["text"] for p in tg.sent()]
+    assert "✅ <b>boss katana</b>: €90 – €260" in replies[0]
+    assert "must be lower than the maximum" in replies[1]
+    assert "must be numbers" in replies[2]
+    assert "No search called" in replies[3] and "boss katana" in replies[3]       # suggestion
+    assert "budget search" in replies[4]
+    assert changed and c.settings["prices"] == {"boss katana": [90.0, 260.0]}
+    saved = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
+    assert saved["prices"] == {"boss katana": [90.0, 260.0]}
+
+
+def test_strangers_are_ignored_and_allow_is_owner_only(tmp_path: Path):
+    tg, c, cfg, changed = run_cmds(tmp_path, [
+        msg("/budget 10", user=999),
+        msg("/allow 555"),
+        msg("/budget 50", user=555),
+        msg("/allow 777", user=555),
+    ])
+    replies = [p["text"] for p in tg.sent()]
+    assert len(replies) == 3                                  # nothing for the stranger
+    assert "User 555 can now use commands" in replies[0]
+    assert "Budget is now €50" in replies[1]                  # 555 is allowed now
+    assert "Only the owner" in replies[2]
+    assert c.settings["allowed_users"] == [555] and c.settings["budget"] == 50
+
+
+def test_categories_buttons_toggle_searches(tmp_path: Path):
+    from flipfinder.commands import apply_settings, search_id
+    tg, c, cfg, changed = run_cmds(tmp_path, [msg("/categories"), tap(f"t:{search_id('iphone 13')}")])
+    groups = {p["text"].split("</b>")[0].replace("<b>", ""): p for p in tg.sent()}
+    assert set(groups) == {"Amps", "Electronics", "Budget"}
+    assert groups["Electronics"]["reply_markup"]["inline_keyboard"][0][0]["text"] == "✅ iphone 13"
+    assert c.settings["disabled"] == ["iphone 13"]
+    edited = tg.sent("editMessageReplyMarkup")[0]["reply_markup"]["inline_keyboard"][0][0]["text"]
+    assert edited == "❌ iphone 13"
+    assert tg.sent("answerCallbackQuery")[0]["text"] == "iphone 13: off"
+    cfg2 = apply_settings(cmd_cfg(tmp_path), c.settings)
+    assert [s.enabled for s in cfg2.searches] == [True, False, True]
+
+
+def test_rules_budget_add_remove(tmp_path: Path):
+    from flipfinder.commands import apply_settings, search_id
+    tg, c, cfg, changed = run_cmds(tmp_path, [
+        msg("/setrule min_roi 25"), msg("/setrule min_rating 11"), msg("/setrule max_roi 20"),
+        msg("/setrule speed 3"), msg("/budget abc"), msg("/budget 60"),
+        msg('/add "zoom g1x four" 20 60'), msg("/add boss katana 10 20"),
+        msg("/remove boss katana"), tap(f"rm:{search_id('boss katana')}:y"),
+    ])
+    r = [p["text"] for p in tg.sent()]
+    assert "min_roi is now 25" in r[0] and "between 1 and 10" in r[1] and "below max_roi" in r[2]
+    assert "Unknown rule" in r[3] and "must be a number" in r[4] and "Budget is now €60" in r[5]
+    assert "Added <b>zoom g1x four</b>" in r[6] and "already a search" in r[7]
+    assert "Remove <b>boss katana</b>?" in r[8] and tg.sent("sendMessage")[8]["reply_markup"]
+    cfg2 = apply_settings(cmd_cfg(tmp_path), c.settings)
+    assert [s.query for s in cfg2.searches] == ["iphone 13", "boss ds 1", "zoom g1x four"]
+    assert cfg2.rules.min_roi == 25 and cfg2.budget == 60
+    assert next(s for s in cfg2.searches if s.query == "boss ds 1").price_to == 60   # budget caps budget searches
+
+
+def test_group_chat_bot_suffix_and_help(tmp_path: Path):
+    tg, c, cfg, changed = run_cmds(tmp_path, [msg("/help@flipfinder_bot", chat=-100123), msg("hello there")])
+    sent = tg.sent()
+    assert len(sent) == 1 and sent[0]["chat_id"] == -100123 and "/setprice" in sent[0]["text"]
+    assert not changed
+
+
+def test_commands_registered_once_and_updates_confirmed(tmp_path: Path):
+    from flipfinder.commands import Commands
+    tg = FakeTG([msg("/rules")])
+    c = Commands(tg, cmd_cfg(tmp_path), {"disabled": [], "prices": {}, "added": [], "removed": [], "rules": {},
+                                         "allowed_users": [], "commands_version": 0})
+    import os
+    cwd = os.getcwd(); os.chdir(tmp_path)
+    try:
+        c.run()
+    finally:
+        os.chdir(cwd)
+    assert len(tg.sent("setMyCommands")) == 2 and c.settings["commands_version"] == 1
+    confirms = [p for m, p in tg.calls if m == "getUpdates" and "offset" in p]
+    assert confirms and confirms[0]["offset"] > 0
+    assert "min_rating: 5" in tg.sent()[0]["text"]
+
+
+def test_price_change_keeps_search_known(tmp_path: Path):
+    from flipfinder.config import Search
+    from flipfinder.scanner import KnownSearches, PoolCache, _key
+    s = Search("boss katana", 80, 300)
+    (tmp_path / "searches.json").write_text(json.dumps({_key(s): 1.0}))   # old-style key with prices
+    known = KnownSearches(tmp_path / "searches.json", PoolCache(tmp_path / "p.json", 60))
+    s.price_from, s.price_to = 90, 260
+    assert known.has(s)
+
+
+# --- Several chats, supergroup upgrade, "I'm on it" ---
+
+class FakeResponse:
+    def __init__(self, ok, data):
+        self.ok, self._data, self.status_code = ok, data, 200 if ok else 400
+        self.headers = {"content-type": "application/json"}
+        self.text = json.dumps(data)
+
+    def json(self):
+        return self._data
+
+
+def test_deals_go_to_every_chat_with_claim_button(monkeypatch):
+    import flipfinder.telegram as tgm
+    sent = []
+
+    def post(url, json=None, timeout=None):
+        sent.append((url.rsplit("/", 1)[1], json))
+        return FakeResponse(True, {"ok": True, "result": {"message_id": 1}})
+    monkeypatch.setattr(tgm.requests, "post", post)
+    tg = tgm.Telegram("TOKEN", "1000001, -100000000002")
+    assert tg.chat_ids == ["1000001", "-100000000002"] and tg.chat_id == "1000001"
+    d = evaluate(item(1, 40), pool([120] * 12), Rules())
+    assert tg.send_deal(d)
+    assert [p["chat_id"] for _, p in sent] == ["1000001", "-100000000002"]
+    assert all(p["reply_markup"]["inline_keyboard"][0][0]["text"] == "I'm on it ✋" for _, p in sent)
+
+
+def test_group_upgraded_to_supergroup_switches_id(monkeypatch):
+    import flipfinder.telegram as tgm
+    sent = []
+
+    def post(url, json=None, timeout=None):
+        sent.append(json["chat_id"])
+        if json["chat_id"] == "-100000000002":
+            return FakeResponse(False, {"ok": False, "error_code": 400, "description": "group chat was upgraded",
+                                        "parameters": {"migrate_to_chat_id": -1001234567890}})
+        return FakeResponse(True, {"ok": True, "result": {}})
+    monkeypatch.setattr(tgm.requests, "post", post)
+    tg = tgm.Telegram("TOKEN", "1000001,-100000000002")
+    assert tg.send_text("hello")
+    assert sent == ["1000001", "-100000000002", "-1001234567890"]          # retried on the new id
+    assert tg.chat_ids == ["1000001", "-1001234567890"]
+    assert tg.migrations == {"-100000000002": "-1001234567890"}
+    from flipfinder.commands import apply_settings
+    cfg = cmd_cfg_with_chat()
+    apply_settings(cfg, {"chat_migrations": tg.migrations})
+    assert cfg.telegram_chat_id == "1000001,-1001234567890"
+
+
+def cmd_cfg_with_chat():
+    from flipfinder.analyzer import Rules as R
+    return type("C", (), {"searches": [], "telegram_chat_id": "1000001,-100000000002", "rules": R(), "budget": 72})()
+
+
+def test_claim_button_shows_who(tmp_path: Path):
+    claim = tap("claim", user=4242)
+    claim["callback_query"]["from"].update({"first_name": "Marco"})
+    tg, c, cfg, changed = run_cmds(tmp_path, [claim, tap("claimed", user=999)])
+    edit = tg.sent("editMessageReplyMarkup")[0]
+    label = edit["reply_markup"]["inline_keyboard"][0][0]
+    assert label["text"].startswith("✋ Marco is on it") and label["callback_data"] == "claimed"
+    answers = [p["text"] for p in tg.sent("answerCallbackQuery")]
+    assert answers[0] == "It's yours, good luck!"
+    assert not changed                                                      # claims don't touch settings

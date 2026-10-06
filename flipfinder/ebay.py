@@ -33,6 +33,8 @@ CATEGORY_FOR_VINTED_CATALOG = {
     3602: 27386,     # graphics cards -> Schede video e grafiche
     3025: 139971,    # consoles -> Console
     4840: 3858,      # pedals -> Chitarre e bassi
+    5433: 9972,      # calculators -> Calcolatrici
+    3075: 31388,     # digital cameras -> Fotocamere digitali
 }
 
 

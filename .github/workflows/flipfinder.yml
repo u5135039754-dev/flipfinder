@@ -10,6 +10,9 @@ concurrency:
   group: flipfinder
   cancel-in-progress: false
 
+permissions:
+  contents: write   # to commit settings.json changed from Telegram
+
 jobs:
   scan:
     runs-on: ubuntu-latest
@@ -38,6 +41,18 @@ jobs:
           EBAY_CLIENT_ID: ${{ secrets.EBAY_CLIENT_ID }}
           EBAY_CLIENT_SECRET: ${{ secrets.EBAY_CLIENT_SECRET }}
         run: python main.py --once
+
+      # Settings changed from Telegram are committed back so they survive
+      - name: Save Telegram settings
+        if: always()
+        run: |
+          if [ -f settings.json ] && [ -n "$(git status --porcelain settings.json)" ]; then
+            git config user.name "flipfinder-bot"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add settings.json
+            git commit -m "Update settings from Telegram"
+            git pull --rebase origin main && git push origin HEAD:main
+          fi
 
       - uses: actions/cache/save@v4
         if: always()
