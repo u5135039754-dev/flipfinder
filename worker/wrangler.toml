@@ -1,0 +1,16 @@
+name = "flipfinder"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+
+# Reminders, overnight queue, weekly report
+[triggers]
+crons = ["*/5 * * * *"]
+
+# Private data (database_id is an id, not a secret)
+[[d1_databases]]
+binding = "DB"
+database_name = "flipfinder"
+database_id = "befd91af-75b3-4d87-832f-96174c98d4be"
+
+# Secrets (set with `npx wrangler secret put NAME`, never committed):
+#   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, OWNER_ID, API_KEY, WEBHOOK_SECRET

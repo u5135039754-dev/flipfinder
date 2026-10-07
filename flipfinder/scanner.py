@@ -144,7 +144,7 @@ class KnownSearches:
 
 def tag(deal: Deal, s: Search) -> Deal:
     """Which search found it, and its category (for the group topic)."""
-    from .commands import search_group
+    from .settings import search_group
     deal.query, deal.group = s.query, search_group(s)
     return deal
 
@@ -532,7 +532,7 @@ class Scanner:
         has both groups; electronics run every time. A group that hasn't run for
         STAGGER_OVERDUE minutes runs anyway, in case a run was skipped.
         """
-        from .commands import search_group
+        from .settings import search_group
         want = STAGGER_SLOTS.get("Budget" if s.budget else search_group(s)) if self.cfg.stagger else None
         if want is None:
             return self.known.due(s)

@@ -1,4 +1,5 @@
 import json
+import sys
 from pathlib import Path
 
 from flipfinder.analyzer import (Rules, assess, evaluate, find_comparables, is_near_miss, is_pickup_only,
@@ -606,7 +607,10 @@ def test_ebay_schedule_defaults_and_separate_pool_age(tmp_path: Path):
 
 # --- Subito ---
 
-def subito_ad(n, subject, price, town="Hometown", lat=44.500500, lon=11.300800, ships=False, ship_cost=None,
+AREA = {"region": 1, "province": 1, "center": (44.5, 11.3)}   # made up: the real area is private
+
+
+def subito_ad(n, subject, price, town="Centro", lat=44.5005, lon=11.3008, ships=False, ship_cost=None,
               body="", category=("39", "Strumenti Musicali")):
     features = [{"uri": "/price", "values": [{"key": str(price), "value": f"{price} €"}]},
                 {"uri": "/item_condition", "values": [{"key": "30", "value": "Ottimo - poco usato e ben conservato"}]},
@@ -622,17 +626,17 @@ def subito_ad(n, subject, price, town="Hometown", lat=44.500500, lon=11.300800, 
 
 def test_subito_parsing_area_delivery_and_negotiable():
     from flipfinder.subito import SubitoClient, item_from_subito
-    c = SubitoClient(town_travel_costs={"Southtown": 8, "Westtown": 8})
+    c = SubitoClient(**AREA, town_travel_costs={"Sudbury": 8, "Westby": 8})
     it = item_from_subito(subito_ad(1, "Fender Stratocaster Player", 450, body="Prezzo trattabile"))
     assert (it.id, it.price, it.source, it.condition, it.negotiable, it.key) ==         (660000001, 450.0, "subito", "Ottimo", True, "subito:660000001")
-    northtown = item_from_subito(subito_ad(2, "x", 10, "Northtown", 44.5745, 11.3000))
-    southtown = item_from_subito(subito_ad(3, "x", 10, "Southtown", 44.3150, 11.3000))
-    fartown = item_from_subito(subito_ad(4, "x", 10, "Fartown", 44.9500, 11.3000))
-    assert c.in_area(northtown) and c.in_area(southtown) and not c.in_area(fartown)
-    assert 7 < northtown.distance_km < 9 and 19 < southtown.distance_km < 22 and fartown.distance_km > 45
-    assert (c.delivery(northtown).shipping, northtown.delivery) == (5.0, "pickup")
-    assert c.delivery(southtown).shipping == 8.0                       # town override
-    cheap_ship = item_from_subito(subito_ad(5, "x", 10, "Southtown", 44.3150, 11.3000, ships=True, ship_cost=6))
+    near = item_from_subito(subito_ad(2, "x", 10, "Nordville", 44.5745, 11.3))
+    far = item_from_subito(subito_ad(3, "x", 10, "Sudbury", 44.315, 11.3))
+    outside = item_from_subito(subito_ad(4, "x", 10, "Lontano", 44.95, 11.3))
+    assert c.in_area(near) and c.in_area(far) and not c.in_area(outside)
+    assert 7 < near.distance_km < 9 and 19 < far.distance_km < 22 and outside.distance_km > 45
+    assert (c.delivery(near).shipping, near.delivery) == (5.0, "pickup")
+    assert c.delivery(far).shipping == 8.0                       # town override
+    cheap_ship = item_from_subito(subito_ad(5, "x", 10, "Sudbury", 44.315, 11.3, ships=True, ship_cost=6))
     c.in_area(cheap_ship)
     assert (c.delivery(cheap_ship).shipping, cheap_ship.delivery) == (6.0, "shipping")   # cheaper than €8 travel
     for body in ("Non trattabile", "Prezzo non è trattabile", "prezzo fisso, ritiro a mano", "Non tratto"):
@@ -642,16 +646,16 @@ def test_subito_parsing_area_delivery_and_negotiable():
 
 def test_subito_alert_lines():
     from flipfinder.subito import SubitoClient, item_from_subito
-    c = SubitoClient()
-    it = item_from_subito(subito_ad(7, "Boss DS-1 distortion", 20, "Northtown", 44.5745, 11.3000, body="trattabile"))
+    c = SubitoClient(**AREA)
+    it = item_from_subito(subito_ad(7, "Boss DS-1 distortion", 20, "Nordville", 44.5745, 11.3, body="trattabile"))
     c.in_area(it); c.delivery(it)
     p = pool([60] * 12)
     for x in p:
         x.title = "Boss DS-1 distortion"
     d = assess(it, p, Rules(resell_costs=1), "boss")
     msg = format_deal(d)
-    assert "🛒 <b>Subito</b> · Northtown (8 km)" in msg and "💬 Negotiable" in msg
-    assert "🚗 Pickup + packaging: <b>€6.00</b> (travel to Northtown)" in msg
+    assert "🛒 <b>Subito</b> · Nordville (8 km)" in msg and "💬 Negotiable" in msg
+    assert "🚗 Pickup + packaging: <b>€6.00</b> (travel to Nordville)" in msg
     assert d.shipping == 5.0 and d.profit == round(60 - 20 - 5 - 1, 2)
 
 
@@ -694,7 +698,7 @@ def test_ebay_category_from_vinted_catalog_or_config():
 
 def test_subito_skips_damaged_condition():
     from flipfinder.subito import SubitoClient
-    c = SubitoClient()
+    c = SubitoClient(**AREA)
     ok, damaged = subito_ad(20, "iPhone 13 128GB", 200), subito_ad(21, "iPhone 13 128GB", 160)
     damaged["features"][1]["values"][0]["value"] = "Danneggiato - non funzionante o con parti rotte"
     c._get = lambda params: [ok, damaged]
@@ -798,45 +802,7 @@ def test_ebay_skipped_for_the_day_at_the_call_cap(tmp_path: Path):
     assert s.ebay_due is False
 
 
-# --- Telegram commands ---
-
-OWNER = 1000001
-
-
-class FakeTG:
-    """Records Bot API calls; getUpdates returns the queued updates once."""
-
-    def __init__(self, updates):
-        self.updates, self.calls = updates, []
-
-    def call(self, method, payload):
-        self.calls.append((method, payload))
-        if method == "getUpdates":
-            if "offset" in payload:
-                return []
-            out, self.updates = self.updates, []
-            return out
-        if method == "sendMessage":
-            return {"message_id": 900 + len(self.calls), "chat": {"id": payload["chat_id"]}}
-        return True
-
-    @staticmethod
-    def is_group(chat) -> bool:
-        return str(chat).startswith("-")
-
-    def sent(self, method="sendMessage"):
-        return [p for m, p in self.calls if m == method]
-
-
-def msg(text, user=OWNER, chat=111, uid=[0]):
-    uid[0] += 1
-    return {"update_id": uid[0], "message": {"text": text, "from": {"id": user}, "chat": {"id": chat}}}
-
-
-def tap(data, user=OWNER, chat=111, uid=[1000]):
-    uid[0] += 1
-    return {"update_id": uid[0], "callback_query": {"id": f"cq{uid[0]}", "data": data, "from": {"id": user},
-                                                    "message": {"chat": {"id": chat}, "message_id": 55}}}
+# --- Settings from the Worker (changed in Telegram) ---
 
 
 def cmd_cfg(tmp_path):
@@ -856,117 +822,50 @@ searches:
     budget: true
     price_from: 15
 """, encoding="utf-8")
-    return config_mod.load(tmp_path / "c.yaml", settings_path=None)
+    return config_mod.load(tmp_path / "c.yaml")
 
 
-def run_cmds(tmp_path, updates, settings=None):
-    import os
-    from flipfinder.commands import Commands, load_settings
-    cfg = cmd_cfg(tmp_path)
-    tg = FakeTG(updates)
-    cwd = os.getcwd()
-    os.chdir(tmp_path)                       # settings.json is written next to the config
-    try:
-        s = settings if settings is not None else load_settings(tmp_path / "settings.json")
-        from flipfinder.commands import COMMANDS_VERSION
-        s["commands_version"] = COMMANDS_VERSION   # already registered
-        c = Commands(tg, cfg, s)
-        changed = c.run()
-    finally:
-        os.chdir(cwd)
-    return tg, c, cfg, changed
+def test_telegram_settings_apply_over_config(tmp_path: Path):
+    from flipfinder.settings import apply_settings
+    cfg = apply_settings(cmd_cfg(tmp_path), {
+        "rules": {"min_roi": 25}, "budget": 60, "removed": ["boss katana"], "disabled": ["iphone 13"],
+        "added": [{"query": "zoom g1x four", "price_from": 20, "price_to": 60}],
+        "prices": {"iphone 13": [150, 240]}})
+    assert [s.query for s in cfg.searches] == ["iphone 13", "boss ds 1", "zoom g1x four"]
+    assert [s.enabled for s in cfg.searches] == [False, True, True]
+    assert cfg.rules.min_roi == 25 and cfg.budget == 60
+    assert (cfg.searches[0].price_from, cfg.searches[0].price_to) == (150, 240)
+    assert next(s for s in cfg.searches if s.query == "boss ds 1").price_to == 60   # budget caps budget searches
 
 
-def test_setprice_validates_and_saves(tmp_path: Path):
-    tg, c, cfg, changed = run_cmds(tmp_path, [
-        msg('/setprice "boss katana" 90 260'),
-        msg("/setprice boss katana 300 100"),
-        msg("/setprice boss katana ten 100"),
-        msg("/setprice boss katna 90 260"),
-        msg("/setprice boss ds 1 10 90"),
-    ])
-    replies = [p["text"] for p in tg.sent()]
-    assert "✅ <b>boss katana</b>: €90 – €260" in replies[0]
-    assert "must be lower than the maximum" in replies[1]
-    assert "must be numbers" in replies[2]
-    assert "No search called" in replies[3] and "boss katana" in replies[3]       # suggestion
-    assert "budget search" in replies[4]
-    assert changed and c.settings["prices"] == {"boss katana": [90.0, 260.0]}
-    saved = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
-    assert saved["prices"] == {"boss katana": [90.0, 260.0]}
+def test_catalog_for_the_worker_is_config_before_telegram_changes(tmp_path: Path):
+    from flipfinder.cloud import catalog
+    c = catalog(cmd_cfg(tmp_path))
+    assert [(s["query"], s["group"]) for s in c["searches"]] == [
+        ("boss katana", "Amps"), ("iphone 13", "Electronics"), ("boss ds 1", "Budget")]
+    assert c["searches"][2]["price_to"] == 72 and c["searches"][2]["price_to_is_budget"]
+    assert c["rules"]["min_profit"] == 25 and c["budget"] == 72
+    json.dumps(c)   # sent as JSON
 
 
-def test_strangers_are_ignored_and_allow_is_owner_only(tmp_path: Path):
-    tg, c, cfg, changed = run_cmds(tmp_path, [
-        msg("/budget 10", user=999),
-        msg("/allow 555"),
-        msg("/budget 50", user=555),
-        msg("/allow 777", user=555),
-    ])
-    replies = [p["text"] for p in tg.sent()]
-    assert len(replies) == 3                                  # nothing for the stranger
-    assert "User 555 can now use commands" in replies[0]
-    assert "Budget is now €50" in replies[1]                  # 555 is allowed now
-    assert "Only the owner" in replies[2]
-    assert c.settings["allowed_users"] == [555] and c.settings["budget"] == 50
+def test_home_area_comes_from_the_worker_and_subito_is_off_without_it(tmp_path: Path):
+    from flipfinder.settings import apply_area
+    (tmp_path / "c.yaml").write_text("subito: {enabled: true}" + chr(10) + "searches: [{query: boss katana}]" + chr(10), encoding="utf-8")
+    from flipfinder import config as config_mod
+    cfg = config_mod.load(tmp_path / "c.yaml")
+    assert cfg.subito.center is None
+    apply_area(cfg, {**AREA, "radius_km": 25, "travel_cost": 6, "town_travel_costs": {"Sudbury": 9}})
+    assert cfg.subito.enabled and cfg.subito.center == (44.5, 11.3) and cfg.subito.radius_km == 25
+    assert cfg.subito.town_travel_costs == {"Sudbury": 9.0}
+    cfg = config_mod.load(tmp_path / "c.yaml")
+    apply_area(cfg, None)                        # Worker unreachable: no area, no Subito
+    assert not cfg.subito.enabled
 
 
-def test_categories_buttons_toggle_searches(tmp_path: Path):
-    from flipfinder.commands import apply_settings, search_id
-    tg, c, cfg, changed = run_cmds(tmp_path, [msg("/categories"), tap(f"t:{search_id('iphone 13')}")])
-    groups = {p["text"].split("</b>")[0].replace("<b>", ""): p for p in tg.sent()}
-    assert set(groups) == {"Amps", "Electronics", "Budget"}
-    assert groups["Electronics"]["reply_markup"]["inline_keyboard"][0][0]["text"] == "✅ iphone 13"
-    assert c.settings["disabled"] == ["iphone 13"]
-    edited = tg.sent("editMessageReplyMarkup")[0]["reply_markup"]["inline_keyboard"][0][0]["text"]
-    assert edited == "❌ iphone 13"
-    assert tg.sent("answerCallbackQuery")[0]["text"] == "iphone 13: off"
-    cfg2 = apply_settings(cmd_cfg(tmp_path), c.settings)
-    assert [s.enabled for s in cfg2.searches] == [True, False, True]
-
-
-def test_rules_budget_add_remove(tmp_path: Path):
-    from flipfinder.commands import apply_settings, search_id
-    tg, c, cfg, changed = run_cmds(tmp_path, [
-        msg("/setrule min_roi 25"), msg("/setrule min_rating 11"), msg("/setrule max_roi 20"),
-        msg("/setrule speed 3"), msg("/budget abc"), msg("/budget 60"),
-        msg('/add "zoom g1x four" 20 60'), msg("/add boss katana 10 20"),
-        msg("/remove boss katana"), tap(f"rm:{search_id('boss katana')}:y"),
-    ])
-    r = [p["text"] for p in tg.sent()]
-    assert "min_roi is now 25" in r[0] and "between 1 and 10" in r[1] and "below max_roi" in r[2]
-    assert "Unknown rule" in r[3] and "must be a number" in r[4] and "Budget is now €60" in r[5]
-    assert "Added <b>zoom g1x four</b>" in r[6] and "already a search" in r[7]
-    assert "Remove <b>boss katana</b>?" in r[8] and tg.sent("sendMessage")[8]["reply_markup"]
-    cfg2 = apply_settings(cmd_cfg(tmp_path), c.settings)
-    assert [s.query for s in cfg2.searches] == ["iphone 13", "boss ds 1", "zoom g1x four"]
-    assert cfg2.rules.min_roi == 25 and cfg2.budget == 60
-    assert next(s for s in cfg2.searches if s.query == "boss ds 1").price_to == 60   # budget caps budget searches
-
-
-def test_group_chat_bot_suffix_and_help(tmp_path: Path):
-    tg, c, cfg, changed = run_cmds(tmp_path, [msg("/help@flipfinder_bot", chat=-100123), msg("hello there")])
-    sent = tg.sent()
-    assert len(sent) == 1 and sent[0]["chat_id"] == -100123 and "/setprice" in sent[0]["text"]
-    assert not changed
-
-
-def test_commands_registered_once_and_updates_confirmed(tmp_path: Path):
-    from flipfinder.commands import Commands
-    tg = FakeTG([msg("/rules")])
-    c = Commands(tg, cmd_cfg(tmp_path), {"disabled": [], "prices": {}, "added": [], "removed": [], "rules": {},
-                                         "allowed_users": [], "commands_version": 0})
-    import os
-    cwd = os.getcwd(); os.chdir(tmp_path)
-    try:
-        c.run()
-    finally:
-        os.chdir(cwd)
-    from flipfinder.commands import COMMANDS_VERSION
-    assert len(tg.sent("setMyCommands")) == 2 and c.settings["commands_version"] == COMMANDS_VERSION
-    confirms = [p for m, p in tg.calls if m == "getUpdates" and "offset" in p]
-    assert confirms and confirms[0]["offset"] > 0
-    assert "min_rating: 5" in tg.sent()[0]["text"]
+def test_config_yaml_has_no_home_area():
+    import yaml
+    sb = yaml.safe_load(Path("config.yaml").read_text(encoding="utf-8"))["subito"]
+    assert not {"center", "region", "province", "town_travel_costs"} & set(sb)
 
 
 def test_price_change_keeps_search_known(tmp_path: Path):
@@ -979,7 +878,7 @@ def test_price_change_keeps_search_known(tmp_path: Path):
     assert known.has(s)
 
 
-# --- Several chats, supergroup upgrade, "I'm on it" ---
+# --- The Worker link ---
 
 class FakeResponse:
     def __init__(self, ok, data):
@@ -991,159 +890,8 @@ class FakeResponse:
         return self._data
 
 
-def test_deals_go_to_every_chat_with_claim_button(monkeypatch):
-    import flipfinder.telegram as tgm
-    sent = []
-
-    def post(url, json=None, timeout=None):
-        sent.append((url.rsplit("/", 1)[1], json))
-        return FakeResponse(True, {"ok": True, "result": {"message_id": len(sent), "chat": {"id": json["chat_id"]}}})
-    monkeypatch.setattr(tgm.requests, "post", post)
-    tg = tgm.Telegram("TOKEN", "1000001, -100000000002")
-    assert tg.chat_ids == ["1000001", "-100000000002"] and tg.chat_id == "1000001"
-    d = evaluate(item(1, 40), pool([120] * 12), Rules())
-    where = tg.send_deal(d)
-    assert [w["chat"] for w in where] == ["1000001", "-100000000002"] and [w["id"] for w in where] == [1, 2]
-    assert [p["chat_id"] for _, p in sent] == ["1000001", "-100000000002"]
-    assert all(p["reply_markup"]["inline_keyboard"][0][0]["text"] == "I'm on it ✋" for _, p in sent)
-
-
-def test_group_upgraded_to_supergroup_switches_id(monkeypatch):
-    import flipfinder.telegram as tgm
-    sent = []
-
-    def post(url, json=None, timeout=None):
-        sent.append(json["chat_id"])
-        if json["chat_id"] == "-100000000002":
-            return FakeResponse(False, {"ok": False, "error_code": 400, "description": "group chat was upgraded",
-                                        "parameters": {"migrate_to_chat_id": -1001234567890}})
-        return FakeResponse(True, {"ok": True, "result": {}})
-    monkeypatch.setattr(tgm.requests, "post", post)
-    tg = tgm.Telegram("TOKEN", "1000001,-100000000002")
-    assert tg.send_text("hello")
-    assert sent == ["1000001", "-100000000002", "-1001234567890"]          # retried on the new id
-    assert tg.chat_ids == ["1000001", "-1001234567890"]
-    assert tg.migrations == {"-100000000002": "-1001234567890"}
-    from flipfinder.commands import apply_settings
-    cfg = cmd_cfg_with_chat()
-    apply_settings(cfg, {"chat_migrations": tg.migrations})
-    assert cfg.telegram_chat_id == "1000001,-1001234567890"
-
-
-def cmd_cfg_with_chat():
-    from flipfinder.analyzer import Rules as R
-    return type("C", (), {"searches": [], "telegram_chat_id": "1000001,-100000000002", "rules": R(), "budget": 72})()
-
-
-def test_claim_button_shows_who(tmp_path: Path):
-    claim = tap("claim", user=OWNER)                     # older alerts' single "I'm on it" button
-    claim["callback_query"]["from"].update({"first_name": "Marco"})
-    tg, c, cfg, changed = run_cmds(tmp_path, [tap("claim", user=4242), claim])   # 4242 isn't allowed: ignored
-    edit = tg.sent("editMessageReplyMarkup")[0]
-    label = edit["reply_markup"]["inline_keyboard"][0][0]
-    assert label["text"].startswith("✋ Marco is on it") and label["callback_data"] == "claimed"
-    answers = [p["text"] for p in tg.sent("answerCallbackQuery")]
-    assert answers[0] == "It's yours, good luck!"
-    assert not changed                                                      # claims don't touch settings
-
-
-
-# --- Deal lifecycle, pool, votes ---
-
-def _book_with_deal(tmp_path):
-    from flipfinder.dealbook import DealBook
-    book = DealBook(tmp_path / "deals.json")
-    d = evaluate(titled(1, "Boss DS-1 distortion", 25, "Boss"), [titled(10 + i, "Boss DS-1 distortion", 60, "Boss") for i in range(12)],
-                 Rules(min_profit=12, min_roi=35, max_roi=150))
-    book.record(d, "🔥 <b>Boss DS-1 distortion</b>", [{"chat": "111", "id": 7, "photo": False},
-                                                     {"chat": "-100", "id": 8, "photo": True}])
-    return book, d.item.key
-
-
-def run_with_book(tmp_path, book, updates):
-    import os
-    from flipfinder.commands import COMMANDS_VERSION, Commands, load_settings
-    tg = FakeTG(updates)
-    cwd = os.getcwd(); os.chdir(tmp_path)
-    try:
-        s = load_settings(tmp_path / "settings.json"); s["commands_version"] = COMMANDS_VERSION
-        s["allowed_users"] = [555]
-        Commands(tg, cmd_cfg(tmp_path), s, book=book).run()
-    finally:
-        os.chdir(cwd)
-    return tg
-
-
-def test_deal_lifecycle_with_prices_and_pool(tmp_path: Path):
-    book, key = _book_with_deal(tmp_path)
-    book.set_pool(300)
-    claim = tap(f"c:{key}", user=555); claim["callback_query"]["from"]["first_name"] = "Marco"
-    tg = run_with_book(tmp_path, book, [claim, tap(f"b:{key}", user=OWNER + 1)])
-    d = book.data["deals"][key]
-    assert d["status"] == "claimed" and d["who"] == "Marco"
-    edits = tg.sent("editMessageText") + tg.sent("editMessageCaption")
-    assert len(edits) == 2 and "✋ Claimed by Marco" in tg.sent("editMessageText")[0]["text"]
-    assert tg.sent("editMessageCaption")[0]["reply_markup"]["inline_keyboard"][0][0]["text"] == "💸 Bought (Marco)"
-    # a stranger's tap was ignored entirely; now Marco buys it: asked for the price, answers 30
-    tg = run_with_book(tmp_path, book, [tap(f"b:{key}", user=555)])
-    assert "How much did you pay" in tg.sent()[0]["text"] and "Known total" in tg.sent()[0]["text"]
-    assert tg.sent()[0]["reply_markup"]["inline_keyboard"][0][0]["text"].startswith("✅ Use €")
-    tg = run_with_book(tmp_path, book, [msg("abc", user=555), msg("30", user=555)])
-    assert "need just the amount" in tg.sent()[0]["text"]
-    assert "💸 Bought for €30.00 · pool now €270.00" in tg.sent()[1]["text"]
-    assert d["status"] == "bought" and d["paid"] == 30 and book.pool == 270
-    tg = run_with_book(tmp_path, book, [tap(f"l:{key}", user=555), tap(f"s:{key}", user=555), msg("75", user=555)])
-    assert d["status"] == "sold" and d["sold_for"] == 75 and book.pool == 345
-    assert "✅ Sold for €75.00, profit €45.00 · pool now €345.00" in tg.sent()[-1]["text"]
-    assert "✅ Sold by Marco · paid €30.00 · sold for €75.00 · profit €45.00" in book.full_text(key)
-    assert book.keyboard(key) == {"inline_keyboard": []}
-    p = book.profit()
-    assert p["total"] == 45 and p["month"] == 45 and p["people"] == {"Marco": 45} and p["sold"] == 1
-    saved = json.loads((tmp_path / "deals.json").read_text(encoding="utf-8"))
-    assert saved["deals"][key]["status"] == "sold"
-
-
-def test_only_claimer_or_owner_advances_and_strangers_ignored(tmp_path: Path):
-    book, key = _book_with_deal(tmp_path)
-    tg = run_with_book(tmp_path, book, [tap(f"c:{key}", user=555), tap(f"b:{key}", user=777),
-                                        tap(f"c:{key}", user=OWNER)])
-    answers = [p["text"] for p in tg.sent("answerCallbackQuery")]
-    assert answers == ["It's yours, good luck!", "user 555 already has this one"]   # 777 ignored
-    tg = run_with_book(tmp_path, book, [tap(f"b:{key}", user=OWNER)])                # the owner may step in
-    assert "How much did you pay" in tg.sent()[0]["text"]
-
-
-def test_votes_feedback_and_seller_message(tmp_path: Path):
-    book, key = _book_with_deal(tmp_path)
-    tg = run_with_book(tmp_path, book, [tap(f"up:{key}", user=555), tap(f"dn:{key}", user=OWNER),
-                                        tap(f"m:{key}", user=555)])
-    kb = book.keyboard(key)["inline_keyboard"][1]
-    assert [b["text"] for b in kb] == ["👍 1", "👎 1", "📩 Message seller"]
-    fb = book.data["feedback"]
-    assert len(fb) == 1 and fb[0]["title"] == "Boss DS-1 distortion" and fb[0]["url"].endswith("/items/1")
-    seller = tg.sent()[0]["text"]
-    assert "Ciao! L'articolo" in seller and "ancora disponibile" in seller and "video" in seller and "<code>" in seller
-
-
-def test_stock_profit_pool_commands_and_budget_from_pool(tmp_path: Path):
-    book, key = _book_with_deal(tmp_path)
-    book.data["deals"][key].update(status="bought", who="Marco", who_id=555, paid=30, bought_at=1e10)
-    tg = run_with_book(tmp_path, book, [msg("/pool"), msg("/pool abc"), msg("/pool 200"), msg("/stock"), msg("/profit")])
-    r = [p["text"] for p in tg.sent()]
-    assert "No pool set" in r[0] and "must be a number" in r[1] and "Pool set to €200.00" in r[2]
-    assert "Boss DS-1 distortion" in r[3] and "Marco" in r[3] and "€30.00" in r[3]
-    assert "Total: €0.00 (0 sold)" in r[4]
-    from flipfinder.commands import set_budget
-    cfg = cmd_cfg(tmp_path)
-    set_budget(cfg, book.pool)
-    assert book.pool == 170 and cfg.budget == 170   # bought after the pool started: 200 - 30
-    from flipfinder.commands import effective_budget
-    assert effective_budget(72, 170) == 72 and effective_budget(72, 50) == 50 and effective_budget(72, None) == 72
-
-
-
 def test_budget_follows_the_pool_up_and_down(tmp_path: Path):
-    from flipfinder.commands import apply_settings, set_budget
+    from flipfinder.settings import apply_settings, set_budget
     cfg = cmd_cfg(tmp_path)
     ds1 = next(s for s in cfg.searches if s.query == "boss ds 1")
     assert ds1.price_to == 72 and ds1.price_to_is_budget
@@ -1157,40 +905,6 @@ def test_budget_follows_the_pool_up_and_down(tmp_path: Path):
     assert ds1.price_to == 40                                  # set by hand: kept
     set_budget(cfg, 30)
     assert ds1.price_to == 30                                  # but never above the budget
-
-
-
-def test_bought_suggests_known_cost(tmp_path: Path):
-    book, key = _book_with_deal(tmp_path)
-    cost = book.data["deals"][key]["cost"]
-    tg = run_with_book(tmp_path, book, [tap(f"c:{key}", user=555), tap(f"b:{key}", user=555)])
-    q = tg.sent()[0]
-    assert f"€{cost:,.2f}" in q["text"] and q["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == f"pay:{key}"
-    tg = run_with_book(tmp_path, book, [tap(f"pay:{key}", user=OWNER)])          # not the owner's question
-    assert tg.sent("answerCallbackQuery")[0]["text"].startswith("That's for")
-    tg = run_with_book(tmp_path, book, [tap(f"pay:{key}", user=555)])
-    d = book.data["deals"][key]
-    assert d["status"] == "bought" and d["paid"] == cost
-    assert f"💸 Bought for €{cost:,.2f}" in tg.sent()[-1]["text"]
-
-
-def test_bought_typed_amount_overrides_suggestion(tmp_path: Path):
-    book, key = _book_with_deal(tmp_path)
-    run_with_book(tmp_path, book, [tap(f"c:{key}", user=555), tap(f"b:{key}", user=555)])
-    run_with_book(tmp_path, book, [msg("27,50", user=555)])
-    assert book.data["deals"][key]["paid"] == 27.5
-
-
-def test_pool_shows_both_and_limit_is_the_smaller(tmp_path: Path):
-    book, key = _book_with_deal(tmp_path)
-    tg = run_with_book(tmp_path, book, [msg("/pool"), msg("/pool 50"), msg("/pool"), msg("/budget 40"), msg("/pool")])
-    r = [p["text"] for p in tg.sent()]
-    assert "No pool set" in r[0] and "Budget-mode limit: €72.00" in r[0]
-    assert "Budget-mode limit: €50.00" in r[1]
-    assert "Pool: €50.00" in r[2] and "/budget: €72.00" in r[2] and "<b>€50.00</b>" in r[2]
-    assert "Budget is now €40" in r[3]
-    assert "/budget: €40.00" in r[4] and "<b>€40.00</b>" in r[4]
-
 
 
 def test_first_ebay_pass_of_a_search_is_silent(tmp_path: Path):
@@ -1210,195 +924,7 @@ def test_first_ebay_pass_of_a_search_is_silent(tmp_path: Path):
     assert json.loads((tmp_path / "ebay.json").read_text())["seeded"]
 
 
-def test_workflow_uses_latest_main_and_keeps_own_settings():
-    import yaml
-    wf = yaml.safe_load(Path(".github/workflows/flipfinder.yml").read_text(encoding="utf-8"))
-    steps = wf["jobs"]["scan"]["steps"]
-    assert steps[0]["uses"].startswith("actions/checkout") and steps[0]["with"]["ref"] == "main"
-    save = next(x for x in steps if x.get("name", "").startswith("Save Telegram"))
-    assert "-X theirs" in save["run"] and "deals.json" in save["run"]
-    assert wf["permissions"]["contents"] == "write"
-
-
 # --- Group features, part 2 ---
-
-def test_quiet_hours_italy_time():
-    from datetime import datetime, timezone
-    from flipfinder.group import ROME, in_quiet_hours
-    at = lambda h, m: datetime(2026, 10, 7, h, m, tzinfo=ROME)   # noqa: E731
-    assert not in_quiet_hours(at(23, 59)) and in_quiet_hours(at(0, 0))
-    assert in_quiet_hours(at(7, 29)) and not in_quiet_hours(at(7, 30))
-    assert in_quiet_hours(datetime(2026, 1, 15, 6, 0, tzinfo=timezone.utc))      # 07:00 in Rome (winter)
-    assert not in_quiet_hours(datetime(2026, 7, 15, 6, 0, tzinfo=timezone.utc))  # 08:00 in Rome (summer)
-
-
-def test_reminder_schedule(tmp_path: Path):
-    from flipfinder.group import due_reminders
-    book, key = _book_with_deal(tmp_path)
-    d = book.data["deals"][key]
-    t0 = 1_000_000.0
-    d.update(status="claimed", who="Marco", who_id=555, claimed_at=t0)
-    assert due_reminders(book, t0 + 23 * 3600) == []
-    assert due_reminders(book, t0 + 25 * 3600) == [("ping", key)]
-    d["pinged_at"] = t0 + 25 * 3600
-    assert due_reminders(book, t0 + 30 * 3600) == []                    # pinged once
-    assert due_reminders(book, t0 + 49 * 3600) == [("release", key)]
-    d["kept_at"] = t0 + 30 * 3600                                       # "keep it" restarts the clock
-    assert due_reminders(book, t0 + 49 * 3600) == []
-    d.update(status="bought", bought_at=t0)
-    assert due_reminders(book, t0 + 2 * 86400) == [] and due_reminders(book, t0 + 3 * 86400) == [("list", key)]
-    d.update(status="listed", listed_at=t0)
-    assert due_reminders(book, t0 + 13 * 86400) == [] and due_reminders(book, t0 + 14 * 86400) == [("cut", key)]
-    d["cut_at"] = t0 + 14 * 86400
-    assert due_reminders(book, t0 + 18 * 86400) == [] and due_reminders(book, t0 + 21 * 86400) == [("cut", key)]
-
-
-def run_reminders(tmp_path, book, now, value=None, updates=()):
-    import os
-    from flipfinder.commands import COMMANDS_VERSION, Commands, load_settings
-    tg = FakeTG(list(updates))
-    cwd = os.getcwd()
-    os.chdir(tmp_path)
-    try:
-        s = load_settings(tmp_path / "settings.json")
-        s["commands_version"] = COMMANDS_VERSION
-        s["allowed_users"] = [555]
-        c = Commands(tg, cmd_cfg(tmp_path), s, book=book, value_fn=lambda d: value)
-        c.run()
-        c.reminders(now)
-    finally:
-        os.chdir(cwd)
-    return tg
-
-
-def test_reminders_ping_keep_release_nudge_and_cut(tmp_path: Path):
-    import time as _t
-    book, key = _book_with_deal(tmp_path)
-    d = book.data["deals"][key]
-    now = _t.time()
-    d.update(status="claimed", who="Marco", who_id=555, claimed_at=now - 25 * 3600)
-    tg = run_reminders(tmp_path, book, now)
-    ping = tg.sent()[0]
-    assert 'href="tg://user?id=555">Marco</a>, still on it?' in ping["text"]
-    assert [b["callback_data"] for b in ping["reply_markup"]["inline_keyboard"][0]] == [f"keep:{key}", f"rel:{key}"]
-    run_reminders(tmp_path, book, now, updates=[tap(f"keep:{key}", user=777), tap(f"keep:{key}", user=555)])
-    assert d.get("kept_at") and d["status"] == "claimed"
-    d.update(claimed_at=now - 50 * 3600, kept_at=now - 49 * 3600)   # 49 h since the last "keep it"
-    tg = run_reminders(tmp_path, book, now)
-    assert d["status"] == "new" and "who" not in d
-    assert "is free again" in tg.sent()[0]["text"] and tg.sent("editMessageText")       # deal message updated
-    d.update(status="bought", who="Marco", who_id=555, paid=30, bought_at=now - 3 * 86400)
-    tg = run_reminders(tmp_path, book, now)
-    assert "Time to list it?" in tg.sent()[0]["text"] and f"/sell {d['n']}" in tg.sent()[0]["text"]
-    d.update(status="listed", listed_at=now - 15 * 86400)
-    tg = run_reminders(tmp_path, book, now, value=52.0)
-    cut = tg.sent()[0]["text"]
-    assert "listed for 15 days" in cut and "€52" in cut and "<b>€50</b>" in cut
-
-
-def topic_msg(text, thread, created_name=None, user=OWNER):
-    m = msg(text, user=user, chat=-100444)
-    m["message"].update(message_thread_id=thread, is_topic_message=True)
-    if created_name:
-        m["message"]["reply_to_message"] = {"message_id": thread, "forum_topic_created": {"name": created_name}}
-    return m
-
-
-def test_topics_learned_from_messages_and_topic_command(tmp_path: Path):
-    tg, c, cfg, changed = run_cmds(tmp_path, [
-        topic_msg("/topic", 11, "🎸 Guitars"),
-        topic_msg("/help", 22, "📱 Electronics"),       # any command in a topic teaches its id
-        topic_msg("/topic summary", 44, "Riepilogo"),     # a topic with another name, named explicitly
-        msg("/topic"),                                     # not in a topic
-    ])
-    assert c.settings["topics"] == {"guitars": 11, "electronics": 22, "summary": 44}
-    texts = [p["text"] for m, p in tg.calls if m == "sendMessage"]
-    assert any("This topic is now <b>Guitars</b>" in t for t in texts)
-    assert any("Send /topic inside a group topic" in t for t in texts)
-    assert changed
-
-
-def test_send_to_uses_topic_in_group_only_and_falls_back(monkeypatch):
-    import flipfinder.telegram as tgm
-    sent = []
-
-    def post(url, json=None, timeout=None):
-        sent.append(dict(json))
-        if json.get("message_thread_id") == 99:
-            return FakeResponse(False, {"ok": False, "description": "Bad Request: message thread not found"})
-        return FakeResponse(True, {"ok": True, "result": {"message_id": 1, "chat": {"id": json["chat_id"]}}})
-    monkeypatch.setattr(tgm.requests, "post", post)
-    tg = tgm.Telegram("TOKEN", "1000001,-100444")
-    tg.topics = {"guitars": 11, "summary": 99}
-    tg.send_text("deal", topic="guitars")
-    assert "message_thread_id" not in sent[0] and sent[1]["message_thread_id"] == 11
-    sent.clear()
-    assert tg.send_text("summary", ["-100444"], topic="summary")
-    assert sent[0]["message_thread_id"] == 99 and "message_thread_id" not in sent[1]   # retried in General
-
-
-def test_sell_listing_by_number_or_name_in_three_languages(tmp_path: Path):
-    book, key = _book_with_deal(tmp_path)
-    d = book.data["deals"][key]
-    d.update(status="bought", who="Marco", who_id=555, paid=30, condition="Ottime",
-             title="🔥🔥 BOSS DS-1 Distortion pedale chitarra originale made in Taiwan anni 90 perfetto")
-    tg = run_with_book(tmp_path, book, [msg(f"/sell {d['n']}"), msg("/sell boss ds-1 en"), msg("/sell ds-1 uk"),
-                                        msg("/sell zoom g1x")])
-    it, en, uk, missing = [p["text"] for p in tg.sent()]
-    title = it.split("<code>")[1].split("</code>")[0]
-    assert len(title) <= 60 and "🔥" not in title and title.startswith("BOSS DS-1 Distortion")
-    assert "Condizioni: Ottime" in it and "Prezzo consigliato: <b>€60</b>" in it and "vendita veloce" in it
-    assert "Condition: very good" in en and "Suggested price" in en
-    assert "Стан: дуже добрий" in uk
-    assert "No deal matching" in missing
-
-
-def test_weekly_report_once_on_sunday_evening(tmp_path: Path):
-    from datetime import datetime
-    from flipfinder.group import ROME, weekly_due, weekly_report
-    book, key = _book_with_deal(tmp_path)
-    sun = datetime(2026, 10, 11, 20, 5, tzinfo=ROME)
-    t = sun.timestamp()
-    d = book.data["deals"][key]
-    d.update(status="sold", who="Marco", who_id=555, paid=30, sold_for=75, sent=t - 86400,
-             claimed_at=t - 80000, bought_at=t - 70000, sold_at=t - 3600, query="boss ds 1")
-    book.data["deals"]["vinted:2"] = {"n": 2, "title": "Big Muff", "url": "u2", "status": "new", "sent": t - 5000,
-                                      "query": "big muff", "votes": {}, "messages": [], "text": ""}
-    book.data["feedback"] = [{"key": "vinted:2", "at": t - 4000}, {"key": "vinted:2", "at": t - 3000},
-                             {"key": key, "at": t - 2000}]
-    assert not weekly_due(book, datetime(2026, 10, 11, 19, 59, tzinfo=ROME))
-    assert weekly_due(book, sun) and not weekly_due(book, datetime(2026, 10, 12, 20, 5, tzinfo=ROME))
-    text = weekly_report(book, sun)
-    assert "Deals found: 2 · claimed: 1 · bought: 1 · sold: 1" in text
-    assert "Marco €45.00" in text and "Best flip" in text and "€30.00 → €75.00 (+€45.00)" in text
-    assert "Most down-voted search: <b>big muff</b> (2×)" in text
-    book.data["last_weekly"] = sun.date().isoformat()
-    assert not weekly_due(book, sun)
-
-
-def test_quiet_queue_sends_best_first_with_limit(tmp_path: Path):
-    from flipfinder.dealbook import DealBook
-    book = DealBook(tmp_path / "deals.json")
-    pool_ = [titled(100 + i, "Boss DS-1", 100, "Boss") for i in range(12)]
-    for i, price in enumerate([45, 30, 38], 1):
-        book.queue(evaluate(titled(i, "Boss DS-1", price, "Boss"), pool_, Rules()), "alert")
-    order = [book.data["deals"][k]["item"]["price"] for k in book.take_queue(2)]
-    assert order == [30, 38]                                            # best (most profit) first
-    assert len(book.data["queue"]) == 1                                 # the rest waits for the next run
-    assert all(d["messages"] == [] and d["text"].startswith("alert\n🔢 #") for d in book.data["deals"].values())
-
-
-
-def test_old_deals_get_numbers_on_load(tmp_path: Path):
-    from flipfinder.dealbook import DealBook
-    (tmp_path / "deals.json").write_text(json.dumps({"deals": {
-        "vinted:2": {"title": "B", "url": "u", "status": "new", "sent": 20, "votes": {}, "messages": [], "text": ""},
-        "vinted:1": {"title": "A", "url": "u", "status": "claimed", "sent": 10, "votes": {}, "messages": [], "text": ""},
-    }}), encoding="utf-8")
-    b = DealBook(tmp_path / "deals.json")
-    assert b.data["deals"]["vinted:1"]["n"] == 1 and b.data["deals"]["vinted:2"]["n"] == 2 and b.data["next_n"] == 2
-    assert b.find("1")[0] == "vinted:1" and b.changed
-
 
 
 def test_budget_and_guitar_searches_take_turns(tmp_path: Path, monkeypatch):
@@ -1432,31 +958,104 @@ def test_gitignore_keeps_outputs_out():
 
 
 
-def test_topic_setup_pins_intros_and_intro_edits_them(tmp_path: Path):
-    from flipfinder.group import INTROS
-    tg, c, cfg, changed = run_cmds(tmp_path, [topic_msg("/topic", 11, "🎸 Guitars")])
-    posted = c.settings["intros"]["-100444"]
-    sends = tg.sent()
-    assert [p["text"] for p in sends[1:]] == [INTROS["guitars"], INTROS["general"]]
-    assert sends[1]["message_thread_id"] == 11 and "message_thread_id" not in sends[2]
-    assert [p["message_id"] for p in tg.sent("pinChatMessage")] == [posted["guitars"]["id"], posted["general"]["id"]]
-    s = c.settings
-    tg, c, cfg, changed = run_cmds(tmp_path, [topic_msg("/topic summary", 44), msg("/intro", chat=-100444),
-                                              msg("/intro", user=555, chat=-100444)], settings=s)
-    texts = [p["text"] for p in tg.sent()]
-    assert texts.count(INTROS["summary"]) == 1                   # new topic: posted once, then left alone
-    assert INTROS["guitars"] not in texts and INTROS["general"] not in texts   # already there: not posted again
-    assert "Intros pinned: Guitars, Summary, General" in texts[-1]
-    assert "Not set up yet: Electronics, Budget" in texts[-1]
-    assert len(tg.sent("pinChatMessage")) == 4                   # 1 for Summary + /intro re-pins all 3
-    s["intros"]["-100444"]["guitars"]["text"] = "old intro"      # intro text changed since: edited in place
-    tg, c, cfg, changed = run_cmds(tmp_path, [msg("/intro", chat=-100444)], settings=s)
-    edits = tg.sent("editMessageText")
-    assert [e["text"] for e in edits] == [INTROS["guitars"]] and not tg.sent()[:-1]
+
+# --- One run end to end, with the Worker faked ---
+
+class FakeCloud:
+    def __init__(self, state):
+        self._state, self.calls = state, []
+
+    def state(self):
+        self.calls.append(("state",))
+        return self._state
+
+    def put_catalog(self, cfg):
+        from flipfinder.cloud import catalog
+        self.calls.append(("catalog", catalog(cfg)))
+
+    def send_deal(self, deal, text):
+        self.calls.append(("deal", deal.item.key, text))
+        return "sent"
+
+    def report_run(self, status=None, values=None, notify=None):
+        self.calls.append(("run", status, values, notify))
+        return {"notified": [True] * len(notify or []), "flushed": 2}
 
 
-def test_intro_is_owner_only_and_hidden_from_help(tmp_path: Path):
-    tg, c, cfg, changed = run_cmds(tmp_path, [msg("/intro", user=555), msg("/help", user=555)],
-                                   settings={"allowed_users": [555]})
-    texts = [p["text"] for p in tg.sent()]
-    assert "Only the owner can use /intro" in texts[0] and "/intro" not in texts[1] and "/allow" not in texts[1]
+def test_a_run_uses_worker_settings_and_hands_over_deals(tmp_path: Path, monkeypatch):
+    import main as main_mod
+    (tmp_path / "c.yaml").write_text(f"""
+seen_file: {(tmp_path / 'data' / 'seen.json').as_posix()}
+subito: {{enabled: true}}
+budget: 72
+searches:
+  - query: boss katana
+    price_from: 80
+    price_to: 300
+  - query: boss ds 1
+    budget: true
+    price_from: 15
+""", encoding="utf-8")
+    deal = evaluate(titled(1, "Boss DS-1 distortion", 25, "Boss"),
+                    [titled(10 + i, "Boss DS-1 distortion", 60, "Boss") for i in range(12)],
+                    Rules(min_profit=12, min_roi=35, max_roi=150))
+    seen = {}
+
+    class FakeScanner:
+        def __init__(self, cfg):
+            seen["cfg"] = cfg
+            self.cfg, self.failed, self.near_misses, self.checked, self.pools, self.ebay = cfg, False, [], 40, None, None
+
+        def scan(self):
+            return [deal]
+
+    cloud = FakeCloud({"settings": {"disabled": ["boss katana"]}, "area": {**AREA, "radius_km": 20},
+                       "pool": 50.0, "open": []})
+    monkeypatch.setattr(main_mod, "cloud_from_env", lambda: cloud)
+    monkeypatch.setattr(main_mod, "Scanner", FakeScanner)
+    monkeypatch.setattr(main_mod.RunStats, "summary_due", lambda self: False)   # not 9:00 yet
+    monkeypatch.setattr(sys, "argv", ["main.py", "--once", "--config", str(tmp_path / "c.yaml")])
+    assert main_mod.main() == 0
+    cfg = seen["cfg"]
+    assert [s.enabled for s in cfg.searches] == [False, True]               # /categories off-switch applied
+    assert cfg.subito.enabled and cfg.subito.radius_km == 20                 # private area from the Worker
+    assert cfg.budget == 50                                                  # the pool caps the budget
+    kinds = [c[0] for c in cloud.calls]
+    assert kinds == ["state", "catalog", "deal", "run"]
+    catalog_sent = cloud.calls[1][1]
+    assert all("enabled" not in s for s in catalog_sent["searches"])         # config.yaml as is
+    assert cloud.calls[2][1] == deal.item.key and "Boss DS-1" in cloud.calls[2][2]
+    status = cloud.calls[3][1]
+    assert status["runs"] == 1 and status["checked"] == 40 and status["deals_sent"] == 1
+    stats = json.loads((tmp_path / "data" / "stats.json").read_text())
+    assert stats["deals_sent"] == 3                                          # + 2 sent from the overnight queue
+
+
+def test_worker_errors_never_print_the_url_or_key(caplog, monkeypatch):
+    import requests
+    from flipfinder.cloud import Cloud
+    c = Cloud("https://secret-worker.example.workers.dev", "KEY123")
+
+    def boom(*a, **k):
+        raise requests.ConnectionError("https://secret-worker.example.workers.dev/api/state KEY123")
+    monkeypatch.setattr(c.session, "request", boom)
+    with caplog.at_level("INFO"):
+        assert c.state() is None
+        assert c.report_run(notify=[{"text": "x"}]) == {}
+    assert "secret-worker" not in caplog.text and "KEY123" not in caplog.text
+    assert "ConnectionError" in caplog.text
+
+
+def test_workflow_has_no_telegram_secrets_and_cannot_push():
+    import yaml
+    text = Path(".github/workflows/flipfinder.yml").read_text(encoding="utf-8")
+    wf = yaml.safe_load(text)
+    assert wf["permissions"]["contents"] == "read"
+    assert "TELEGRAM" not in text and "git push" not in text and "deals.json" not in text
+    scan = next(x for x in wf["jobs"]["scan"]["steps"] if x.get("name") == "Scan")
+    assert set(scan["env"]) >= {"FLIPFINDER_API_URL", "FLIPFINDER_API_KEY"}
+
+
+def test_private_files_are_never_committed():
+    ignored = Path(".gitignore").read_text(encoding="utf-8").splitlines()
+    assert {"settings.json", "deals.json", ".env"} <= set(ignored)

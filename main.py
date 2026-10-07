@@ -3,8 +3,12 @@ flipFinder entry point.
 
   python main.py                 run forever, scan every interval_minutes
   python main.py --once          one scan then exit (used by GitHub Actions)
-  python main.py --dry-run       print deals in the terminal, don't send to Telegram
-  python main.py --test-telegram send a sample message to check your bot works
+  python main.py --dry-run       print deals in the terminal, don't send them
+  python main.py --test-telegram send a sample message to check the Worker and the bot work
+
+Settings changed from Telegram, deal tracking and the home area live in the Cloudflare
+Worker's private storage (FLIPFINDER_API_URL / FLIPFINDER_API_KEY); the Worker also sends
+every Telegram message. This program only searches.
 """
 
 from __future__ import annotations
@@ -12,19 +16,17 @@ from __future__ import annotations
 import argparse
 import html
 import logging
+import os
 import sys
 import time
 
 from flipfinder import config as config_mod
-from flipfinder.commands import OWNER_ID, Commands, effective_budget, load_settings, save_settings, set_budget
-from flipfinder.analyzer import market_value
-from flipfinder.dealbook import DealBook
-from flipfinder.group import TOPIC_FOR_GROUP, in_quiet_hours, now_rome, weekly_due, weekly_report
-from flipfinder.scanner import _key
-from flipfinder.analyzer import Deal
+from flipfinder.analyzer import Deal, market_value
+from flipfinder.cloud import Cloud
 from flipfinder.health import FAIL_ALERT_AFTER, RunStats, miss_record
-from flipfinder.scanner import Scanner, describe_miss
-from flipfinder.telegram import Telegram, format_deal
+from flipfinder.scanner import Scanner, _key, describe_miss
+from flipfinder.settings import apply_area, apply_settings, effective_budget, set_budget
+from flipfinder.telegram import format_deal
 from flipfinder.vinted import Item
 
 MAX_ALERTS_PER_SCAN = 15
@@ -45,8 +47,22 @@ def explain(deal: Deal) -> str:
     return "\n".join(lines)
 
 
+def cloud_from_env() -> Cloud | None:
+    url, key = os.getenv("FLIPFINDER_API_URL", ""), os.getenv("FLIPFINDER_API_KEY", "")
+    return Cloud(url, key) if url and key else None
+
+
+def prepare(cfg, state: dict | None):
+    """config.yaml + Telegram settings + the private home area + the pool's cap on the budget."""
+    state = state or {}
+    apply_settings(cfg, state.get("settings") or {})
+    apply_area(cfg, state.get("area"))
+    set_budget(cfg, effective_budget(cfg.budget_setting, state.get("pool")))
+    return cfg
+
+
 def main() -> int:
-    p = argparse.ArgumentParser(description="flipFinder - Vinted flip alerts")
+    p = argparse.ArgumentParser(description="flipFinder - flip alerts")
     p.add_argument("--config", default="config.yaml")
     p.add_argument("--once", action="store_true")
     p.add_argument("--dry-run", action="store_true")
@@ -56,45 +72,34 @@ def main() -> int:
 
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
-    cfg = config_mod.load(args.config)
-
-    tg = None
-    if not args.dry_run:
-        if not (cfg.telegram_token and cfg.telegram_chat_id):
-            print("Missing TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID. Put them in .env "
-                  "or use --dry-run.", file=sys.stderr)
-            return 1
-        tg = Telegram(cfg.telegram_token, cfg.telegram_chat_id)
+    config_mod.load_dotenv()
+    cloud = cloud_from_env()
+    if cloud is None and not args.dry_run:
+        print("Missing FLIPFINDER_API_URL / FLIPFINDER_API_KEY (the Cloudflare Worker). Put them in .env "
+              "or use --dry-run.", file=sys.stderr)
+        return 1
 
     if args.test_telegram:
-        if tg is None:
+        if args.dry_run:
             print(format_deal(sample_deal()))
             return 0
-        ok = tg.send_deal(sample_deal())
+        res = cloud.report_run(notify=[{"text": format_deal(sample_deal()), "topic": "summary"}])
+        ok = any(res.get("notified", []))
         print("Sent, check Telegram." if ok else "Failed, see the error above.")
         return 0 if ok else 1
 
-    scanner = Scanner(cfg)
-    # dry runs don't touch the stats, so testing locally doesn't skew the daily summary
-    stats = RunStats(cfg.seen_file.parent / "stats.json") if tg else None
-    book = DealBook() if tg else None
+    stats = None if args.dry_run else RunStats(config_mod.load(args.config).seen_file.parent / "stats.json")
+    catalog_sent = False
     while True:
-        if tg:
-            # Telegram commands (settings.json) first, so this scan already uses them
-            try:
-                settings = load_settings()
-                tg.topics = {k: int(v) for k, v in settings.get("topics", {}).items()}
-                cmds = Commands(tg, cfg, settings, cfg.seen_file.parent / "stats.json", book,
-                                value_fn=lambda d: current_value(d, cfg, scanner))
-                changed = cmds.run()
-                cmds.reminders()   # 24 h / 48 h claims, unlisted buys, unsold listings
-                if changed:
-                    cfg = config_mod.load(args.config)
-                    scanner = Scanner(cfg)
-            except Exception:
-                logging.exception("Telegram commands failed")
-            # budget mode: the /budget value, but never more than the shared pool
-            set_budget(cfg, effective_budget(cfg.budget_setting, book.pool))
+        cfg = config_mod.load(args.config)
+        state = cloud.state() if cloud else None
+        if cloud and not args.dry_run and not catalog_sent:
+            cloud.put_catalog(cfg)           # before Telegram settings: the Worker applies them itself
+            catalog_sent = True
+        if cloud and state is None:
+            logging.warning("No settings from the Worker this run: config.yaml only, Subito off")
+        prepare(cfg, state)
+        scanner = Scanner(cfg)
         try:
             deals = scanner.scan()
             ok = not scanner.failed
@@ -103,50 +108,30 @@ def main() -> int:
             logging.exception("Scan crashed")
             deals, ok, error = [], False, f"the scan crashed: {type(e).__name__}: {e}"
         logging.info("Found %d deal(s)", len(deals))
-        sent = 0
-        quiet = bool(tg) and in_quiet_hours()
-        if tg and not quiet:
-            # deals found overnight, best first
-            for key in book.take_queue(MAX_ALERTS_PER_SCAN):
-                d = book.data["deals"][key]
-                if d["status"] == "new":
-                    where = tg.send_alert(d["text"], d.get("photo", ""), book.keyboard(key),
-                                          TOPIC_FOR_GROUP.get(d.get("group", "")))
-                    d["messages"] += where
-                    sent += bool(where)
+        sent = queued = 0
         for deal in deals[:MAX_ALERTS_PER_SCAN]:
-            if tg and quiet:
-                book.queue(deal, format_deal(deal))   # 00:00-07:30: sent at 07:30
-            elif tg:
-                text = book.record(deal, format_deal(deal), [])
-                where = tg.send_deal(deal, book.keyboard(deal.item.key), text, TOPIC_FOR_GROUP.get(deal.group))
-                book.record(deal, text, where)
-                sent += bool(where)
-            else:
+            if args.dry_run:
                 print("\n" + format_deal(deal) + "\n" + explain(deal) + "\n")
-        if quiet and deals:
-            logging.info("Quiet hours: %d deal(s) queued for 07:30", min(len(deals), MAX_ALERTS_PER_SCAN))
-        if stats is None and scanner.near_misses:
+                continue
+            result = cloud.send_deal(deal, format_deal(deal))
+            sent += result == "sent"
+            queued += result == "queued"
+        if queued:
+            logging.info("Quiet hours: %d deal(s) queued for 07:30", queued)
+        if args.dry_run and scanner.near_misses:
             print("Closest near misses:")
             for query, m in scanner.near_misses[:5]:
                 print("  " + describe_miss(query, m))
         if stats is not None:
-            report(stats, tg, ok, error, scanner, sent)
-        if book is not None and weekly_due(book):
-            if tg.send_text(weekly_report(book), topic="summary"):
-                book.data["last_weekly"] = now_rome().date().isoformat()
-                book.changed = True
-        if tg and tg.migrations:
-            remember_migrations(tg)
-        if book:
-            book.save()
+            values = {d["key"]: current_value(d, cfg, scanner) for d in (state or {}).get("open", [])}
+            report(stats, cloud, ok, error, scanner, sent, {k: v for k, v in values.items() if v is not None})
         if args.once:
             return 0 if ok else 1
         time.sleep(cfg.interval_minutes * 60)
 
 
 def current_value(d: dict, cfg, scanner: Scanner) -> float | None:
-    """Market value of a recorded deal from the price pools we already have (no new requests)."""
+    """Market value of something we own, from the price pools we already have (no new requests)."""
     s = next((x for x in cfg.searches if x.query == d.get("query")), None)
     if s is None or not d.get("item"):
         return None
@@ -161,33 +146,26 @@ def current_value(d: dict, cfg, scanner: Scanner) -> float | None:
     return value
 
 
-def remember_migrations(tg: Telegram):
-    """A group became a supergroup: keep its new id (settings.json) and tell the owner."""
-    settings = load_settings()
-    settings.setdefault("chat_migrations", {}).update(tg.migrations)
-    save_settings(settings)
-    for old, new in tg.migrations.items():
-        tg.send_text(f"ℹ️ Your Telegram group was upgraded to a supergroup, so its chat id changed from "
-                     f"<code>{old}</code> to <code>{new}</code>. flipFinder switched to the new one "
-                     f"(saved in settings.json); update TELEGRAM_CHAT_ID when convenient.", [str(OWNER_ID)])
-    tg.migrations.clear()
-
-
-def report(stats: RunStats, tg: Telegram, ok: bool, error: str, scanner: Scanner, sent: int):
-    """Failure alerts and the daily summary."""
+def report(stats: RunStats, cloud: Cloud, ok: bool, error: str, scanner: Scanner, sent: int, values: dict):
+    """Failure alerts and the daily summary (posted in Summary by the Worker), and /status numbers."""
+    notify = []
     if ok:
         streak = stats.record_success()
         if streak:
-            tg.send_text(f"✅ flipFinder is working again after {streak} failed runs.", topic="summary")
+            notify.append(f"✅ flipFinder is working again after {streak} failed runs.")
         best = scanner.near_misses[0] if scanner.near_misses else None
         stats.record_run(scanner.checked, sent, miss_record(*best) if best else None)
     elif stats.record_failure():
-        tg.send_text(f"⚠️ <b>flipFinder: the last {FAIL_ALERT_AFTER} runs failed.</b>\n"
-                     f"Latest: {html.escape(error)}\n"
-                     "You'll get a message when it works again.", topic="summary")
-    if stats.summary_due():
-        if tg.send_text(stats.summary_text(scanner.cfg.rules), topic="summary"):
-            stats.mark_summary_sent()
+        notify.append(f"⚠️ <b>flipFinder: the last {FAIL_ALERT_AFTER} runs failed.</b>\n"
+                      f"Latest: {html.escape(error)}\nYou'll get a message when it works again.")
+    summary = stats.summary_text(scanner.cfg.rules) if stats.summary_due() else None
+    d = stats.data
+    status = {"last_run": d.get("last_run"), "runs": d["runs"], "checked": d["checked"], "deals_sent": d["deals_sent"]}
+    res = cloud.report_run(status, values, [{"text": t, "topic": "summary"} for t in notify + [summary] if t])
+    if summary and (res.get("notified") or [False])[-1]:
+        stats.mark_summary_sent()
+    # deals the Worker sent from the overnight queue count towards the next summary
+    stats.data["deals_sent"] += int(res.get("flushed") or 0)
     stats.save()
 
 

@@ -19,12 +19,8 @@ ebay:
 # radius_km of center. Market value uses Italy-wide Subito listings plus Vinted and eBay.
 subito:
   enabled: true
-  region: 5                  # Home region (Subito's id)
-  province: 2                # Hometown
-  center: [44.5000, 11.3000] # Hometown
-  radius_km: 30
-  travel_cost: 5             # going to pick it up
-  town_travel_costs: {Southtown: 8, Westtown: 8}
+  # the home area (region, province, center, radius, travel costs) is private: it lives in the
+  # Worker's storage and each run reads it from there
   pool_refresh_minutes: 180
 
 # Budget mode (searches with `budget: true`): what you can spend per item, all in

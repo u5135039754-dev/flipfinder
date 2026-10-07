@@ -101,12 +101,12 @@ def item_from_subito(ad: dict) -> Item | None:
 
 @dataclass
 class SubitoClient:
-    region: int = 5                       # Home region
-    province: int = 2                     # Hometown
-    center: tuple[float, float] = (44.5000, 11.3000)   # Hometown
+    region: int                           # Subito ids of the home area (private, from the Worker)
+    province: int
+    center: tuple[float, float]           # home coordinates
     radius_km: float = 30
     travel_cost: float = 5.0
-    town_travel_costs: dict = field(default_factory=dict)   # e.g. {"Southtown": 8}
+    town_travel_costs: dict = field(default_factory=dict)   # e.g. {"Town": 8}
     request_delay: float = 2.0
     calls: int = 0
     session: requests.Session = field(default_factory=requests.Session)

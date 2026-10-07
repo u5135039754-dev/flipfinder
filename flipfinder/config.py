@@ -56,14 +56,18 @@ class EbaySettings:
 
 @dataclass
 class SubitoSettings:
-    """Subito.it, local listings only (pickup). Off unless `subito: enabled: true`."""
+    """
+    Subito.it, local listings only (pickup). Off unless `subito: enabled: true`. The home area
+    (region, province, center, radius, travel costs) is private: it comes from the Worker each
+    run (settings.apply_area), never from config.yaml.
+    """
     enabled: bool = False
-    region: int = 5                  # Subito region id (5 = Home region)
-    province: int = 2                # Subito province id (2 = Hometown)
-    center: tuple[float, float] = (44.5000, 11.3000)   # home town coordinates (Hometown)
+    region: int | None = None        # Subito region id
+    province: int | None = None      # Subito province id
+    center: tuple[float, float] | None = None   # home coordinates
     radius_km: float = 30
     travel_cost: float = 5           # going to pick it up
-    town_travel_costs: dict = field(default_factory=dict)   # e.g. {"Southtown": 8}
+    town_travel_costs: dict = field(default_factory=dict)   # e.g. {"Town": 8}
     default_category: int = 39       # Strumenti Musicali, for searches without a category
     pool_refresh_minutes: float = 180
 
@@ -79,8 +83,6 @@ class Config:
     buyer_fee_pct: float
     rules: Rules
     searches: list[Search]
-    telegram_token: str
-    telegram_chat_id: str
     seen_file: Path
     stagger: bool = True                 # budget and guitar searches take turns, every other run
     budget: float = 72                   # max total cost for budget-mode searches (in effect)
@@ -102,7 +104,8 @@ def _opt_float(value) -> float | None:
     return None if value is None else float(value)
 
 
-def load(path: str | Path = "config.yaml", settings_path: str | Path | None = "settings.json") -> Config:
+def load(path: str | Path = "config.yaml") -> Config:
+    """config.yaml only; Telegram settings and the home area come from the Worker (settings.py)."""
     load_dotenv()
     path = Path(path)
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -166,8 +169,6 @@ def load(path: str | Path = "config.yaml", settings_path: str | Path | None = "s
         buyer_fee_pct=float(fees.get("percent", 5)),
         rules=rules,
         searches=searches,
-        telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
-        telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
         seen_file=Path(raw.get("seen_file", "data/seen.json")),
         stagger=bool(raw.get("stagger", True)),
         budget=float(raw.get("budget", 72)),
@@ -187,17 +188,8 @@ def load(path: str | Path = "config.yaml", settings_path: str | Path | None = "s
         ),
         subito=SubitoSettings(
             enabled=bool(sb.get("enabled", False)),
-            region=int(sb.get("region", 5)),
-            province=int(sb.get("province", 2)),
-            center=tuple(float(x) for x in sb.get("center", (44.5000, 11.3000))),
-            radius_km=float(sb.get("radius_km", 30)),
-            travel_cost=float(sb.get("travel_cost", 5)),
-            town_travel_costs={str(k): float(v) for k, v in (sb.get("town_travel_costs") or {}).items()},
             default_category=int(sb.get("default_category", 39)),
             pool_refresh_minutes=float(sb.get("pool_refresh_minutes", 180)),
         ),
     )
-    if settings_path:
-        from .commands import apply_settings, load_settings   # settings.json (Telegram) over config.yaml
-        apply_settings(cfg, load_settings(Path(settings_path)))
     return cfg

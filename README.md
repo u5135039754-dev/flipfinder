@@ -33,7 +33,29 @@ Anything with too few comparable listings, too little profit, or a suspiciously 
 2. Send any message to your new bot.
 3. Open `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates` in a browser and find `"chat":{"id":123456789`. That number is your chat ID.
 
-## 2. Run it 24/7 for free (PC can be off)
+## 2. The private side: a Cloudflare Worker (free)
+
+Everything private lives in a Cloudflare Worker with a D1 database, not in the (public) repo:
+settings changed from Telegram, deal tracking and money, and your home area for Subito. The Worker
+also does all the Telegram talking: commands and buttons arrive by webhook and are answered in about
+a second, and deals the scanner finds are sent from there. The scanner on GitHub only searches; it
+reads its settings from the Worker and hands deals over, with a secret API key.
+
+From the `worker` folder (Node.js needed), after `npm install`:
+
+```
+npx wrangler login                          # once, opens the browser
+npx wrangler d1 create flipfinder           # put the id it prints in wrangler.toml
+npx wrangler d1 execute flipfinder --remote --file schema.sql
+npx wrangler secret put TELEGRAM_BOT_TOKEN  # and TELEGRAM_CHAT_ID, OWNER_ID, API_KEY, WEBHOOK_SECRET
+npx wrangler deploy
+```
+
+Then point Telegram at it once with `setWebhook` (url `<worker url>/telegram`, `secret_token` =
+WEBHOOK_SECRET). The free plan (100,000 requests a day) is far more than flipFinder uses.
+`npm test` runs its tests.
+
+## 3. Run the scanner 24/7 for free (PC can be off)
 
 This uses GitHub Actions, which runs the scan on GitHub's servers every 5 minutes.
 
@@ -51,14 +73,14 @@ This uses GitHub Actions, which runs the scan on GitHub's servers every 5 minute
    git remote add origin https://github.com/<you>/flipfinder.git
    git push -u origin main
    ```
-3. In the repo go to **Settings → Secrets and variables → Actions → New repository secret** and add `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.
+3. In the repo go to **Settings → Secrets and variables → Actions → New repository secret** and add `FLIPFINDER_API_URL` (the Worker's address) and `FLIPFINDER_API_KEY` (its `API_KEY`).
 4. Go to the **Actions** tab, open **flipFinder**, click **Run workflow** once to test it. After that it runs by itself.
 
 To change searches later, edit `config.yaml` and push. No need to touch anything else.
 
 Things to know:
 
-- **Public vs private repo.** Public repos get unlimited Actions minutes. Private ones get 2,000 min/month, and every 5 min is about 8,600 runs, so if you go private change the cron in `.github/workflows/flipfinder.yml` to `*/30 * * * *`. Your token stays secret either way since it's in Secrets.
+- **Public vs private repo.** Public repos get unlimited Actions minutes. Private ones get 2,000 min/month, and every 5 min is about 8,600 runs, so if you go private change the cron in `.github/workflows/flipfinder.yml` to `*/30 * * * *`. Nothing private is in the repo or the run logs either way: keys are in Secrets, data in the Worker.
 - GitHub can delay scheduled runs by a few minutes when it's busy, and it pauses schedules in repos with no commits for 60 days. Push any small change to wake it up.
 - Vinted sometimes blocks requests from data center IPs. If the Actions logs show 403 errors on every run, use the VPS option below or run it on your PC.
 
@@ -67,11 +89,11 @@ Things to know:
 On any Linux server (Oracle Cloud free tier, Hetzner, etc.) with Docker:
 
 ```
-cp .env.example .env    # fill in your token and chat ID
+cp .env.example .env    # fill in the Worker's address and API key
 docker compose up -d
 ```
 
-## 3. Run it on your PC
+## 4. Run it on your PC
 
 Windows: copy `.env.example` to `.env`, fill it in, then double-click `run.bat`. Or by hand:
 
@@ -79,7 +101,7 @@ Windows: copy `.env.example` to `.env`, fill it in, then double-click `run.bat`.
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-python main.py --test-telegram   # sends a sample message
+python main.py --test-telegram   # sends a sample message through the Worker
 python main.py --dry-run --once  # one scan, prints deals instead of sending
 python main.py                   # runs forever
 ```
@@ -106,9 +128,11 @@ EEA, so no fee is subtracted; set `sell_fees` in `config.yaml` if that changes f
 ## Optional: Subito, local pickup
 
 With `subito: enabled: true`, flipFinder also checks Subito.it listings near you: new listings in
-your province (`region`, `province`), kept if the town is within `radius_km` of `center`. The cost
-to get an item is the cheaper of picking it up (`travel_cost`, with per-town overrides in
-`town_travel_costs`) and the seller's shipping. Alerts show the town and distance, and
+your province, kept if the town is within `radius_km` of home. The cost to get an item is the
+cheaper of picking it up (`travel_cost`, with per-town overrides in `town_travel_costs`) and the
+seller's shipping. The home area (`region`, `province`, `center`, `radius_km`, `travel_cost`,
+`town_travel_costs`, `city` for /sell) is private: it's kept in the Worker (key `area`), never in
+`config.yaml`, and without it Subito is skipped. Alerts show the town and distance, and
 "💬 Negotiable" when the listing says *trattabile*. Market value compares the same model on Subito
 (all of Italy), Vinted and eBay. Subito has no public API: this uses the JSON API of its app, which
 works today but could change.
@@ -117,14 +141,14 @@ works today but could change.
 
 Change things from Telegram instead of editing files: /help, /status, /categories (buttons to turn
 searches on or off), /prices, /setprice "boss katana" 80 250, /budget 72, /rules, /setrule min_roi 25,
-/add "zoom g1x four" 20 60, /remove (asks first). Commands are read at the start of each run, so
-they take effect within about 5 minutes. Changes are saved in `settings.json`, which overrides
-`config.yaml` and is committed back to the repo by the workflow. Only the owner (and users the owner
-adds with /allow) can use them; they work in the private chat and in the group.
+/add "zoom g1x four" 20 60, /remove (asks first). The Worker answers right away; search and price
+changes apply from the next run. Changes are kept in the Worker's private storage and override
+`config.yaml`. Only the owner (`OWNER_ID`) and users the owner adds with /allow can use them; they
+work in the private chat and in the group.
 
-`TELEGRAM_CHAT_ID` can list several chats, comma-separated (private chat first). Every deal has an
-"I'm on it ✋" button; whoever taps it is shown on the button. If a group is upgraded to a supergroup
-(new chat id), flipFinder switches automatically, saves it and tells the owner.
+`TELEGRAM_CHAT_ID` (a Worker secret) can list several chats, comma-separated (private chat first).
+If a group is upgraded to a supergroup (new chat id), flipFinder switches automatically, saves it
+and tells the owner.
 
 ## Group deal tracking
 
@@ -136,8 +160,8 @@ asking if it's still available and for a video of it working.
 
 /stock lists what's bought or listed, who has it and what was paid; /profit shows profit in total,
 this month and per person. /pool 300 starts a shared pool: 💸 Bought takes from it, ✅ Sold adds to
-it, and while it's set it is the budget for budget-mode searches. All of this is kept in
-`deals.json`, committed back by the workflow. Only allowed users can press the buttons.
+it, and while it's set it is the budget for budget-mode searches. All of this is kept in the
+Worker's private storage. Only allowed users can press the buttons.
 
 ### Topics, reminders, quiet hours, weekly report
 
@@ -153,7 +177,8 @@ it, and while it's set it is the budget for budget-mode searches. All of this is
 - **/sell 12** (or a name) writes a ready-to-copy listing: title, honest description to complete,
   a suggested price and a quick-sale price. Add en or uk for English or Ukrainian.
 - **Quiet hours:** no deal alerts 00:00-07:30 Italy time; deals found overnight are sent at 07:30,
-  best first. Failure alerts still go out.
+  best first (by the Worker's 5-minute timer, which also sends reminders and the weekly report).
+  Failure alerts still go out.
 - **Weekly report** on Sunday at 20:00 in Summary: deals found/claimed/bought/sold, profit per
   person, the best flip and the most down-voted search.
 
