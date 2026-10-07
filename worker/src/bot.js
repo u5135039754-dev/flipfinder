@@ -6,9 +6,10 @@ import { RULES, applySettings, effectiveBudget, searchId } from "./searches.js";
 import { SELLER_MESSAGE, fullText, keyboard, stock, profit, findDeal } from "./deals.js";
 import { APPROVAL_OVER, allocate, approved, entryLine, memberKey, potText, reverse, shares, summarize } from "./pot.js";
 import { INTROS, TOPIC_FOR_GROUP, TOPIC_NAMES, mention, pricesFor, sellListing } from "./group.js";
+import { DEFAULT_WATCH, MAX_WATCH, findCoin, watchlist } from "./crypto.js";
 import { UserError, closeMatches, esc, euro, g, parseNumber, queryAndRange, splitArgs } from "./util.js";
 
-export const COMMANDS_VERSION = 8;   // bump when the list below changes, so it's registered again
+export const COMMANDS_VERSION = 9;   // bump when the list below changes, so it's registered again
 export const COMMANDS = [
   ["help", "List all commands"],
   ["app", "Open the flipFinder app: deals, stock, pot and settings"],
@@ -26,6 +27,8 @@ export const COMMANDS = [
   ["topic", "Send in a group topic to make it the Guitars/Electronics/Budget/Summary topic"],
   ["profit", "Profit in total, this month and per person"],
   ["demand", "How fast a model sells: /demand iphone 13 128gb or /demand boss ds 1"],
+  ["watch", "Crypto watchlist: /watch shows it, /watch link adds a coin"],
+  ["unwatch", "Remove a coin from the crypto watchlist: /unwatch sol"],
   ["pot", "The shared pot: cash, stock, profit and what each member would get back"],
   ["ledger", "Every money action, newest last: /ledger or /ledger 30"],
   ["deposit", "Owner only: money put in: /deposit Marco 100"],
@@ -45,8 +48,10 @@ export function claimerName(user) {
 
 export class Bot {
   /** store: Store; tg: Telegram; settings from the store; now in seconds. */
-  constructor({ store, tg, ownerId, settings, now }) {
+  constructor({ store, tg, ownerId, settings, now, fetchFn, geckoKey }) {
     Object.assign(this, { store, tg, settings, now });
+    this.fetchFn = fetchFn || ((...a) => fetch(...a));   // CoinGecko lookups for /watch
+    this.geckoKey = geckoKey || "";
     this.ownerId = Number(ownerId);
     this.changed = false;          // settings changed: saved at the end
     this.capture = null;           // the Mini App: replies and pop-ups collected here instead of sent
@@ -218,6 +223,33 @@ export class Bot {
     lines.push("", `<i>Tracked ${Math.round(s.tracked_days)} days${updated !== null ? ` · updated ${updated} min ago` : ""}. ` +
       "Sold per week is an estimate: we check a sample of the listings that leave Vinted's search.</i>");
     await this.reply(chat, lines.join("\n"));
+  }
+
+  // --- the Crypto topic's watchlist (read-only news; any allowed member)
+  async cmd_watch(chat, args) {
+    const list = watchlist(this.settings);
+    const show = (l) => l.map((c) => c.symbol).join(", ") || "empty";
+    if (!args.length) return this.reply(chat, `🪙 Crypto watchlist: ${esc(show(list))}
+Add one with /watch link, remove with /unwatch sol`);
+    if (list.length >= MAX_WATCH) throw new UserError(`The watchlist is full (${MAX_WATCH} coins). /unwatch one first`);
+    const coin = await findCoin(this.fetchFn, args.join(" "), this.geckoKey);
+    if (!coin) throw new UserError(`CoinGecko doesn't know "${args.join(" ")}". Try its symbol (e.g. LINK) or full name`);
+    if (list.some((c) => c.id === coin.id)) return this.reply(chat, `${esc(coin.symbol)} is already on the watchlist`);
+    this.settings.crypto_watch = [...list, coin];
+    this.changed = true;
+    await this.reply(chat, `✅ Watching ${esc(coin.name)} (${esc(coin.symbol)}). Watchlist: ${esc(show(this.settings.crypto_watch))}`);
+  }
+
+  async cmd_unwatch(chat, args) {
+    if (!args.length) throw new UserError("Which coin? e.g. /unwatch sol");
+    const q = args.join(" ").toLowerCase();
+    const list = watchlist(this.settings);
+    const coin = list.find((c) => [c.symbol.toLowerCase(), c.id, c.name.toLowerCase()].includes(q));
+    if (!coin) throw new UserError(`"${args.join(" ")}" isn't on the watchlist (${list.map((c) => c.symbol).join(", ")})`);
+    this.settings.crypto_watch = list.filter((c) => c.id !== coin.id);
+    this.changed = true;
+    const rest = this.settings.crypto_watch.map((c) => c.symbol).join(", ") || "empty";
+    await this.reply(chat, `✅ Stopped watching ${esc(coin.symbol)}. Watchlist: ${esc(rest)}`);
   }
 
   async cmd_status(chat) {

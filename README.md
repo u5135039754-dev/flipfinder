@@ -209,6 +209,24 @@ by the same Worker (`worker/public/app/`), every request is checked against Tele
 data, and only allowed users get in. Everything it does goes through the same code as the chat
 buttons, so deal messages update and money moves are posted in Summary the same way.
 
+### Crypto topic (news only)
+
+A separate, read-only Crypto topic (create it, then send /topic crypto there). It never touches the
+pot, deals or settings, and gives no buy/sell suggestions. The Worker's own hourly timer (at :07)
+does it, not the scanner:
+
+- **18:00 digest** (Italy time): the 5 newest headlines from the CoinDesk and Cointelegraph RSS
+  feeds, the watchlist's EUR prices with 24 h change and 24 h volume vs its 7-day average
+  ("volume 2.3× normal"), and CoinGecko's top 5 trending coins ("trending = lots of searches, not
+  a reason to buy"). Every digest ends with "News only, not financial advice."
+- **Alerts:** a watched coin moving ±10% in 24 h, or trading 3× its normal volume; at most once
+  per coin and kind every 12 hours.
+- **/watch** shows the watchlist (BTC, ETH, SOL to start) or adds a coin, **/unwatch** removes one;
+  any allowed member, up to 10 coins, checked against CoinGecko.
+- Free: CoinGecko's public API (no key) and RSS. If CoinGecko starts refusing (it limits shared
+  IPs), a free CoinGecko "Demo" key as the Worker secret COINGECKO_KEY fixes it; the news still
+  goes out meanwhile.
+
 ### Topics, reminders, quiet hours, weekly report
 
 - **Topics:** turn on Topics in the group and create Guitars, Electronics, Budget and Summary, then

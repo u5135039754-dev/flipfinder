@@ -12,6 +12,7 @@ import { compare, keyboard } from "./deals.js";
 import { TOPIC_FOR_GROUP, dueReminders, weeklyDue, weeklyReport } from "./group.js";
 import { DAY, UserError, inQuietHours, nowSeconds } from "./util.js";
 import { action, snapshot, verifyInitData } from "./webapp.js";
+import { runCrypto } from "./crypto.js";
 
 export const MENU_VERSION = 1;   // bump to set the "📱 Open app" menu button again
 
@@ -30,7 +31,8 @@ export async function open(env, { fetchFn, now } = {}) {
     fetch: fetchFn,
   });
   const t = now ?? nowSeconds();
-  return { store, settings, tg, now: t, bot: new Bot({ store, tg, ownerId: env.OWNER_ID, settings, now: t }) };
+  return { store, settings, tg, now: t, fetchFn: fetchFn || ((...a) => fetch(...a)),
+    bot: new Bot({ store, tg, ownerId: env.OWNER_ID, settings, now: t, fetchFn, geckoKey: env.COINGECKO_KEY }) };
 }
 
 function json(data, status = 200) {
@@ -251,4 +253,14 @@ export async function runCron(env, opts = {}) {
   // claims with no update, things bought but not listed, things listed but not sold
   await bot.reminders(dueReminders(await store.deals("WHERE status IN ('claimed', 'bought', 'listed')"), now));
   await bot.save();
+}
+
+// --- every hour at :07: the Crypto topic (its own invocation, so it never eats into the
+// 5-minute job's request allowance)
+
+export async function runCryptoJob(env, opts = {}) {
+  const ctx = await open(env, opts);
+  const result = await runCrypto({ ...ctx, apiKey: env.COINGECKO_KEY });
+  await ctx.bot.save();
+  return result;
 }

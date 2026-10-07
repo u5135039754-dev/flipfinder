@@ -6,9 +6,9 @@ compatibility_date = "2026-09-01"
 [assets]
 directory = "./public"
 
-# Reminders, overnight queue, weekly report
+# Every 5 min: reminders, overnight queue, weekly report. Hourly at :07: the Crypto topic
 [triggers]
-crons = ["*/5 * * * *"]
+crons = ["*/5 * * * *", "7 * * * *"]
 
 # Private data (database_id is an id, not a secret)
 [[d1_databases]]

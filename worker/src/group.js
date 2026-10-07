@@ -7,7 +7,8 @@ export const TOPIC_FOR_GROUP = {
   Guitars: "guitars", Amps: "guitars", Pedals: "guitars", "Added from Telegram": "guitars",
   Audio: "electronics", Electronics: "electronics", Budget: "budget",
 };
-export const TOPIC_NAMES = { guitars: "Guitars", electronics: "Electronics", budget: "Budget", summary: "Summary" };
+export const TOPIC_NAMES = { guitars: "Guitars", electronics: "Electronics", budget: "Budget", summary: "Summary",
+  crypto: "Crypto" };
 
 // Pinned intro per topic ("general" = the main chat), posted when a topic is set with /topic
 // and again with /intro; an intro that's already there is edited, not posted twice
@@ -34,6 +35,12 @@ export const INTROS = {
     "📊 <b>Summary</b>",
     "Daily summary, weekly report (Sunday 20:00), pot updates and failure alerts land here.",
     "/status is the bot running · /stock what we own · /profit how we're doing · /pot our money",
+  ].join("\n"),
+  crypto: [
+    "🪙 <b>Crypto</b>",
+    "Read-only crypto news: a digest at 18:00 (headlines, watchlist prices and volume, trending coins) and an alert when a watched coin moves ±10% or trades 3× its usual volume.",
+    "/watch shows or adds coins, /unwatch removes them. This never touches the pot.",
+    "<i>News only, not financial advice.</i>",
   ].join("\n"),
   general: [
     "💸 <b>Welcome to FLIP MAFIA</b>",
