@@ -4,7 +4,8 @@ domain: www.vinted.it        # or www.vinted.fr, www.vinted.de, ...
 interval_minutes: 5          # only used when running on your PC (python main.py)
 request_delay: 2             # seconds between Vinted requests, don't go lower
 comparable_pages: 3          # pages of listings used to work out market value
-pool_refresh_minutes: 60     # how often market value gets recalculated
+pool_refresh_minutes: 180    # how often market value gets recalculated (also eBay/Subito: 3 h)
+stagger: true                # budget and guitar/amp/pedal searches take turns: each every 10 min
 
 # eBay.it (official Browse API), on when EBAY_CLIENT_ID / EBAY_CLIENT_SECRET are set.
 # The API allows 5,000 calls a day. Each eBay pass costs one call per search, and each

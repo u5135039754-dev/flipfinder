@@ -26,6 +26,10 @@ MAX_POOL_REBUILDS = 4
 # A newly added search alerts on at most this many of the deals already listed
 # (the best ones); the rest of its current listings are just remembered.
 SEED_ALERTS = 3
+# Which 5-minute slot (even 0 / odd 1) each group runs in when `stagger` is on
+STAGGER_SLOTS = {"Budget": 0, "Guitars": 1, "Amps": 1, "Pedals": 1, "Audio": 1}
+STAGGER_OVERDUE = 12   # minutes: a staggered search this late runs regardless of its slot
+
 # Subito and eBay price pools are one call each; at most this many are rebuilt per run
 MAX_SUBITO_POOLS = 6
 MAX_EBAY_POOLS = 10
@@ -469,7 +473,7 @@ class Scanner:
         for s in sorted(self.cfg.searches, key=lambda x: not x.budget):
             if not s.enabled:
                 continue
-            if self.known.has(s) and not self.known.due(s):
+            if self.known.has(s) and not self._turn(s):
                 continue
             try:
                 deals += self.scan_search(s)
@@ -520,6 +524,21 @@ class Scanner:
                 log.error("Subito category %s failed: %s", cat, e)
         self.subito_new = list(found.values())
         self.first_subito = bool(self.subito_new) and not self.seen.has_platform("subito")
+
+    def _turn(self, s: Search) -> bool:
+        """
+        Whether a known search runs this time. Budget searches and the guitar/amp/pedal/
+        audio searches take turns (5-minute slots, budget on even ones), so a run never
+        has both groups; electronics run every time. A group that hasn't run for
+        STAGGER_OVERDUE minutes runs anyway, in case a run was skipped.
+        """
+        from .commands import search_group
+        want = STAGGER_SLOTS.get("Budget" if s.budget else search_group(s)) if self.cfg.stagger else None
+        if want is None:
+            return self.known.due(s)
+        if int(time.time() // 300) % 2 == want:
+            return True
+        return time.time() - self.known.last.get(_sid(s), 0.0) >= STAGGER_OVERDUE * 60
 
     @property
     def failed(self) -> bool:

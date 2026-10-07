@@ -82,6 +82,7 @@ class Config:
     telegram_token: str
     telegram_chat_id: str
     seen_file: Path
+    stagger: bool = True                 # budget and guitar searches take turns, every other run
     budget: float = 72                   # max total cost for budget-mode searches (in effect)
     budget_setting: float = 72           # the configured /budget value (the pool can lower it)
     budget_rules: dict = field(default_factory=lambda: {"min_profit": 12, "min_roi": 35, "max_roi": 150})
@@ -168,6 +169,7 @@ def load(path: str | Path = "config.yaml", settings_path: str | Path | None = "s
         telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
         seen_file=Path(raw.get("seen_file", "data/seen.json")),
+        stagger=bool(raw.get("stagger", True)),
         budget=float(raw.get("budget", 72)),
         budget_setting=float(raw.get("budget", 72)),
         budget_rules={"min_profit": 12, "min_roi": 35, "max_roi": 150, **(raw.get("budget_rules") or {})},

@@ -536,6 +536,7 @@ def _fake_scanner(tmp_path, n_searches, known_keys):
     seen.write_text(json.dumps({"vinted:1": 1e12}))
     cfg = type("C", (), {})()
     cfg.rules, cfg.seen_file, cfg.pool_refresh_minutes, cfg.comparable_pages = Rules(), seen, 60, 1
+    cfg.stagger = False
     cfg.searches = [Search(f"thing {n}") for n in range(n_searches)]
     cfg.ebay = type("E", (), {"enabled": False})()
     (tmp_path / "searches.json").write_text(json.dumps(known_keys(cfg.searches)))
@@ -1391,3 +1392,34 @@ def test_old_deals_get_numbers_on_load(tmp_path: Path):
     b = DealBook(tmp_path / "deals.json")
     assert b.data["deals"]["vinted:1"]["n"] == 1 and b.data["deals"]["vinted:2"]["n"] == 2 and b.data["next_n"] == 2
     assert b.find("1")[0] == "vinted:1" and b.changed
+
+
+
+def test_budget_and_guitar_searches_take_turns(tmp_path: Path, monkeypatch):
+    import flipfinder.scanner as sc_mod
+    from flipfinder.config import Search
+    s = _fake_scanner(tmp_path, 0, lambda searches: [])
+    s.cfg.stagger = True
+    budget = Search("boss ds 1", budget=True, every_minutes=10)
+    guitar = Search("fender player stratocaster")
+    phone = Search("iphone 13", filters={"catalog": [3661]})
+    t0 = 1_800_000_000 - (1_800_000_000 % 300)              # start of an even 5-minute slot
+    for x in (budget, guitar, phone):
+        s.known.add(x)
+        s.known.last[sc_mod._sid(x)] = t0 - 300              # all ran in the previous slot
+    monkeypatch.setattr(sc_mod.time, "time", lambda: t0 + 30)
+    assert [s._turn(x) for x in (budget, guitar, phone)] == [True, False, True]
+    monkeypatch.setattr(sc_mod.time, "time", lambda: t0 + 330)  # next (odd) slot
+    for x in (budget, guitar, phone):
+        s.known.last[sc_mod._sid(x)] = t0 + 30
+    assert [s._turn(x) for x in (budget, guitar, phone)] == [False, True, True]
+    s.known.last[sc_mod._sid(budget)] = t0 + 330 - 13 * 60     # skipped runs: overdue, runs anyway
+    assert s._turn(budget)
+    s.cfg.stagger = False
+    s.known.last[sc_mod._sid(guitar)] = t0 + 329
+    assert s._turn(guitar)                                       # without stagger: every run as before
+
+
+def test_gitignore_keeps_outputs_out():
+    ignored = Path(".gitignore").read_text(encoding="utf-8").splitlines()
+    assert "outputs/" in ignored and "Claude outputs/" in ignored

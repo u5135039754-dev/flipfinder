@@ -6,3 +6,5 @@ __pycache__/
 venv/
 .pytest_cache/
 config.old.yaml
+outputs/
+Claude outputs/
