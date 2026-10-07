@@ -25,3 +25,12 @@ CREATE TABLE IF NOT EXISTS feedback (
   at REAL NOT NULL,
   data TEXT NOT NULL
 );
+
+-- the shared pot: one row per money action, never changed (a correction is a new row)
+CREATE TABLE IF NOT EXISTS ledger (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at REAL NOT NULL,
+  kind TEXT NOT NULL,
+  amount REAL NOT NULL,
+  data TEXT NOT NULL
+);

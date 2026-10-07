@@ -3,11 +3,12 @@
 
 import { Telegram } from "./telegram.js";
 import { RULES, applySettings, effectiveBudget, searchId } from "./searches.js";
-import { SELLER_MESSAGE, fullText, keyboard, poolValue, stock, profit, findDeal } from "./deals.js";
+import { SELLER_MESSAGE, fullText, keyboard, stock, profit, findDeal } from "./deals.js";
+import { APPROVAL_OVER, allocate, approved, entryLine, memberKey, potText, reverse, shares, summarize } from "./pot.js";
 import { INTROS, TOPIC_FOR_GROUP, TOPIC_NAMES, mention, pricesFor, sellListing } from "./group.js";
 import { UserError, closeMatches, esc, euro, g, parseNumber, queryAndRange, splitArgs } from "./util.js";
 
-export const COMMANDS_VERSION = 5;   // bump when the list below changes, so it's registered again
+export const COMMANDS_VERSION = 6;   // bump when the list below changes, so it's registered again
 export const COMMANDS = [
   ["help", "List all commands"],
   ["status", "Last run, runs today, listings checked, deals sent, platforms"],
@@ -23,11 +24,17 @@ export const COMMANDS = [
   ["sell", "Ready-to-copy listing: /sell 12 or /sell boss ds-1 (add en or uk for English/Ukrainian)"],
   ["topic", "Send in a group topic to make it the Guitars/Electronics/Budget/Summary topic"],
   ["profit", "Profit in total, this month and per person"],
-  ["pool", "Shared money: /pool shows it, /pool 300 sets the starting amount"],
+  ["pot", "The shared pot: cash, stock, profit and what each member would get back"],
+  ["ledger", "Every money action, newest last: /ledger or /ledger 30"],
+  ["deposit", "Owner only: money put in: /deposit Marco 100"],
+  ["withdraw", "Owner only: money taken out: /withdraw Marco 50"],
+  ["fix", "Owner only: correct a price: /fix 12 paid 45 or /fix 12 sold 80"],
+  ["undo", "Owner only: cancel a deposit, withdrawal or fix with a new entry: /undo 7"],
+  ["split", "Owner only: how profit is shared: /split contribution or /split equal"],
   ["allow", "Owner only: let another user use commands: /allow 123456789"],
   ["intro", "Owner only: post or update the pinned intro in every topic"],
 ];
-const OWNER_ONLY = new Set(["allow", "intro"]);
+const OWNER_ONLY = new Set(["allow", "intro", "deposit", "withdraw", "fix", "undo", "split"]);
 
 export function claimerName(user) {
   const name = [user.first_name, user.last_name].filter(Boolean).join(" ");
@@ -53,9 +60,38 @@ export class Bot {
     return this._deals;
   }
 
+  async pot() {
+    this._pot ??= summarize(await this.store.ledger(), await this.allDeals());
+    return this._pot;
+  }
+
+  /** Cash in the pot (caps the budget-mode limit), or null before the first deposit. */
   async pool() {
-    const p = await this.store.get("pool");
-    return p ? poolValue(p, await this.allDeals()) : null;
+    const p = await this.pot();
+    return p.started ? p.cash : null;
+  }
+
+  splitMode() {
+    return this.settings.split === "equal" ? "equal" : "contribution";
+  }
+
+  /** Records a money action and posts it in the group (Summary topic); the private chat gets a reply. */
+  async money(entry, chat) {
+    const saved = await this.store.addEntry({ at: this.now, ...entry });
+    this._pot = null;
+    this._deals = null;
+    const p = await this.pot();
+    const text = `💶 <b>Pot</b> · ${entryLine(saved)} · cash now <b>${euro(p.cash)}</b>`;
+    const groups = this.tg.groups;
+    for (const g of groups.length ? groups : [String(this.ownerId)]) await this.tg.sendTo(g, text, { topic: "summary" });
+    if (chat !== undefined && !groups.includes(String(chat)) && (groups.length || String(chat) !== String(this.ownerId))) {
+      await this.reply(chat, text);
+    }
+    return saved;
+  }
+
+  findMember(p, name) {
+    return p.members.find((m) => memberKey(m.name) === memberKey(name));
   }
 
   async view() {
@@ -124,7 +160,7 @@ export class Bot {
       await handler.call(this, chat, splitArgs(rest), user, msg);
     } catch (e) {
       if (!(e instanceof UserError)) throw e;
-      await this.reply(chat, `⚠️ ${esc(e.message)}`);
+      await this.reply(chat, `⚠️ ${esc(e.message, false)}`);
     }
   }
 
@@ -204,7 +240,7 @@ export class Bot {
     this.changed = true;
     const pool = await this.pool();
     const note = pool !== null && pool < amount
-      ? `\nℹ️ The pool is ${euro(pool)}, so the limit in effect is ${euro(effectiveBudget(amount, pool))} (the smaller of the two).`
+      ? `\nℹ️ The pot has ${euro(pool)} cash, so the limit in effect is ${euro(effectiveBudget(amount, pool))} (the smaller of the two).`
       : "";
     await this.reply(chat, `✅ Budget is now €${g(amount)} (budget-mode searches only)${note}`);
   }
@@ -290,35 +326,114 @@ export class Bot {
     const p = profit(await this.allDeals(), this.now);
     const lines = ["💰 <b>Profit</b>", `Total: ${euro(p.total)} (${p.sold} sold)`, `This month: ${euro(p.month)}`];
     for (const [who, v] of Object.entries(p.people).sort((a, b) => b[1] - a[1])) lines.push(`· ${esc(who)}: ${euro(v)}`);
-    const pool = await this.pool();
-    if (pool !== null) lines.push(`\nPool: ${euro(pool)}`);
+    lines.push("\n/pot shows each member's share");
     await this.reply(chat, lines.join("\n"));
   }
 
-  async cmd_pool(chat, args) {
+  async cmd_pot(chat) {
     const setting = this.settings.budget ?? (await this.store.get("catalog", {})).budget ?? 72;
-    if (!args.length) {
-      const pool = await this.pool();
-      if (pool === null) {
-        return this.reply(chat, `No pool set (start one with /pool 300).\nBudget-mode limit: ${euro(setting)} (/budget)`);
-      }
-      const start = (await this.store.get("pool")).start;
-      return this.reply(chat, [
-        `💶 Pool: ${euro(pool)} (started with ${euro(start)})`,
-        `🎯 /budget: ${euro(setting)}`,
-        `Budget-mode limit in effect: <b>${euro(effectiveBudget(setting, pool))}</b> (the smaller of the two)`,
-      ].join("\n"));
-    }
-    const amount = parseNumber(args[0]);
-    if (amount === null) throw new UserError(`The amount must be a number, I got '${args[0]}'`);
-    if (!(amount >= 0 && amount <= 1_000_000)) throw new UserError("The pool must be between €0 and €1,000,000");
-    await this.store.put("pool", { start: amount, since: this.now });
-    await this.reply(chat, `✅ Pool set to ${euro(amount)}. 💸 Bought takes from it, ✅ Sold adds to it.\n` +
-      `Budget-mode limit: ${euro(effectiveBudget(setting, amount))} (the smaller of the pool and /budget ${euro(setting)})`);
+    const p = await this.pot();
+    await this.reply(chat, potText(p, this.splitMode(), effectiveBudget(setting, p.started ? p.cash : null)));
   }
 
-  async cmd_pot(chat, args, user) {
-    return this.cmd_pool(chat, args, user);   // until the shared pot (plan Step 3) replaces /pool
+  async cmd_pool(chat, args, user) {
+    return this.cmd_pot(chat, args, user);   // the old name
+  }
+
+  amountArg(raw, what = "The amount") {
+    const amount = parseNumber(raw ?? "");
+    if (amount === null) throw new UserError(`${what} must be a number, I got '${raw ?? ""}'`);
+    if (!(amount > 0 && amount <= 100_000)) throw new UserError(`${what} must be between €0.01 and €100,000`);
+    return Math.round(amount * 100) / 100;
+  }
+
+  ownerOnly(user, cmd) {
+    if (user !== this.ownerId) throw new UserError(`Only the owner (treasurer) can use /${cmd}`);
+  }
+
+  async cmd_deposit(chat, args, user) {
+    this.ownerOnly(user, "deposit");
+    if (args.length < 2) throw new UserError("Who and how much? e.g. /deposit Marco 100");
+    const amount = this.amountArg(args.at(-1));
+    const typed = args.slice(0, -1).join(" ");
+    const name = this.findMember(await this.pot(), typed)?.name || typed;
+    await this.money({ kind: "deposit", amount, member: name, deposited: { [name]: amount } }, chat);
+  }
+
+  async cmd_withdraw(chat, args, user) {
+    this.ownerOnly(user, "withdraw");
+    if (args.length < 2) throw new UserError("Who and how much? e.g. /withdraw Marco 50");
+    const amount = this.amountArg(args.at(-1));
+    const p = await this.pot();
+    const m = this.findMember(p, args.slice(0, -1).join(" "));
+    if (!m) throw new UserError(`No member called "${args.slice(0, -1).join(" ")}". /pot lists them`);
+    if (amount > m.account) throw new UserError(`${m.name} has ${euro(m.account)} in the pot, can't take out ${euro(amount)}`);
+    if (amount > p.cash) {
+      throw new UserError(`The pot only has ${euro(p.cash)} in cash (the rest is in stock), can't pay out ${euro(amount)}`);
+    }
+    await this.money({ kind: "withdraw", amount: -amount, member: m.name, withdrawn: { [m.name]: amount } }, chat);
+  }
+
+  async cmd_ledger(chat, args) {
+    const all = await this.store.ledger();
+    if (!all.length) return this.reply(chat, "📒 Nothing in the ledger yet");
+    const n = Math.min(Math.max(Number(args[0]) || 15, 1), 50);
+    const when = (e) => new Date(e.at * 1000).toLocaleDateString("en-GB", { timeZone: "Europe/Rome", day: "2-digit", month: "short" });
+    const lines = [`📒 <b>Ledger</b> (last ${Math.min(n, all.length)} of ${all.length})`];
+    for (const e of all.slice(-n)) lines.push(`${when(e)} · ${entryLine(e)}`);
+    lines.push("", "Entries are never changed: /undo and /fix add new ones.");
+    await this.reply(chat, lines.join("\n"));
+  }
+
+  async cmd_undo(chat, args, user) {
+    this.ownerOnly(user, "undo");
+    const id = Number(args[0]);
+    const all = await this.store.ledger();
+    const e = all.find((x) => x.id === id);
+    if (!e) throw new UserError("Which entry? /ledger shows the numbers, e.g. /undo 7");
+    if (!["deposit", "withdraw", "fix"].includes(e.kind)) {
+      throw new UserError("Buys and sales follow the deal: correct them with /fix <deal number> paid|sold <amount>");
+    }
+    if (all.some((x) => x.kind === "undo" && x.ref === id)) throw new UserError(`Entry ${id} was already undone`);
+    await this.money({ kind: "undo", ref: id, member: e.member, n: e.n, ...reverse(e) }, chat);
+  }
+
+  async cmd_fix(chat, args, user) {
+    this.ownerOnly(user, "fix");
+    const [ref, what, raw] = args;
+    if (!ref || !["paid", "sold"].includes(what)) throw new UserError("Use /fix <deal number> paid <amount> or /fix <deal number> sold <amount>");
+    const amount = this.amountArg(raw);
+    const found = findDeal(await this.allDeals(), ref);
+    if (!found || !/^#?\d+$/.test(ref)) throw new UserError(`No deal #${ref.replace(/^#/, "")}`);
+    const [key, d] = found;
+    const field = what === "paid" ? "paid" : "sold_for";
+    if (d[field] === undefined || d[field] === null) throw new UserError(`#${d.n} has no ${what} price yet`);
+    const diff = Math.round((amount - d[field]) * 100) / 100;
+    if (!diff) throw new UserError(`#${d.n} already has ${what} ${euro(amount)}`);
+    // paying more means less cash and (once sold) less profit; selling for more, the opposite
+    const cash = what === "paid" ? -diff : diff;
+    const entry = { kind: "fix", amount: cash, n: d.n, deal: key, note: `${what} ${euro(d[field])} → ${euro(amount)}` };
+    if (d.status === "sold") {
+      const sale = (await this.store.ledger()).find((x) => x.kind === "sale" && x.deal === key);
+      const weights = sale?.shares || shares(await this.pot(), this.splitMode());
+      entry.profit = allocate(cash, weights);   // shared like the sale was
+    }
+    d[field] = amount;
+    await this.store.saveDeal(key, d);
+    await this.refreshDeal(key, d);
+    await this.money(entry, chat);
+  }
+
+  async cmd_split(chat, args, user) {
+    this.ownerOnly(user, "split");
+    const mode = (args[0] || "").toLowerCase();
+    if (!["equal", "contribution"].includes(mode)) throw new UserError("Use /split contribution or /split equal");
+    this.settings.split = mode;
+    this.changed = true;
+    const text = `⚖️ From now on profit is split ${mode === "equal" ? "equally" : "by how much each member put in"}. ` +
+      "Profit from earlier sales stays as it was shared.";
+    await this.reply(chat, text);
+    for (const g of this.tg.groups) if (String(g) !== String(chat)) await this.tg.sendTo(g, text, { topic: "summary" });
   }
 
   async cmd_sell(chat, args) {
@@ -439,6 +554,7 @@ export class Bot {
     const who = claimerName(cq.from || {});
     if (kind === "up" || kind === "dn") {
       const vote = kind === "up" ? "up" : "down";
+      const wasApproved = approved(d, [d.who_id]);
       d.votes[String(user)] = vote;
       if (vote === "down") {
         await this.store.addFeedback({ key, title: d.title, url: d.url, by: who, at: this.now, value: d.value ?? null,
@@ -446,6 +562,9 @@ export class Bot {
       }
       await this.store.saveDeal(key, d);
       await this.refreshDeal(key, d);
+      if (d.status === "claimed" && (d.cost || 0) > APPROVAL_OVER && !wasApproved && approved(d, [d.who_id])) {
+        await this.postAbout(d, `✅ #${d.n ?? "?"} approved by ${esc(who)}: ${mention(d.who || "", d.who_id)} can tap 💸 Bought.`);
+      }
       return this.answer(cq, vote === "up" ? "👍 Noted" : "👎 Noted, it's logged to tune the filters");
     }
     if (kind === "m") {
@@ -469,6 +588,11 @@ export class Bot {
       await this.store.saveDeal(key, d);
       await this.refreshDeal(key, d);
       return this.answer(cq, "🏷 Listed");
+    }
+    if (kind === "b" && (d.cost || 0) > APPROVAL_OVER && !approved(d, [d.who_id, user])) {
+      await this.postAbout(d, `✋ #${d.n ?? "?"} costs ${euro(d.cost)}: buys over €${APPROVAL_OVER} need a 👍 on the deal ` +
+        "from another member first.");
+      return this.answer(cq, `Over €${APPROVAL_OVER}: needs a 👍 from another member first`);
     }
     const ask = kind === "b" ? "paid" : "sold_for";
     const title = esc(d.title.slice(0, 60));
@@ -526,19 +650,27 @@ export class Bot {
     }
     const d = await this.store.deal(pending.key);
     if (!d) return;
+    if (pending.ask === "paid" && amount > APPROVAL_OVER && !approved(d, [d.who_id, user])) {
+      return this.reply(chat, `⚠️ ${euro(amount)} is over €${APPROVAL_OVER}: it needs a 👍 on the deal from another ` +
+        "member first. Then tap 💸 Bought again.");
+    }
     let done;
+    let entry;
     if (pending.ask === "paid") {
       Object.assign(d, { status: "bought", paid: amount, bought_at: this.now });
       done = `💸 Bought for ${euro(amount)}`;
+      entry = { kind: "buy", amount: -amount, n: d.n, deal: pending.key };
     } else {
       Object.assign(d, { status: "sold", sold_for: amount, sold_at: this.now });
-      done = `✅ Sold for ${euro(amount)}, profit ${euro(amount - (d.paid || 0))}`;
+      const gain = Math.round((amount - (d.paid || 0)) * 100) / 100;
+      done = `✅ Sold for ${euro(amount)}, profit ${euro(gain)}`;
+      const weights = shares(await this.pot(), this.splitMode());
+      entry = { kind: "sale", amount, n: d.n, deal: pending.key, profit: allocate(gain, weights), shares: weights };
     }
     await this.store.saveDeal(pending.key, d);
-    this._deals = null;
-    const pool = await this.pool();
     await this.refreshDeal(pending.key, d);
-    await this.reply(chat, done + (pool !== null ? ` · pool now ${euro(pool)}` : ""));
+    await this.reply(chat, done);
+    await this.money(entry, chat);
   }
 
   // --- reminders' buttons

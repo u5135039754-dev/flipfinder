@@ -63,6 +63,18 @@ export class Store {
       "AND json_extract(data, '$.votes') = '{}'").bind(now - 30 * DAY).run();
   }
 
+  // --- the pot's ledger (append-only)
+  async ledger() {
+    const { results } = await this.db.prepare("SELECT id, at, kind, amount, data FROM ledger ORDER BY id").all();
+    return results.map((r) => ({ ...JSON.parse(r.data), id: r.id, at: r.at, kind: r.kind, amount: r.amount }));
+  }
+
+  async addEntry(e) {
+    const row = await this.db.prepare("INSERT INTO ledger (at, kind, amount, data) VALUES (?, ?, ?, ?) RETURNING id")
+      .bind(e.at, e.kind, e.amount, JSON.stringify(e)).first();
+    return { ...e, id: row.id };
+  }
+
   // --- 👎 feedback
   async addFeedback(f) {
     await this.db.prepare("INSERT INTO feedback (at, data) VALUES (?, ?)").bind(f.at, JSON.stringify(f)).run();

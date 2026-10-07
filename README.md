@@ -159,9 +159,25 @@ with the listing to tune the filters. 📩 Message seller replies with a ready-t
 asking if it's still available and for a video of it working.
 
 /stock lists what's bought or listed, who has it and what was paid; /profit shows profit in total,
-this month and per person. /pool 300 starts a shared pool: 💸 Bought takes from it, ✅ Sold adds to
-it, and while it's set it is the budget for budget-mode searches. All of this is kept in the
-Worker's private storage. Only allowed users can press the buttons.
+this month and per person. Only allowed users can press the buttons.
+
+### The shared pot
+
+The money itself sits in the treasurer's (owner's) bank account; the bot only keeps the numbers,
+in an append-only ledger in the Worker's private storage.
+
+- /deposit Marco 100 and /withdraw Marco 50 (owner only) record money put in or paid out. A
+  withdrawal can't exceed what that member has in the pot, or the cash on hand.
+- 💸 Bought takes the price out of the pot, ✅ Sold puts the sale price back in.
+- Each sale's profit is split when it happens, by how much each member has put in (/split equal
+  to share equally instead); later deposits and withdrawals never change earlier splits.
+- /pot shows the cash, the stock (at what we paid), total profit and, per member, what they put in,
+  their profit share and what they'd get back if we stopped today. /ledger lists every entry.
+- Buys over €50 need a 👍 on the deal from another member before 💸 Bought works.
+- Every money action is posted in the group's Summary topic. Entries are never edited: /undo 7
+  cancels a deposit, withdrawal or fix with a new entry, /fix 12 paid 45 or /fix 12 sold 80
+  corrects a price with a new entry (shared like the original sale).
+- The budget-mode limit is the smaller of /budget and the cash in the pot.
 
 ### Topics, reminders, quiet hours, weekly report
 

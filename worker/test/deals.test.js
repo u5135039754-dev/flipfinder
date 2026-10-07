@@ -5,10 +5,11 @@ import { findDeal, fullText, keyboard, profit } from "../src/deals.js";
 
 const withMarco = { allowed_users: [MARCO] };
 
-test("deal lifecycle with prices and pool", async () => {
+test("deal lifecycle: buys come out of the pot, sales go back in, profit is shared", async () => {
   const t = await setup({ settings: withMarco });
   const key = await addDeal(t.store);
-  await t.store.put("pool", { start: 300, since: DAYTIME - 7200 });
+  await t.updates(msg("/deposit Owner 100"), msg("/deposit Marco 100"), msg("/deposit Luca 100"));
+  t.tg.clear();
   await t.updates(tap(`c:${key}`, { user: MARCO, first: "Marco" }), tap(`b:${key}`, { user: OWNER + 1 }));
   let d = await t.store.deal(key);
   assert.ok(d.status === "claimed" && d.who === "Marco");
@@ -19,20 +20,24 @@ test("deal lifecycle with prices and pool", async () => {
   t.tg.clear();
   await t.update(tap(`b:${key}`, { user: MARCO }));
   assert.ok(t.tg.texts()[0].includes("How much did you pay") && t.tg.texts()[0].includes("Known total"));
-  assert.ok(t.tg.sent()[0].reply_markup.inline_keyboard[0][0].text.startsWith("✅ Use €"));
   t.tg.clear();
   await t.updates(msg("abc", { user: MARCO }), msg("30", { user: MARCO }));
-  assert.match(t.tg.texts()[0], /need just the amount/);
-  assert.match(t.tg.texts()[1], /💸 Bought for €30\.00 · pool now €270\.00/);
+  const texts = t.tg.texts();
+  assert.match(texts[0], /need just the amount/);
+  assert.ok(texts.includes("💸 Bought for €30.00"));
+  assert.ok(texts.some((x) => x.includes("−€30.00 bought #1") && x.includes("cash now <b>€270.00</b>")));
   d = await t.store.deal(key);
   assert.ok(d.status === "bought" && d.paid === 30);
   t.tg.clear();
   await t.updates(tap(`l:${key}`, { user: MARCO }), tap(`s:${key}`, { user: MARCO }), msg("75", { user: MARCO }));
   d = await t.store.deal(key);
   assert.ok(d.status === "sold" && d.sold_for === 75);
-  assert.match(t.tg.texts().at(-1), /✅ Sold for €75\.00, profit €45\.00 · pool now €345\.00/);
+  assert.ok(t.tg.texts().includes("✅ Sold for €75.00, profit €45.00"));
+  assert.ok(t.tg.texts().some((x) => x.includes("+€75.00 sold #1") && x.includes("cash now <b>€345.00</b>")));
   assert.match(fullText(d), /✅ Sold by Marco · paid €30\.00 · sold for €75\.00 · profit €45\.00/);
   assert.deepEqual(keyboard(key, d), { inline_keyboard: [] });
+  const sale = (await t.store.ledger()).at(-1);
+  assert.deepEqual(sale.profit, { Owner: 15, Marco: 15, Luca: 15 });          // €100 each: equal thirds
   const p = profit(await t.store.deals(), DAYTIME);
   assert.deepEqual(p, { total: 45, month: 45, people: { Marco: 45 }, sold: 1 });
 });
@@ -60,31 +65,29 @@ test("votes, feedback and the seller message", async () => {
   assert.ok(["Ciao! L'articolo", "ancora disponibile", "video", "<code>"].every((s) => seller.includes(s)));
 });
 
-test("stock, profit and pool commands", async () => {
+test("stock and profit commands", async () => {
   const t = await setup({ settings: withMarco });
   const key = await addDeal(t.store);
   const d = await t.store.deal(key);
   Object.assign(d, { status: "bought", who: "Marco", who_id: MARCO, paid: 30, bought_at: DAYTIME + 60 });
   await t.store.saveDeal(key, d);
-  await t.updates(msg("/pool"), msg("/pool abc"), msg("/pool 200"), msg("/stock"), msg("/profit"));
+  await t.updates(msg("/stock"), msg("/profit"));
   const r = t.tg.texts();
-  assert.ok(r[0].includes("No pool set") && r[1].includes("must be a number") && r[2].includes("Pool set to €200.00"));
-  assert.ok(r[3].includes("Boss DS-1 distortion") && r[3].includes("Marco") && r[3].includes("€30.00"));
-  assert.match(r[4], /Total: €0\.00 \(0 sold\)/);
-  const state = await t.api("GET", "/api/state");
-  assert.equal(state.body.pool, 170);   // bought after the pool started: 200 - 30
+  assert.ok(r[0].includes("Boss DS-1 distortion") && r[0].includes("Marco") && r[0].includes("€30.00"));
+  assert.match(r[1], /Total: €0\.00 \(0 sold\)/);
 });
 
-test("/pool shows both and the limit is the smaller", async () => {
+test("the budget-mode limit is the smaller of /budget and the pot's cash", async () => {
   const t = await setup();
-  await t.updates(msg("/pool"), msg("/pool 50"), msg("/pool"), msg("/budget 40"), msg("/pool"), msg("/pot"));
-  const r = t.tg.texts();
-  assert.ok(r[0].includes("No pool set") && r[0].includes("Budget-mode limit: €72.00"));
-  assert.match(r[1], /Budget-mode limit: €50\.00/);
-  assert.ok(r[2].includes("Pool: €50.00") && r[2].includes("/budget: €72.00") && r[2].includes("<b>€50.00</b>"));
-  assert.match(r[3], /Budget is now €40/);
-  assert.ok(r[4].includes("/budget: €40.00") && r[4].includes("<b>€40.00</b>"));
-  assert.equal(r[5], r[4]);   // /pot answers like /pool until the shared pot exists
+  await t.updates(msg("/pot"), msg("/deposit Owner 50"), msg("/pot"), msg("/budget 40"), msg("/pot"), msg("/pool"));
+  const r = t.tg.texts().filter((x) => x.startsWith("💰"));
+  assert.ok(r[0].includes("No money in yet") && r[0].includes("€72.00"));
+  assert.ok(r[1].includes("Cash: <b>€50.00</b>") && r[1].includes("Budget-mode limit: €50.00"));
+  assert.ok(r[2].includes("Budget-mode limit: €40.00"));
+  assert.equal(r[3], r[2]);                                    // /pool is the old name
+  assert.equal((await t.api("GET", "/api/state")).body.pool, 50);   // the scanner caps budget searches at it
+  const fresh = await setup();
+  assert.equal((await fresh.api("GET", "/api/state")).body.pool, null);    // no deposits yet: no cap
 });
 
 test("bought suggests the known cost; a typed amount overrides it", async () => {
@@ -99,7 +102,7 @@ test("bought suggests the known cost; a typed amount overrides it", async () => 
   await t.update(tap(`pay:${key}`, { user: MARCO }));
   let d = await t.store.deal(key);
   assert.ok(d.status === "bought" && d.paid === 26.95);
-  assert.match(t.tg.texts().at(-1), /💸 Bought for €26\.95/);
+  assert.ok(t.tg.texts().includes("💸 Bought for €26.95"));
   assert.equal(t.tg.sent("editMessageReplyMarkup").at(-1).reply_markup.inline_keyboard.length, 0);   // ✅ button gone
   const t2 = await setup({ settings: withMarco });
   await addDeal(t2.store);
