@@ -190,3 +190,24 @@ test("owner id comes from the environment, not the code", async () => {
   assert.match(t.tg.texts()[0], /User 7 can now use commands/);
   assert.notEqual(OWNER, 42);
 });
+
+test("/demand finds the search and the model asked for", async () => {
+  const t = await setup();
+  await t.update(msg("/demand iphone 13"));
+  assert.match(t.tg.texts()[0], /No demand numbers yet/);
+  const r = await t.api("PUT", "/api/demand", { updated: 0, searches: {
+    "iphone 13": { tracked_days: 9.6, all: "👍 Normal demand · ~6 sold/week · 40 listed · ❤️ 7", models: [
+      { model: "iphone 13 128gb", text: "🔥 High demand · ~4 sold/week · 8 listed · ⏱ sells in ~3 days · ❤️ 9", listed: 8 },
+      { model: "iphone 13 256gb", text: "🐢 Slow · ~0.3 sold/week · 12 listed · ❤️ 2", listed: 12 }] },
+    "boss ds 1": { tracked_days: 2, all: "📊 Demand: still learning · 30 listed · ❤️ 3 avg favourites", models: [] } } });
+  assert.equal(r.status, 200);
+  t.tg.clear();
+  await t.updates(msg("/demand iPhone 13 128GB"), msg("/demand boss ds-1"), msg("/demand zzz"), msg("/demand"));
+  const [iphone, boss, none, empty] = t.tg.texts();
+  assert.ok(iphone.includes("Demand: iphone 13") && iphone.includes("All models: 👍 Normal demand"));
+  assert.ok(iphone.indexOf("iphone 13 128gb") < iphone.indexOf("iphone 13 256gb"));   // the one asked for first
+  assert.match(iphone, /Tracked 10 days/);
+  assert.match(boss, /still learning/);
+  assert.match(none, /No search like "zzz"/);
+  assert.match(empty, /Which model\?/);
+});

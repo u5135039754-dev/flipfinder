@@ -55,6 +55,8 @@ test("only allowed users get the app's data", async () => {
   assert.deepEqual(r.body.me, { id: MARCO, name: "Marco", owner: false });
   assert.equal(r.body.deals[0].title, "Boss DS-1 distortion");
   assert.equal(r.body.deals[0].source, "vinted");
+  assert.equal(r.body.deals[0].sell_days, null);
+  assert.equal(r.body.deals[0].demand, "");
   assert.ok(Array.isArray(r.body.settings.searches) && r.body.settings.searches.length === 3);
   assert.ok(!("text" in r.body.deals[0]) && !("item" in r.body.deals[0]));   // only what the screen needs
   assert.equal((await app(t, "owner", "state")).body.me.owner, true);

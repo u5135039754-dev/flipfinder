@@ -9,11 +9,13 @@ from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .analyzer import Deal, Rules, assess, is_near_miss, is_pickup_only, is_relevant
+from .analyzer import (Deal, Rules, assess, blend_sold, demand, is_near_miss, is_pickup_only, is_relevant,
+                       model_numbers, model_tokens)
 from .config import Config, Search
 from .ebay import CATEGORY_FOR_VINTED_CATALOG as EBAY_CATEGORY_FOR_VINTED_CATALOG
 from .ebay import EbayClient
 from .subito import CATEGORY_FOR_VINTED_CATALOG, SubitoClient
+from .sold import SoldTracker
 from .storage import SeenStore
 from .vinted import Item, VintedClient
 
@@ -201,6 +203,8 @@ class Scanner:
         self.pools = PoolCache(data_dir / "pools.json", cfg.pool_refresh_minutes)
         self.known = KnownSearches(data_dir / "searches.json", self.pools)
         self.ebay_state = EbayState(data_dir / "ebay.json")
+        self.sold = SoldTracker(data_dir / "sold.json")
+        self.notices: list[str] = []   # for the Summary topic (e.g. sold-price checks lowered)
         self.ebay_due = False
         self.pool_rebuilds = 0
         self.first_ebay = False
@@ -218,6 +222,8 @@ class Scanner:
         """
         key = _key(s)
         pool = self.pools.get(key)
+        old = None if pool is not None else (self.pools.get(key, any_age=True) or [])
+        old_ts = (self.pools.data.get(key) or {}).get("ts")
         if pool is None and self.pool_rebuilds >= MAX_POOL_REBUILDS and not force:
             old = self.pools.get(key, any_age=True)
             if old is None:
@@ -244,6 +250,7 @@ class Scanner:
             # relevance order shifts between requests, so pages can overlap a bit
             pool = _merge(pool)
             self.pools.put(key, pool)
+            self.sold.observe(key, old, pool, time.time(), old_ts)   # listings gone since: maybe sold
         return pool
 
     def _ebay_category(self, s: Search) -> int:
@@ -320,13 +327,16 @@ class Scanner:
                             max_roi=float(br["max_roi"]), max_cost=float(self.cfg.budget), budget=True)
         if s.max_roi is not None:
             rules = replace(rules, max_roi=s.max_roi)
-        return replace(rules, match_brand=s.match_brand, check=s.check,
-                       missing_part_cost=s.missing_part_cost)
+        now = time.time()
+        tracked, scale = self.sold.coverage(_key(s), now)
+        return replace(rules, match_brand=s.match_brand, check=s.check, missing_part_cost=s.missing_part_cost,
+                       sold=self.sold.sold_for(_key(s), now), tracked_days=tracked, sold_scale=scale, now=now)
 
     def scan_search(self, s: Search) -> list[Deal]:
         newest = self.client.search(s.query, order="newest_first",
                                     price_from=s.price_from, price_to=s.price_to,
                                     extra=s.filters)
+        self.sold.anchor(newest, time.time())   # newest ids = listed just now: dates for days-to-sell
         ebay_newest: list[Item] = []
         if self.ebay and self.ebay_due:
             try:
@@ -502,6 +512,7 @@ class Scanner:
             log.info("eBay: %s, %d API calls today (UTC)",
                      "searched this run" if self.ebay_due else "skipped this run (searched every "
                      f"{self.cfg.ebay.interval_minutes:g} min)", self.ebay_state.calls_today)
+        self.check_sold()
         self.seen.save()
         self.pools.save()
         self.known.save()
@@ -528,6 +539,64 @@ class Scanner:
                 log.error("Subito category %s failed: %s", cat, e)
         self.subito_new = list(found.values())
         self.first_subito = bool(self.subito_new) and not self.seen.has_platform("subito")
+
+    DEMAND_EVERY = 30 * 60   # the /demand table goes to the Worker this often
+
+    def demand_due(self, now: float | None = None) -> bool:
+        return (now or time.time()) - self.sold.data.get("demand_sent", 0) >= self.DEMAND_EVERY
+
+    def demand_table(self, now: float | None = None) -> dict:
+        """
+        For /demand: per search, demand overall and for its biggest model groups (same storage,
+        model number, Pro/Max...), worded like the alerts. Built from the price pools and sold history.
+        """
+        from .telegram import demand_text
+        now = now or time.time()
+        out = {}
+        for s in self.cfg.searches:
+            pool = [i for i in (self.pools.get(_key(s), any_age=True) or [])
+                    if i.source == "vinted" and is_relevant(i.title, s.query)]
+            if len(pool) < 3:
+                continue
+            rules = self._rules(s)
+            groups: dict = {}
+            for it in pool:
+                groups.setdefault(model_numbers(model_tokens(it.title, s.query, it.brand)), []).append(it)
+            rows = []
+            for tokens, items in sorted(groups.items(), key=lambda kv: -len(kv[1]))[:6]:
+                if len(items) < 3:
+                    continue
+                first = items[0]
+                _, _, days = blend_sold(first, first.price, rules, s.query)
+                d = demand(first, items, rules, s.query, days)
+                name = " ".join([s.query, *sorted(tokens)]).strip()
+                rows.append({"model": name, "text": demand_text(d), "listed": len(items), "label": d["label"]})
+            recent = [x for x in rules.sold if x[2] >= now - min(28, rules.tracked_days) * 86400]
+            weeks = min(28, rules.tracked_days) / 7
+            overall = {"label": "", "learning": rules.sold_scale is None or weeks < 1, "listed": len(pool),
+                       "favourites": round(sum(i.favourites for i in pool) / len(pool)), "days": None,
+                       "sold_week": round(len(recent) * (rules.sold_scale or 0) / weeks, 1) if weeks >= 1 else None,
+                       "ratio": None}
+            if not overall["learning"]:
+                ratio = overall["sold_week"] / len(pool)
+                overall.update(ratio=round(ratio, 2), label="high" if ratio >= 0.5 else "slow" if ratio < 0.1 else "normal")
+            out[s.query] = {"tracked_days": round(rules.tracked_days, 1), "all": demand_text(overall), "models": rows}
+        self.sold.data["demand_sent"] = now
+        return out
+
+    def check_sold(self):
+        """Opens a few listings that left their price pool, to learn which sold (sold.py)."""
+        now = time.time()
+        blocked = self.client.blocked
+        result = self.sold.verify(self.client, now) if not blocked else {}
+        self.sold.adapt(self.client.blocked, now)
+        self.notices += self.sold.notices
+        st = self.sold.stats()
+        log.info("Sold prices: %s | %d sold known, %d candidates, %d tracked, %d checks per run%s",
+                 ", ".join(f"{v} {k}" for k, v in result.items() if v) or "no checks",
+                 st["sold"], st["pending"], st["tracked"], st["per_run"],
+                 f" (Vinted refused {self.client.blocked} request(s))" if self.client.blocked else "")
+        self.sold.save(now)
 
     def _slot_of(self, s: Search):
         from .settings import search_group

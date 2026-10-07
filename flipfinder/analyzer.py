@@ -42,6 +42,10 @@ class Deal:
     by_platform: dict = field(default_factory=dict)   # platform -> (median, listings) when there are enough
     resell_on: str = ""            # platform where it nets the most after fees
     sell_fee: float = 0.0          # fee for selling it there
+    asking_value: float = 0.0      # median asking price, before sold prices were blended in
+    sold_count: int = 0            # likely-sold comparables used in market_value
+    sell_days: float | None = None   # comparables usually sell in this many days
+    demand: dict = field(default_factory=dict)   # label, sold per week, listed now, sell-through, favourites
 
 
 @dataclass
@@ -60,6 +64,10 @@ class Rules:
     missing_part_cost: float = 0.0  # cameras: added when the listing says no battery/charger
     budget: bool = False            # a budget-mode search (ranked by profit per euro spent)
     check: str = ""                 # "what to check before buying", shown in the alert
+    sold: list = field(default_factory=list)   # [(Item, days to sell or None, sold at)] likely sold lately (sold.py)
+    tracked_days: float = 0.0       # how long sales have been tracked for this search
+    sold_scale: float | None = None # listings gone / checked: sold ones found are a sample (None: too few checks)
+    now: float = 0.0
     # rating knobs: profit/roi at which that part of the score maxes out
     rating_profit_cap: float = 50.0
     rating_roi_cap: float = 150.0
@@ -321,6 +329,70 @@ def market_value(item: Item, pool: list[Item], min_comparables: int,
     return value, len(comps)
 
 
+SOLD_MIN = 5      # sold comparables needed before sold prices count
+SOLD_FULL = 10    # from this many on, market value is the sold median alone
+DAYS_MIN = 3      # known selling times needed for "sells in ~X days"
+FAST_DAYS, SLOW_DAYS = 7, 30   # rating +1 / -1
+
+
+def blend_sold(item: Item, asking: float, rules: Rules, query: str) -> tuple[float, int, float | None]:
+    """
+    (market value, sold comparables used, days to sell). With SOLD_MIN+ likely-sold comparables
+    (same model rules as asking prices), value moves from asking towards what actually sold:
+    half and half at SOLD_MIN, sold only at SOLD_FULL.
+    """
+    if not rules.sold:
+        return asking, 0, None
+    sold_items = [x[0] for x in rules.sold]
+    value, comps, _ = _comparables(item, sold_items, SOLD_MIN, query, rules.match_brand)
+    timed = [(x[0], x[1]) for x in rules.sold if x[1] is not None]
+    same, _ = find_comparables(item, [it for it, _ in timed], DAYS_MIN, query, rules.match_brand)
+    ids = {c.id for c in same}
+    days = [d for it, d in timed if it.id in ids]
+    sell_days = round(median(days), 1) if len(days) >= DAYS_MIN else None
+    if value is None:
+        return asking, 0, sell_days
+    n = len(comps)
+    w = min(1.0, 0.5 + 0.5 * (n - SOLD_MIN) / (SOLD_FULL - SOLD_MIN))
+    return round(w * value + (1 - w) * asking, 2), n, sell_days
+
+
+DEMAND_WINDOW = 28           # days of sales counted for "sold per week"
+HIGH_RATIO, SLOW_RATIO = 0.5, 0.1
+
+
+def demand(item: Item, comps: list[Item], rules: Rules, query: str, sell_days: float | None) -> dict:
+    """
+    How fast this model moves: sold per week (estimated: the sales we confirm are a sample,
+    scaled by rules.sold_scale), how many are listed now, sell-through = sold/week ÷ listed,
+    favourites. "learning" until a search has a week of tracking and enough checked listings.
+    """
+    active = len(comps)
+    favs = round(sum(c.favourites for c in comps) / active) if active else 0
+    out = {"label": "", "learning": True, "listed": active, "favourites": favs, "sold_week": None,
+           "ratio": None, "days": sell_days}
+    window = min(DEMAND_WINDOW, rules.tracked_days)
+    recent = [x[0] for x in rules.sold if len(x) > 2 and x[2] >= rules.now - window * 86400]
+    model = find_comparables(item, recent, 1, query, rules.match_brand)[0] if recent else []
+    if rules.sold_scale is None or window < 7 or (rules.tracked_days < 14 and len(model) < 3):
+        return out
+    sold_week = round(len(model) * rules.sold_scale / (window / 7), 1)
+    ratio = round(sold_week / active, 2) if active else None
+    if (sell_days is not None and sell_days <= FAST_DAYS) or (ratio is not None and ratio >= HIGH_RATIO):
+        label = "high"
+    elif (sell_days is not None and sell_days >= SLOW_DAYS) or (ratio is not None and ratio < SLOW_RATIO):
+        label = "slow"
+    else:
+        label = "normal"
+    return {**out, "label": label, "learning": False, "sold_week": sold_week, "ratio": ratio}
+
+
+def speed_points(sell_days: float | None) -> int:
+    if sell_days is None:
+        return 0
+    return 1 if sell_days <= FAST_DAYS else -1 if sell_days > SLOW_DAYS else 0
+
+
 def rate(profit: float, roi: float, comparables: int, rules: Rules) -> int:
     """
     Up to 4 points for ROI, 4 for absolute profit, 2 for how confident the
@@ -423,9 +495,10 @@ def assess(item: Item, pool: list[Item], rules: Rules, query: str = "",
         return None
     if query and not is_relevant(item.title, query):
         return None
-    value, comps, basis = _comparables(item, pool, rules.min_comparables, query, rules.match_brand)
-    if value is None:
+    asking, comps, basis = _comparables(item, pool, rules.min_comparables, query, rules.match_brand)
+    if asking is None:
         return None
+    value, sold_n, sell_days = blend_sold(item, asking, rules, query)
     n = len(comps)
     by_platform = platform_values(comps, rules.min_comparables)
     resell_on, sell_fee = best_resale(value, by_platform, rules.sell_fees, item.source)
@@ -436,7 +509,7 @@ def assess(item: Item, pool: list[Item], rules: Rules, query: str = "",
     cost = item.total_price + ship + missing
     profit = round(value - sell_fee - cost - rules.resell_costs, 2)
     roi = round(profit / cost * 100, 1) if cost > 0 else 0.0
-    rating = rate(profit, roi, n, rules)
+    rating = max(1, min(10, rate(profit, roi, n, rules) + speed_points(sell_days)))
     blocked = blocked_reasons(profit, roi, rating, rules, cost)
     by_price = sorted(comps, key=lambda p: p.price)
     sample = [by_price[i * (n - 1) // 4] for i in range(5)]   # cheapest, quartiles, priciest
@@ -444,7 +517,9 @@ def assess(item: Item, pool: list[Item], rules: Rules, query: str = "",
                 shipping=round(ship, 2), shipping_known=pickup_only or shipping is not None,
                 packaging=rules.resell_costs, pickup_only=pickup_only, city=city, blocked=blocked,
                 by_platform=by_platform, resell_on=resell_on, sell_fee=round(sell_fee, 2),
-                cost=round(cost, 2), missing_part=missing, budget=rules.budget, check=rules.check)
+                cost=round(cost, 2), missing_part=missing, budget=rules.budget, check=rules.check,
+                asking_value=asking, sold_count=sold_n, sell_days=sell_days,
+                demand=demand(item, comps, rules, query, sell_days))
     # How close it came: the weakest of profit/ROI/rating as a share of what the rule needs
     deal.closeness = round(min(
         1.0,

@@ -118,6 +118,9 @@ def main() -> int:
             queued += result == "queued"
         if queued:
             logging.info("Quiet hours: %d deal(s) queued for 07:30", queued)
+        if cloud and not args.dry_run and scanner.demand_due():
+            cloud.put_demand(scanner.demand_table())       # for /demand in Telegram
+            scanner.sold.save()
         if args.dry_run and scanner.near_misses:
             print("Closest near misses:")
             for query, m in scanner.near_misses[:5]:
@@ -158,6 +161,7 @@ def report(stats: RunStats, cloud: Cloud, ok: bool, error: str, scanner: Scanner
     elif stats.record_failure():
         notify.append(f"⚠️ <b>flipFinder: the last {FAIL_ALERT_AFTER} runs failed.</b>\n"
                       f"Latest: {html.escape(error)}\nYou'll get a message when it works again.")
+    notify += getattr(scanner, "notices", [])   # e.g. sold-price checks lowered after Vinted blocks
     summary = stats.summary_text(scanner.cfg.rules) if stats.summary_due() else None
     d = stats.data
     status = {"last_run": d.get("last_run"), "runs": d["runs"], "checked": d["checked"], "deals_sent": d["deals_sent"]}

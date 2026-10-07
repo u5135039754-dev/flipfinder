@@ -51,7 +51,8 @@ def format_deal(deal: Deal) -> str:
         "",
         f"💶 Item price: <b>{money(it.total_price, c)}</b> (listed {money(it.price, c)})",
         delivery,
-        f"🏷 Original price: <b>{money(deal.market_value, c)}</b> (median of {deal.comparables} listings)",
+        value_line(deal),
+        *([demand_line(deal)] if deal.demand else []),
         *platform_lines(deal),
         *([f"🔋 No battery/charger: +{money(deal.missing_part, c)} to buy one (included)"]
           if deal.missing_part else []),
@@ -65,6 +66,36 @@ def format_deal(deal: Deal) -> str:
         f'<a href="{html.escape(it.url)}">Open on {platform}</a>',
     ]
     return "\n".join(lines)
+
+
+def value_line(deal: Deal) -> str:
+    c = deal.item.currency
+    if deal.sold_count:
+        return (f"🏷 Market value: <b>{money(deal.market_value, c)}</b> ({deal.sold_count} sold · "
+                f"asking {money(deal.asking_value, c)}, median of {deal.comparables})")
+    return f"🏷 Original price: <b>{money(deal.market_value, c)}</b> (median of {deal.comparables} listings)"
+
+
+DEMAND_LABELS = {"high": "🔥 High demand", "normal": "👍 Normal demand", "slow": "🐢 Slow"}
+
+
+def demand_line(deal: Deal) -> str:
+    """'🔥 High demand · ~12 sold/week · 8 listed · ~4 days' (or 'still learning' at first)."""
+    return demand_text(deal.demand)
+
+
+def demand_text(d: dict) -> str:
+    days = f" · ⏱ sells in ~{sell_days_text(d['days'])}" if d.get("days") is not None else ""
+    if d.get("learning"):
+        return f"📊 Demand: still learning · {d['listed']} listed · ❤️ {d['favourites']} avg favourites{days}"
+    sw = d["sold_week"]
+    sold = f"~{sw:.0f}" if sw >= 1 else f"~{sw:.1f}"
+    return f"{DEMAND_LABELS[d['label']]} · {sold} sold/week · {d['listed']} listed{days} · ❤️ {d['favourites']}"
+
+
+def sell_days_text(days: float) -> str:
+    n = max(1, round(days))
+    return f"{n} day" if n == 1 else f"{n} days"
 
 
 def platform_lines(deal: Deal) -> list[str]:

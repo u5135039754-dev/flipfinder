@@ -1,4 +1,5 @@
 import json
+import time
 import sys
 from pathlib import Path
 
@@ -518,6 +519,11 @@ class FakeVinted:
 
     def __init__(self):
         self.detail_calls = 0
+        self.blocked = 0
+        self.statuses = {}          # item id -> what its page says (default: still for sale)
+
+    def item_status(self, item_id):
+        return self.statuses.get(item_id, "active")
 
     def search(self, query, order="newest_first", page=1, **kw):
         if order == "relevance":
@@ -549,6 +555,7 @@ def _fake_scanner(tmp_path, n_searches, known_keys):
     s.known = sc_mod.KnownSearches(tmp_path / "searches.json", s.pools)
     s.ebay_due = s.first_ebay = False
     s.subito, s.subito_new, s.first_subito, s.subito_pools = None, [], False, 0
+    s.sold, s.notices = sc_mod.SoldTracker(tmp_path / "sold.json"), []
     return s
 
 
@@ -980,6 +987,9 @@ class FakeCloud:
         self.calls.append(("deal", deal.item.key, text))
         return "sent"
 
+    def put_demand(self, table):
+        self.calls.append(("demand", table))
+
     def report_run(self, status=None, values=None, notify=None):
         self.calls.append(("run", status, values, notify))
         return {"notified": [True] * len(notify or []), "flushed": 2}
@@ -1012,6 +1022,16 @@ searches:
         def scan(self):
             return [deal]
 
+        def demand_due(self):
+            return True
+
+        def demand_table(self):
+            return {"boss ds 1": {"all": "📊 Demand: still learning", "models": []}}
+
+        @property
+        def sold(self):
+            return type("S", (), {"save": lambda self: None})()
+
     cloud = FakeCloud({"settings": {"disabled": ["boss katana"]}, "area": {**AREA, "radius_km": 20},
                        "pool": 50.0, "open": []})
     monkeypatch.setattr(main_mod, "cloud_from_env", lambda: cloud)
@@ -1024,11 +1044,12 @@ searches:
     assert cfg.subito.enabled and cfg.subito.radius_km == 20                 # private area from the Worker
     assert cfg.budget == 50                                                  # the pool caps the budget
     kinds = [c[0] for c in cloud.calls]
-    assert kinds == ["state", "catalog", "deal", "run"]
+    assert kinds == ["state", "catalog", "deal", "demand", "run"]
     catalog_sent = cloud.calls[1][1]
     assert all("enabled" not in s for s in catalog_sent["searches"])         # config.yaml as is
     assert cloud.calls[2][1] == deal.item.key and "Boss DS-1" in cloud.calls[2][2]
-    status = cloud.calls[3][1]
+    assert "boss ds 1" in cloud.calls[3][1]
+    status = cloud.calls[4][1]
     assert status["runs"] == 1 and status["checked"] == 40 and status["deals_sent"] == 1
     stats = json.loads((tmp_path / "data" / "stats.json").read_text())
     assert stats["deals_sent"] == 3                                          # + 2 sent from the overnight queue
@@ -1126,3 +1147,253 @@ def test_ebay_pass_waits_for_a_guitar_run(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(sc_mod.time, "time", lambda: t0 + 30)
     s.scan()
     assert s.ebay_due is True                                # without turns, as before
+
+
+# --- Sold-price tracking ---
+
+def test_item_page_status_from_vinted_page_data():
+    from flipfinder.vinted import item_page_status
+    for_sale = '"can_buy":true,"is_hidden":false,"is_reserved":false,"availability":"InStock"'
+    sold = '"can_buy":false,"is_hidden":false,"is_reserved":false'
+    assert item_page_status(for_sale) == "active"
+    assert item_page_status(sold) == "sold"
+    assert item_page_status('"can_buy":false,"is_hidden":false,"is_reserved":true') == "reserved"
+    assert item_page_status('"is_hidden":true') == "deleted"
+    assert item_page_status('{"hidden":true}') == "unknown"
+
+
+def _tracker(tmp_path):
+    from flipfinder.sold import SoldTracker
+    return SoldTracker(tmp_path / "sold.json")
+
+
+def test_listing_dates_come_from_vinted_ids(tmp_path: Path):
+    t = _tracker(tmp_path)
+    t.anchor([titled(1000, "x", 1, "X")], 0)
+    t.anchor([titled(2000, "x", 1, "X")], 100)          # the first anchor is always kept
+    t.anchor([titled(2600, "x", 1, "X")], 300)          # within 10 min of the one before: replaces the last
+    t.anchor([titled(3000, "x", 1, "X")], 1000)
+    t.anchor([titled(2500, "x", 1, "X")], 2000)         # not newer: ignored
+    assert t.data["anchors"] == [[1000, 0], [2600, 300], [3000, 1000]]
+    assert t.listed_at(999) is None                      # older than tracking: unknown
+    assert t.listed_at(1800) == 150.0 and t.listed_at(5000) == 1000
+
+
+def test_gone_listings_become_candidates_and_page_checks_decide(tmp_path: Path):
+    t = _tracker(tmp_path)
+    day = 86400
+    t.anchor([titled(100, "x", 1, "X")], 0)
+    pool1 = [titled(i, f"Boss DS-1 #{i}", 30 + i - 100, "Boss") for i in (101, 102, 103, 104, 105)]
+    t.anchor([titled(110, "x", 1, "X")], 2 * day)
+    t.observe("ds1", [], pool1, 2 * day)
+    pool2 = [i for i in pool1 if i.id in (101, 105)]
+    t.observe("ds1", pool1, pool2, 4 * day)
+    assert sorted(t.data["pending"]) == ["102", "103", "104"]
+    t.observe("ds1", pool2, pool2 + [pool1[2]], 4.1 * day)   # 103 is back: only fell off a page
+    assert sorted(t.data["pending"]) == ["102", "104"]
+    client = FakeVinted()
+    client.statuses = {102: "sold", 104: "reserved"}
+    out = t.verify(client, 4.2 * day)
+    assert out["sold"] == 1 and out["reserved"] == 1
+    rec = t.data["sold"]["ds1"][0]
+    assert rec["item"]["price"] == 32 and rec["at"] == 3 * day     # between last seen and gone
+    assert rec["days"] == 2.6                                        # listed ~0.4 d (id 102), sold day 3
+    assert list(t.data["pending"]) == ["104"] and t.data["pending"]["104"]["tries"] == 1
+    sold = t.sold_for("ds1", 4.2 * day)
+    assert [(i.title, d, at) for i, d, at in sold] == [("Boss DS-1 #102", 2.6, 3 * day)]
+    assert t.sold_for("ds1", 64 * day) == []                         # only the last 60 days count
+
+
+def test_candidates_favour_searches_with_few_sales_and_fresh_gaps(tmp_path: Path):
+    t = _tracker(tmp_path)
+    t.data["pending"] = {"1": {"key": "a", "gone": 10}, "2": {"key": "b", "gone": 5}, "3": {"key": "b", "gone": 20}}
+    t.data["sold"] = {"a": [{}] * 3}
+    assert t.candidates(2) == ["3", "2"]
+
+
+def test_page_checks_back_off_when_vinted_blocks_and_recover(tmp_path: Path):
+    from flipfinder import sold as sold_mod
+    t = _tracker(tmp_path)
+    h = 3600
+    t.adapt(1, 0)
+    assert t.data["checks"]["per_run"] == 2 and "lowered to 2 per run" in t.notices[-1]
+    t.adapt(2, h)
+    t.adapt(1, 2 * h)
+    assert t.data["checks"]["per_run"] == 0 and "none for 6 h" in t.notices[-1]
+    client = FakeVinted()
+    t.data["pending"] = {"7": {"key": "a", "gone": 0, "last": 0, "first": 0, "item": {}, "tries": 0}}
+    assert sum(t.verify(client, 3 * h).values()) == 0                # paused
+    assert sum(t.verify(client, 9 * h).values()) == 1                # pause over: one check
+    t.adapt(0, 9 * h)
+    assert t.data["checks"]["per_run"] == 0                           # not 24 h quiet yet
+    t.adapt(0, 2 * h + 25 * h)
+    assert t.data["checks"]["per_run"] == 1 and "back up to 1" in t.notices[-1]
+    for k in range(5):
+        t.adapt(0, (60 + 25 * k) * h)
+    assert t.data["checks"]["per_run"] == sold_mod.MAX_CHECKS
+
+
+def test_blocked_page_check_stops_the_checks(tmp_path: Path):
+    t = _tracker(tmp_path)
+    t.data["pending"] = {str(i): {"key": "a", "gone": i, "last": 0, "first": 0, "item": {}, "tries": 0} for i in range(4)}
+    client = FakeVinted()
+    client.statuses = {3: "blocked"}                                  # the newest gone is checked first
+    out = t.verify(client, 10)
+    assert out["blocked"] == 1 and sum(out.values()) == 1 and len(t.data["pending"]) == 4
+
+
+def _sold(n, title, price, brand="Boss", days=None):
+    return [(titled(9000 + n * 100 + i, title, price, brand), days) for i in range(n)]
+
+
+def test_sold_prices_pull_market_value_towards_what_sold(tmp_path: Path):
+    from dataclasses import replace as dc_replace
+    item = titled(1, "Boss DS-1 distortion", 25, "Boss")
+    pool = [titled(10 + i, "Boss DS-1 distortion", 60, "Boss") for i in range(12)]
+    rules = Rules(min_profit=1, min_roi=1, max_roi=500)
+    base = assess(item, pool, rules)
+    assert base.market_value == 60 and base.sold_count == 0 and base.sell_days is None
+    four = assess(item, pool, dc_replace(rules, sold=_sold(4, "Boss DS-1 distortion", 40)))
+    assert four.market_value == 60 and four.sold_count == 0                 # too few sold to count
+    five = assess(item, pool, dc_replace(rules, sold=_sold(5, "Boss DS-1 distortion", 40)))
+    assert five.market_value == 50 and five.sold_count == 5 and five.asking_value == 60   # half and half
+    ten = assess(item, pool, dc_replace(rules, sold=_sold(10, "Boss DS-1 distortion", 40)))
+    assert ten.market_value == 40                                           # sold only
+    other = assess(item, pool, dc_replace(rules, sold=_sold(10, "Boss DS-2 turbo distortion", 40)))
+    assert other.market_value == 60                                         # another model: not counted
+    assert ten.profit < base.profit
+
+
+def test_selling_speed_shows_and_moves_the_rating_one_point(tmp_path: Path):
+    from dataclasses import replace as dc_replace
+    item = titled(1, "Boss DS-1 distortion", 25, "Boss")
+    pool = [titled(10 + i, "Boss DS-1 distortion", 60, "Boss") for i in range(12)]
+    rules = Rules(min_profit=1, min_roi=1, max_roi=500)
+    base = assess(item, pool, rules)
+    fast = assess(item, pool, dc_replace(rules, sold=_sold(3, "Boss DS-1 distortion", 60, days=4.0)))
+    slow = assess(item, pool, dc_replace(rules, sold=_sold(3, "Boss DS-1 distortion", 60, days=45.0)))
+    mid = assess(item, pool, dc_replace(rules, sold=_sold(3, "Boss DS-1 distortion", 60, days=15.0)))
+    assert fast.sell_days == 4.0 and fast.rating == min(10, base.rating + 1)
+    assert slow.rating == max(1, base.rating - 1) and mid.rating == base.rating
+    assert assess(item, pool, dc_replace(rules, sold=_sold(2, "Boss DS-1 distortion", 60, days=4.0))).sell_days is None
+    msg = format_deal(fast)
+    assert "⏱ sells in ~4 days" in msg and "🏷 Original price" in msg       # 3 sold: speed yes, value not yet
+    ten = assess(item, pool, dc_replace(rules, sold=_sold(10, "Boss DS-1 distortion", 40, days=1.2)))
+    msg = format_deal(ten)
+    assert "🏷 Market value: <b>€40.00</b> (10 sold · asking €60.00, median of 12)" in msg
+    assert "⏱ sells in ~1 day" in msg
+
+
+def test_a_scan_tracks_pools_and_checks_gone_listings(tmp_path: Path, caplog):
+    import flipfinder.scanner as sc_mod
+    s = _fake_scanner(tmp_path, 1, lambda searches: [sc_mod._key(x) for x in searches])
+    key = sc_mod._key(s.cfg.searches[0])
+    old = [titled(500 + i, "thing 0 128GB", 300, "X") for i in range(3)]
+    s.pools.put(key, old)
+    s.pools.data[key]["ts"] = 0                                      # stale: rebuilt this run
+    s.sold.observe(key, [], old, time.time() - 3600)                 # tracked since the last refresh
+    s.client.statuses = {500: "sold", 501: "deleted"}
+    with caplog.at_level("INFO"):
+        s.scan()
+    assert s.sold.stats()["sold"] == 1
+    assert "Sold prices: 1 sold, 1 active, 1 deleted" in caplog.text
+    assert s.sold.data["anchors"]                                    # the newest feed gave a date anchor
+    saved = json.loads((tmp_path / "sold.json").read_text())
+    assert len(saved["sold"][key]) == 1
+    s.client.blocked = 2                                             # Vinted refused requests this run
+    s.sold.data["pending"]["9"] = {"key": key, "gone": time.time(), "last": 0, "first": 0, "item": {}, "tries": 0}
+    s.scan()
+    assert "9" in s.sold.data["pending"]                              # no page checks while blocked
+    assert any("lowered to 2 per run" in n for n in s.notices)
+
+
+
+def test_the_first_refresh_uses_the_previous_pool_as_history(tmp_path: Path):
+    t = _tracker(tmp_path)
+    old = [titled(i, f"Boss DS-1 #{i}", 30, "Boss") for i in (1, 2, 3)]
+    t.observe("ds1", old, old[:1], 1000, old_ts=400)
+    assert sorted(t.data["pending"]) == ["2", "3"]
+    assert t.data["pending"]["2"]["last"] == 400 and t.data["seen"]["ds1"]["1"] == [400, 1000, 30]
+    t2 = _tracker(tmp_path / "x")
+    t2.observe("ds1", old, old[:1], 1000)                 # no age known: no guessing
+    assert t2.data["pending"] == {}
+
+
+def _sold_at(n, title, price, at, days=None, brand="Boss"):
+    return [(titled(7000 + n * 100 + i, title, price, brand), days, at) for i in range(n)]
+
+
+def test_demand_is_still_learning_at_first(tmp_path: Path):
+    from dataclasses import replace as dc_replace
+    item = titled(1, "Boss DS-1 distortion", 25, "Boss")
+    pool = [titled(10 + i, "Boss DS-1 distortion", 60, "Boss") for i in range(12)]
+    for i, p in enumerate(pool):
+        p.favourites = i                                          # 0..11: average 5.5 -> 6
+    rules = Rules(min_profit=1, min_roi=1, max_roi=500, now=30 * 86400)
+    d = assess(item, pool, dc_replace(rules, tracked_days=3, sold_scale=2.0,
+                                      sold=_sold_at(9, "Boss DS-1 distortion", 60, 29 * 86400)))
+    assert d.demand["learning"] and d.demand["listed"] == 12 and d.demand["favourites"] == 6
+    assert "📊 Demand: still learning · 12 listed · ❤️ 6 avg favourites" in format_deal(d)
+    # a week tracked but no checks yet (no scale): still learning
+    d = assess(item, pool, dc_replace(rules, tracked_days=8, sold_scale=None))
+    assert d.demand["learning"]
+
+
+def test_demand_labels_from_sell_through_and_speed(tmp_path: Path):
+    from dataclasses import replace as dc_replace
+    item = titled(1, "Boss DS-1 distortion", 25, "Boss")
+    pool = [titled(10 + i, "Boss DS-1 distortion", 60, "Boss") for i in range(10)]
+    now = 30 * 86400
+    rules = Rules(min_profit=1, min_roi=1, max_roi=500, now=now, tracked_days=28, sold_scale=2.5)
+    # 8 confirmed in 4 weeks x 2.5 (we check 1 in 2.5 gone listings) = 5/week; 10 listed -> 0.5: high
+    hi = assess(item, pool, dc_replace(rules, sold=_sold_at(8, "Boss DS-1 distortion", 60, now - 5 * 86400)))
+    assert hi.demand["label"] == "high" and hi.demand["sold_week"] == 5.0 and hi.demand["ratio"] == 0.5
+    assert "🔥 High demand · ~5 sold/week · 10 listed · ❤️ 0" in format_deal(hi)
+    # 3 sold, 9 days each: 1.9/week -> 0.19: normal, and the speed shows
+    mid = assess(item, pool, dc_replace(rules, sold=_sold_at(3, "Boss DS-1 distortion", 60, now - 86400, days=9.0)))
+    assert mid.demand["label"] == "normal"
+    assert "👍 Normal demand · ~2 sold/week · 10 listed · ⏱ sells in ~9 days" in format_deal(mid)
+    # 1 sold in 4 weeks: 0.6/week -> 0.06: slow
+    slow = assess(item, pool, dc_replace(rules, sold=_sold_at(1, "Boss DS-1 distortion", 60, now - 86400)))
+    assert slow.demand["label"] == "slow" and "🐢 Slow · ~0.6 sold/week" in format_deal(slow)
+    # quick sellers are high demand even when few sell
+    fast = assess(item, pool, dc_replace(rules, sold=_sold_at(3, "Boss DS-1 distortion", 60, now - 86400, days=3.0)))
+    assert fast.demand["label"] == "high"
+    # other models' sales don't count; old sales (over 28 days) neither
+    other = assess(item, pool, dc_replace(rules, sold=_sold_at(8, "Boss DS-2 turbo distortion", 60, now - 86400)))
+    old = assess(item, pool, dc_replace(rules, sold=_sold_at(8, "Boss DS-1 distortion", 60, now - 40 * 86400)))
+    assert other.demand["sold_week"] == 0 and old.demand["sold_week"] == 0
+
+
+def test_coverage_scales_the_sales_we_confirm(tmp_path: Path):
+    t = _tracker(tmp_path)
+    old = [titled(i, f"Boss DS-1 #{i}", 30, "Boss") for i in range(1, 11)]
+    t.observe("ds1", old, old[:2], 2 * 86400, old_ts=86400)            # 8 gone
+    assert t.coverage("ds1", 3 * 86400) == (2.0, None)                   # tracked since the old pool, no checks yet
+    client = FakeVinted()
+    client.statuses = {3: "sold", 4: "deleted"}
+    t.data["checks"]["per_run"] = 4
+    t.verify(client, 3 * 86400)
+    t.verify(client, 3 * 86400)                                          # 8 checked: 1 sold, 1 deleted, 6 active
+    assert t.data["keys"]["ds1"] == {"since": 86400, "gone": 8, "decided": 8, "sold": 1}
+    assert t.coverage("ds1", 3 * 86400) == (2.0, 1.0)
+
+
+
+def test_demand_table_per_search_and_model(tmp_path: Path):
+    import flipfinder.scanner as sc_mod
+    from flipfinder.config import Search
+    s = _fake_scanner(tmp_path, 0, lambda searches: [])
+    q = Search("iphone 13")
+    s.cfg.searches = [q]
+    key = sc_mod._key(q)
+    pool = ([titled(100 + i, "iPhone 13 128GB blu", 400, "Apple") for i in range(6)]
+            + [titled(200 + i, "iPhone 13 256GB nero", 480, "Apple") for i in range(4)]
+            + [titled(300 + i, "iPhone 13 Pro 128GB", 600, "Apple") for i in range(2)])
+    s.pools.put(key, pool)
+    table = s.demand_table()
+    rows = table["iphone 13"]["models"]
+    assert [(r["model"], r["listed"]) for r in rows] == [("iphone 13 128gb", 6), ("iphone 13 256gb", 4)]
+    assert "still learning · 6 listed" in rows[0]["text"]
+    assert "still learning · 12 listed" in table["iphone 13"]["all"]
+    assert not s.demand_due()                                       # sent: the next one in 30 min

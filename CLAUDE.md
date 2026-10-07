@@ -9,6 +9,7 @@ Python 3.10+ app that finds underpriced Vinted listings and sends Telegram alert
 - `flipfinder/scanner.py` per-search scan, price pool cache in `data/pools.json`
 - `flipfinder/ebay.py` eBay Browse API client (EBAY_IT, Buy It Now, app token), searched every 20 min, pools every 3 h (~3,050 of 5,000 calls/day), calls/day in `data/ebay.json`
 - `flipfinder/subito.py` Subito app JSON API (hades.subito.it, app headers; the website is Akamai-blocked): new listings per category in the home province, kept within `radius_km`, pickup travel cost vs seller shipping
+- `flipfinder/sold.py` sold-price tracking: pool history, gone listings checked via item page (`can_buy:false` = sold, 404 = deleted), listing dates from id anchors, adaptive checks per run (halve on 403/429), demand (analyzer.demand, /demand table sent to the Worker every 30 min)
 - `flipfinder/storage.py` seen items in `data/seen.json` as `platform:id` (14 day expiry)
 - `flipfinder/telegram.py` deal alert text only (the Worker sends)
 - `flipfinder/cloud.py` client for the Worker API (FLIPFINDER_API_URL / FLIPFINDER_API_KEY): state (Telegram settings, home area, pool, owned deals), catalog, deals, run report
@@ -23,7 +24,7 @@ Python 3.10+ app that finds underpriced Vinted listings and sends Telegram alert
 
 ## Notes
 - Keep `request_delay` >= 2s. Handle 401/403 by refreshing the cookie, 429 by backing off.
-- Market value uses asking prices, not sold prices.
+- Market value: asking prices, blended with likely-sold prices once 5+ sold comparables exist (sold.py).
 
 ## Plan decisions (agreed with the owner; keep until done)
 Working rules: the owner doesn't code. Build, test, dry run, show results in plain language, and ask before every push. Manual steps one at a time in simple words. Never ask for secrets in chat. Everything stays free (€0).

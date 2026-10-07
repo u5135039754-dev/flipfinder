@@ -124,6 +124,12 @@ const API = {
     return { ok: true };
   },
 
+  /** Demand per search and model (sold per week, listed, speed), for /demand. */
+  async "PUT /api/demand"({ store }, body) {
+    await store.put("demand", body);
+    return { ok: true };
+  },
+
   /** A deal found by the scanner: numbered, sent to every chat (or kept for 07:30 in quiet hours). */
   async "POST /api/deal"(ctx, body) {
     const { store, tg, now, bot } = ctx;

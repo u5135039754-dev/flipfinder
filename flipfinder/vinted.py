@@ -146,6 +146,7 @@ class VintedClient:
             "Accept-Language": "it-IT,it;q=0.9,en;q=0.8",
         })
         self._has_cookie = False
+        self.blocked = 0   # 403/429 answers this run (sold-price checks back off when there are any)
 
     def _refresh_cookie(self):
         # Visiting the homepage gives us the anonymous session cookie the API needs
@@ -163,10 +164,12 @@ class VintedClient:
             time.sleep(self.request_delay + random.uniform(0, 1))
             r = self.session.get(url, params=params, timeout=20)
             if r.status_code in (401, 403):
+                self.blocked += r.status_code == 403
                 log.info("Vinted said %s, getting a new cookie", r.status_code)
                 self._refresh_cookie()
                 continue
             if r.status_code == 429:
+                self.blocked += 1
                 wait = 30 * (attempt + 1)
                 log.warning("Rate limited by Vinted, waiting %ss", wait)
                 time.sleep(wait)
@@ -179,6 +182,31 @@ class VintedClient:
         r = self._get(f"/items/{item.id}", {})
         r.encoding = "utf-8"
         return parse_item_page(r.text)
+
+    def item_status(self, item_id: int) -> str:
+        """
+        "sold", "active", "reserved", "deleted", "unknown", or "blocked" (403/429: stop checking).
+        One request, no retries: these checks are optional and must never add to a block.
+        """
+        if not self._has_cookie:
+            try:
+                self._refresh_cookie()
+            except requests.RequestException:
+                return "unknown"
+        time.sleep(self.request_delay + random.uniform(0, 1))
+        try:
+            r = self.session.get(f"https://{self.domain}/items/{item_id}", timeout=20)
+        except requests.RequestException:
+            return "unknown"
+        if r.status_code in (403, 429):
+            self.blocked += 1
+            return "blocked"
+        if r.status_code in (404, 410):
+            return "deleted"
+        if r.status_code != 200 or f"/items/{item_id}" not in r.url:
+            return "unknown"
+        r.encoding = "utf-8"
+        return item_page_status("".join(json.loads(c) for c in _RSC_CHUNK.findall(r.text)))
 
     def search(self, query: str, *, order: str = "newest_first", page: int = 1,
                per_page: int = 96, price_from: float | None = None,
@@ -262,3 +290,16 @@ def parse_item_page(html: str) -> ItemDetails:
                 if entry.get("key") == "location":
                     details.city = _text(entry.get("text"))
     return details
+
+
+def item_page_status(data: str) -> str:
+    """From an item page's data: sold listings can't be bought but aren't hidden or reserved."""
+    if '"is_reserved":true' in data:
+        return "reserved"
+    if '"is_hidden":true' in data:
+        return "deleted"
+    if '"can_buy":true' in data or '"availability":"InStock"' in data:
+        return "active"
+    if '"can_buy":false' in data and '"is_hidden":false' in data:
+        return "sold"
+    return "unknown"

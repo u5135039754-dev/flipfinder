@@ -8,7 +8,7 @@ import { APPROVAL_OVER, allocate, approved, entryLine, memberKey, potText, rever
 import { INTROS, TOPIC_FOR_GROUP, TOPIC_NAMES, mention, pricesFor, sellListing } from "./group.js";
 import { UserError, closeMatches, esc, euro, g, parseNumber, queryAndRange, splitArgs } from "./util.js";
 
-export const COMMANDS_VERSION = 7;   // bump when the list below changes, so it's registered again
+export const COMMANDS_VERSION = 8;   // bump when the list below changes, so it's registered again
 export const COMMANDS = [
   ["help", "List all commands"],
   ["app", "Open the flipFinder app: deals, stock, pot and settings"],
@@ -25,6 +25,7 @@ export const COMMANDS = [
   ["sell", "Ready-to-copy listing: /sell 12 or /sell boss ds-1 (add en or uk for English/Ukrainian)"],
   ["topic", "Send in a group topic to make it the Guitars/Electronics/Budget/Summary topic"],
   ["profit", "Profit in total, this month and per person"],
+  ["demand", "How fast a model sells: /demand iphone 13 128gb or /demand boss ds 1"],
   ["pot", "The shared pot: cash, stock, profit and what each member would get back"],
   ["ledger", "Every money action, newest last: /ledger or /ledger 30"],
   ["deposit", "Owner only: money put in: /deposit Marco 100"],
@@ -190,6 +191,33 @@ export class Bot {
     const me = await this.tg.call("getMe", {});
     await this.reply(chat, "📱 The app opens from the private chat with the bot (menu button, bottom left).",
       me?.username ? [[{ text: "Open the bot", url: `https://t.me/${me.username}` }]] : undefined);
+  }
+
+  async cmd_demand(chat, args) {
+    if (!args.length) throw new UserError("Which model? e.g. /demand iphone 13 128gb or /demand boss ds 1");
+    const table = await this.store.get("demand");
+    if (!table?.searches) throw new UserError("No demand numbers yet: they come with the next scans (every 30 min)");
+    const flat = (x) => x.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+    const words = args.join(" ").toLowerCase().split(/\s+/).map(flat).filter(Boolean);
+    const has = (w) => words.some((x) => x === w || (w.length > 2 && x.includes(w)) || (x.length > 2 && w.includes(x)));
+    // the search whose words best match what was asked
+    const scored = Object.keys(table.searches).map((q) => {
+      const qw = q.split(/\s+/).map(flat).filter(Boolean);
+      return [q, qw.filter(has).length / qw.length, qw.length];
+    }).sort((a, b) => b[1] - a[1] || b[2] - a[2]);
+    let query = scored[0]?.[1] >= 0.5 ? scored[0][0] : closeMatches(args.join(" ").toLowerCase(), Object.keys(table.searches))[0];
+    if (!query) throw new UserError(`No search like "${args.join(" ")}". /categories lists them`);
+    const s = table.searches[query];
+    // model rows matching the extra words first (e.g. "128gb")
+    const extra = words.filter((w) => !query.split(/\s+/).map(flat).includes(w));
+    const rows = [...s.models].map((r) => [r, extra.filter((w) => r.model.split(/\s+/).map(flat).includes(w)).length])
+      .sort((a, b) => b[1] - a[1] || b[0].listed - a[0].listed).map(([r]) => r);
+    const updated = table.updated ? Math.round((this.now - table.updated) / 60) : null;
+    const lines = [`📊 <b>Demand: ${esc(query)}</b>`, `All models: ${esc(s.all)}`];
+    for (const r of rows.slice(0, 5)) lines.push(`· <b>${esc(r.model)}</b>: ${esc(r.text)}`);
+    lines.push("", `<i>Tracked ${Math.round(s.tracked_days)} days${updated !== null ? ` · updated ${updated} min ago` : ""}. ` +
+      "Sold per week is an estimate: we check a sample of the listings that leave Vinted's search.</i>");
+    await this.reply(chat, lines.join("\n"));
   }
 
   async cmd_status(chat) {

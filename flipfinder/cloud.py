@@ -16,6 +16,7 @@ import requests
 
 from .analyzer import Deal
 from .settings import search_group
+from .telegram import demand_line
 
 log = logging.getLogger(__name__)
 
@@ -29,7 +30,8 @@ def deal_record(deal: Deal) -> dict:
         "cost": deal.cost or round(it.total_price + deal.shipping, 2), "value": deal.market_value,
         "low": sample[1] if len(sample) > 1 else None,   # ~25th percentile: a quick-sale price
         "profit": deal.profit, "query": getattr(deal, "query", ""), "condition": it.condition,
-        "item": asdict(it),
+        "item": asdict(it), "sell_days": deal.sell_days, "sold_count": deal.sold_count,
+        "demand": demand_line(deal) if deal.demand else "",
         # queue order overnight: budget deals by profit per euro, the rest by rating, then profit
         "score": [int(deal.budget), round(deal.per_euro, 4) if deal.budget else 0, deal.rating, deal.profit],
     }
@@ -89,6 +91,9 @@ class Cloud:
             "key": deal.item.key, "text": text, "photo": deal.item.photo, "group": getattr(deal, "group", ""),
             "record": deal_record(deal)})
         return (res or {}).get("status", "failed")
+
+    def put_demand(self, table: dict):
+        self._call("PUT", "/api/demand", {"updated": time.time(), "searches": table})
 
     def report_run(self, status: dict | None = None, values: dict | None = None,
                    notify: list[dict] | None = None) -> dict:

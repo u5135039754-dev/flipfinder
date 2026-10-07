@@ -106,6 +106,26 @@ python main.py --dry-run --once  # one scan, prints deals instead of sending
 python main.py                   # runs forever
 ```
 
+## Sold prices and demand
+
+Asking prices overstate what things sell for, so flipFinder learns what actually sells on Vinted.
+Each price-pool refresh records its listings; when one has gone from the next refresh, a few such
+listings per run get their page opened (most just dropped off the pages we read): "can't be bought"
+means sold, at the last price seen. Listing dates come from Vinted's ids, which only go up.
+
+- With 5+ sold listings of the same model in 60 days, market value moves from the asking median
+  towards the sold median (sold only from 10). Alerts say "🏷 Market value: €85 (7 sold · asking €95)".
+- Demand per model on every alert and in the app: 🔥 high (sells in ≤7 days or sold per week ÷
+  listed now ≥ 0.5), 👍 normal, 🐢 slow (30+ days or < 0.1), e.g. "🔥 High demand · ~12 sold/week ·
+  8 listed · ⏱ sells in ~4 days · ❤️ 9". Sold per week is an estimate: the sales we confirm are a
+  sample, scaled by how many gone listings we could check. The first 1-2 weeks say "still learning".
+- Selling speed moves the rating by one point: +1 within 7 days, -1 over 30.
+- /demand iphone 13 128gb shows the numbers for any search and its models.
+- Page checks: 4 per run (about 12 s). Any Vinted refusal (403/429) halves them, down to a 6 h
+  pause, with a note in Summary; after 24 h without one they go back up one at a time.
+- History in `data/sold.json` (public listing data only, 90 days). Vinted only: eBay doesn't show
+  sales and Subito ads just disappear. Vinted shows favourites but no view counts.
+
 ## Optional: eBay as a second source
 
 flipFinder can also check eBay.it Buy It Now listings through eBay's official Browse API, and
