@@ -20,6 +20,39 @@ TOPIC_FOR_GROUP = {"Guitars": "guitars", "Amps": "guitars", "Pedals": "guitars",
                    "Audio": "electronics", "Electronics": "electronics", "Budget": "budget"}
 TOPIC_NAMES = {"guitars": "Guitars", "electronics": "Electronics", "budget": "Budget", "summary": "Summary"}
 
+# Pinned intro per topic ("general" = the main chat), posted when a topic is set with /topic
+# and again with /intro; an intro that's already there is edited, not posted twice
+INTROS = {
+    "guitars": "\n".join([
+        "🎸 <b>Guitars</b>",
+        "Underpriced guitars, amps, pedals and soundbars land here.",
+        "Tap ✋ Claim if you're on it → 💸 Bought → 🏷 Listed → ✅ Sold. First claim wins 🏃",
+        "👍/👎 tells the bot if a deal was any good, 📩 gives you a ready Italian message for the seller.",
+    ]),
+    "electronics": "\n".join([
+        "📱 <b>Electronics</b>",
+        "Phones, AirPods, iPads, consoles and GPUs land here.",
+        "Before you pay: 🔋 battery health, 🔓 iCloud/account unlocked, 🔍 no cracks, 🎥 ask for a video of it working.",
+        "No video, no deal 😉",
+    ]),
+    "budget": "\n".join([
+        "💰 <b>Budget</b>",
+        "Cheap flips that fit our budget: pedals, calculators, cameras, DS, Kindles, controllers.",
+        "/budget shows or changes the limit, /pot shows how much money we have.",
+        "Small buys, quick flips 🔁",
+    ]),
+    "summary": "\n".join([
+        "📊 <b>Summary</b>",
+        "Daily summary, weekly report (Sunday 20:00), pot updates and failure alerts land here.",
+        "/status is the bot running · /stock what we own · /profit how we're doing · /pot our money",
+    ]),
+    "general": "\n".join([
+        "💸 <b>Welcome to FLIP MAFIA</b>",
+        "This chat is just for talking. Deals go to their topics: Guitars, Electronics, Budget and Summary.",
+        "/help lists everything the bot can do.",
+    ]),
+}
+
 
 def now_rome(now: datetime | None = None) -> datetime:
     return (now or datetime.now(ROME)).astimezone(ROME)

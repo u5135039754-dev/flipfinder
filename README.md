@@ -144,6 +144,9 @@ it, and while it's set it is the budget for budget-mode searches. All of this is
 - **Topics:** turn on Topics in the group and create Guitars, Electronics, Budget and Summary, then
   send /topic once in each (or /topic guitars to name one). Deals post in their category's topic;
   the daily summary, weekly report and failure alerts in Summary. The private chat gets everything.
+- **Intros:** /topic also pins a short intro in that topic (and one in the main chat). /intro (owner
+  only) posts them again; an intro that's already there is edited, not duplicated. The bot needs the
+  "Pin messages" admin right.
 - **Reminders:** a claim with no update for 24 h pings its owner (keep it or release it) and is
   released after 48 h; something bought but not listed after 3 days gets a nudge; something listed
   but not sold after 14 days gets a price-cut suggestion based on the current market value.

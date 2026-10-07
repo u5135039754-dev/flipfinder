@@ -816,7 +816,13 @@ class FakeTG:
                 return []
             out, self.updates = self.updates, []
             return out
+        if method == "sendMessage":
+            return {"message_id": 900 + len(self.calls), "chat": {"id": payload["chat_id"]}}
         return True
+
+    @staticmethod
+    def is_group(chat) -> bool:
+        return str(chat).startswith("-")
 
     def sent(self, method="sendMessage"):
         return [p for m, p in self.calls if m == method]
@@ -1423,3 +1429,34 @@ def test_budget_and_guitar_searches_take_turns(tmp_path: Path, monkeypatch):
 def test_gitignore_keeps_outputs_out():
     ignored = Path(".gitignore").read_text(encoding="utf-8").splitlines()
     assert "outputs/" in ignored and "Claude outputs/" in ignored
+
+
+
+def test_topic_setup_pins_intros_and_intro_edits_them(tmp_path: Path):
+    from flipfinder.group import INTROS
+    tg, c, cfg, changed = run_cmds(tmp_path, [topic_msg("/topic", 11, "🎸 Guitars")])
+    posted = c.settings["intros"]["-100444"]
+    sends = tg.sent()
+    assert [p["text"] for p in sends[1:]] == [INTROS["guitars"], INTROS["general"]]
+    assert sends[1]["message_thread_id"] == 11 and "message_thread_id" not in sends[2]
+    assert [p["message_id"] for p in tg.sent("pinChatMessage")] == [posted["guitars"]["id"], posted["general"]["id"]]
+    s = c.settings
+    tg, c, cfg, changed = run_cmds(tmp_path, [topic_msg("/topic summary", 44), msg("/intro", chat=-100444),
+                                              msg("/intro", user=555, chat=-100444)], settings=s)
+    texts = [p["text"] for p in tg.sent()]
+    assert texts.count(INTROS["summary"]) == 1                   # new topic: posted once, then left alone
+    assert INTROS["guitars"] not in texts and INTROS["general"] not in texts   # already there: not posted again
+    assert "Intros pinned: Guitars, Summary, General" in texts[-1]
+    assert "Not set up yet: Electronics, Budget" in texts[-1]
+    assert len(tg.sent("pinChatMessage")) == 4                   # 1 for Summary + /intro re-pins all 3
+    s["intros"]["-100444"]["guitars"]["text"] = "old intro"      # intro text changed since: edited in place
+    tg, c, cfg, changed = run_cmds(tmp_path, [msg("/intro", chat=-100444)], settings=s)
+    edits = tg.sent("editMessageText")
+    assert [e["text"] for e in edits] == [INTROS["guitars"]] and not tg.sent()[:-1]
+
+
+def test_intro_is_owner_only_and_hidden_from_help(tmp_path: Path):
+    tg, c, cfg, changed = run_cmds(tmp_path, [msg("/intro", user=555), msg("/help", user=555)],
+                                   settings={"allowed_users": [555]})
+    texts = [p["text"] for p in tg.sent()]
+    assert "Only the owner can use /intro" in texts[0] and "/intro" not in texts[1] and "/allow" not in texts[1]

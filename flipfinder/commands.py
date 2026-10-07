@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 
 OWNER_ID = 1000001
 SETTINGS_FILE = Path("settings.json")
-COMMANDS_VERSION = 3      # bump when the list below changes, so it's registered again
+COMMANDS_VERSION = 4      # bump when the list below changes, so it's registered again
 
 COMMANDS = [
     ("help", "List all commands"),
@@ -42,7 +42,9 @@ COMMANDS = [
     ("profit", "Profit in total, this month and per person"),
     ("pool", "Shared money: /pool shows it, /pool 300 sets the starting amount"),
     ("allow", "Owner only: let another user use commands: /allow 123456789"),
+    ("intro", "Owner only: post or update the pinned intro in every topic"),
 ]
+OWNER_ONLY = {"allow", "intro"}
 RULES = {   # name: (type, min, max) for /setrule
     "min_profit": (float, 0, 10_000),
     "min_roi": (float, 0, 1_000),
@@ -214,7 +216,7 @@ class Commands:
     # --- commands
     def cmd_help(self, chat, args, user):
         lines = ["<b>flipFinder commands</b>", ""]
-        lines += [f"/{c} – {html.escape(d)}" for c, d in COMMANDS if c != "allow" or user == OWNER_ID]
+        lines += [f"/{c} – {html.escape(d)}" for c, d in COMMANDS if c not in OWNER_ONLY or user == OWNER_ID]
         lines += ["", "Changes apply at the start of the next run (every ~5 min)."]
         self.reply(chat, "\n".join(lines))
 
@@ -504,6 +506,71 @@ class Commands:
         self.tg.call("sendMessage", {"chat_id": chat, "message_thread_id": msg["message_thread_id"],
                                      "text": f"✅ This topic is now <b>{TOPIC_NAMES[key]}</b>. Set so far: {known}",
                                      "parse_mode": "HTML"})
+        self.post_intro(chat, key)
+        if "general" not in self.settings.get("intros", {}).get(str(chat), {}):
+            self.post_intro(chat, "general")   # topics are on now: the main chat gets its intro too
+
+    # --- pinned topic intros
+    def post_intro(self, chat, key: str) -> bool:
+        """
+        Pins INTROS[key] in its topic ("general" = the main chat). An intro we posted before is
+        edited in place (and pinned again in case someone unpinned it); a new one only when it's gone.
+        """
+        from .group import INTROS
+        text = INTROS[key]
+        thread = None if key == "general" else self.settings.get("topics", {}).get(key)
+        if key != "general" and not thread:
+            return False
+        posted = self.settings.setdefault("intros", {}).setdefault(str(chat), {})
+        old = posted.get(key)
+        msg_id = None
+        if old and old.get("thread") == thread:
+            if old.get("text") == text:
+                msg_id = old["id"]              # unchanged: Telegram refuses an edit that changes nothing
+            elif self._call("editMessageText", {"chat_id": chat, "message_id": old["id"], "text": text,
+                                                "parse_mode": "HTML", "disable_web_page_preview": True}):
+                msg_id = old["id"]
+        if msg_id is None:                      # never posted, deleted, or the topic changed
+            payload = {"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
+            if thread:
+                payload["message_thread_id"] = thread
+            res = self._call("sendMessage", payload)
+            if not isinstance(res, dict):
+                return False
+            msg_id = res["message_id"]
+        pinned = self._call("pinChatMessage", {"chat_id": chat, "message_id": msg_id,
+                                               "disable_notification": True}) is not None
+        if not pinned:
+            log.warning("Couldn't pin the %s intro in %s (the bot needs the 'Pin messages' admin right)", key, chat)
+        posted[key] = {"id": msg_id, "thread": thread, "text": text}
+        self.changed = True
+        return pinned
+
+    def cmd_intro(self, chat, args, user):
+        from .group import TOPIC_NAMES
+        if user != OWNER_ID:
+            raise ValueError("Only the owner can use /intro")
+        groups = [chat] if self.tg.is_group(chat) else [c for c in getattr(self.tg, "chat_ids", [])
+                                                          if self.tg.is_group(c)]
+        if not groups:
+            raise ValueError("No group to post in")
+        topics = self.settings.get("topics", {})
+        keys = [k for k in TOPIC_NAMES if k in topics] + ["general"]
+        for g in groups:
+            results = {k: self.post_intro(g, k) for k in keys}
+        done = ", ".join(TOPIC_NAMES.get(k, "General") for k in keys if results[k])
+        lines = [f"📌 Intros pinned: {done or 'none'}"]
+        unpinned = [TOPIC_NAMES.get(k, "General") for k in keys if not results[k]]
+        if unpinned:
+            lines.append(f"⚠️ Posted but not pinned: {', '.join(unpinned)}. Make the bot an admin with "
+                         "\"Pin messages\" and send /intro again.")
+        missing = [TOPIC_NAMES[k] for k in TOPIC_NAMES if k not in topics]
+        if missing:
+            lines.append(f"Not set up yet: {', '.join(missing)} (send /topic in each)")
+        self.reply(chat, "\n".join(lines))
+
+    def cmd_pot(self, chat, args, user):
+        self.cmd_pool(chat, args, user)        # until the shared pot (plan Step 3) replaces /pool
 
     # --- /sell
     def cmd_sell(self, chat, args, user):
