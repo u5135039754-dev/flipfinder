@@ -459,7 +459,11 @@ class Scanner:
         self.checked, self.failed_searches, self.near_misses = 0, 0, []
         self.pool_rebuilds = 0
         self.seed_candidates = []
+        self._group_slot = self._pick_slot()   # which of budget / guitars runs this time
         self.ebay_due = bool(self.ebay) and self.ebay_state.due(self.cfg.ebay.interval_minutes)
+        if self.ebay_due and self.cfg.stagger and self._group_slot == STAGGER_SLOTS["Budget"]:
+            # the eBay pass waits for the next guitar run: budget runs are the longer ones
+            self.ebay_due = False
         if self.ebay_due and self.ebay_state.calls_today >= self.cfg.ebay.max_calls_per_day:
             log.warning("eBay: %d calls used today (UTC), skipping eBay until tomorrow",
                         self.ebay_state.calls_today)
@@ -467,7 +471,6 @@ class Scanner:
         self.first_ebay = self.ebay_due and not self.seen.has_platform("ebay")
         calls_before = self.ebay.calls if self.ebay else 0
         self.subito_pools = self.ebay_pools = 0
-        self._group_slot = self._pick_slot()   # which of budget / guitars runs this time
         self._fetch_subito()
         # budget searches first: an overlapping normal search ("boss") would otherwise mark
         # their listings as seen under the normal rules before they're checked

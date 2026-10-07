@@ -1105,3 +1105,24 @@ def test_workflow_pings_healthchecks_on_start_success_and_any_failure():
     assert last["name"] == "Health check result" and last["if"] == "always()"
     assert "job.status" in last["run"] and "/fail" in last["run"]
     assert all("|| true" in x["run"] for x in (steps[0], last))       # a healthchecks.io hiccup never fails a run
+
+
+def test_ebay_pass_waits_for_a_guitar_run(tmp_path: Path, monkeypatch):
+    import flipfinder.scanner as sc_mod
+    s = _fake_scanner(tmp_path, 0, lambda searches: [])
+    s.ebay = type("FakeEbay", (), {"calls": 0})()
+    s.cfg.ebay = type("E", (), {"interval_minutes": 20, "max_calls_per_day": 4500})()
+    s.cfg.budget, s.cfg.budget_rules = 72, {"min_profit": 12, "min_roi": 35, "max_roi": 150}
+    s.cfg.stagger = True
+    t0 = 1_800_000_000 - (1_800_000_000 % 300)              # an even slot: budget's turn
+    monkeypatch.setattr(sc_mod.time, "time", lambda: t0 + 30)
+    s.scan()
+    assert s.ebay_due is False                               # due, but it waits...
+    monkeypatch.setattr(sc_mod.time, "time", lambda: t0 + 330)
+    s.scan()
+    assert s.ebay_due is True                                # ...for the guitar run 5 minutes later
+    s.cfg.stagger = False
+    s.ebay_state.data["last_scan"] = 0                       # due again
+    monkeypatch.setattr(sc_mod.time, "time", lambda: t0 + 30)
+    s.scan()
+    assert s.ebay_due is True                                # without turns, as before
