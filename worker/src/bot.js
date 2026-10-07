@@ -8,9 +8,10 @@ import { APPROVAL_OVER, allocate, approved, entryLine, memberKey, potText, rever
 import { INTROS, TOPIC_FOR_GROUP, TOPIC_NAMES, mention, pricesFor, sellListing } from "./group.js";
 import { UserError, closeMatches, esc, euro, g, parseNumber, queryAndRange, splitArgs } from "./util.js";
 
-export const COMMANDS_VERSION = 6;   // bump when the list below changes, so it's registered again
+export const COMMANDS_VERSION = 7;   // bump when the list below changes, so it's registered again
 export const COMMANDS = [
   ["help", "List all commands"],
+  ["app", "Open the flipFinder app: deals, stock, pot and settings"],
   ["status", "Last run, runs today, listings checked, deals sent, platforms"],
   ["categories", "Searches by category, with buttons to turn them on or off"],
   ["prices", "Show a search's price range: /prices boss katana"],
@@ -47,6 +48,7 @@ export class Bot {
     Object.assign(this, { store, tg, settings, now });
     this.ownerId = Number(ownerId);
     this.changed = false;          // settings changed: saved at the end
+    this.capture = null;           // the Mini App: replies and pop-ups collected here instead of sent
     this._deals = null;
   }
 
@@ -109,12 +111,17 @@ export class Bot {
   }
 
   async reply(chat, text, buttons) {
+    if (this.capture) {
+      this.capture.push(text);
+      return { message_id: 0 };
+    }
     const payload = { chat_id: chat, text, parse_mode: "HTML", disable_web_page_preview: true };
     if (buttons) payload.reply_markup = { inline_keyboard: buttons };
     return this.tg.call("sendMessage", payload);
   }
 
   async answer(cq, text) {
+    if (this.capture) return void this.capture.push(text);
     await this.tg.call("answerCallbackQuery", { callback_query_id: cq.id, text });
   }
 
@@ -170,6 +177,19 @@ export class Bot {
     for (const [c, d] of COMMANDS) if (!OWNER_ONLY.has(c) || user === this.ownerId) lines.push(`/${c} – ${esc(d)}`);
     lines.push("", "Search and price changes apply from the next run (every ~5 min).");
     await this.reply(chat, lines.join("\n"));
+  }
+
+  async cmd_app(chat) {
+    const url = await this.store.get("app_url");
+    if (!url) throw new UserError("The app isn't ready yet, try again in a few minutes");
+    if (!Telegram.isGroup(chat)) {
+      return this.reply(chat, "📱 Deals, stock, the pot and settings in one place:",
+        [[{ text: "📱 Open app", web_app: { url } }]]);
+    }
+    // Telegram only opens Mini Apps from buttons in the private chat with the bot
+    const me = await this.tg.call("getMe", {});
+    await this.reply(chat, "📱 The app opens from the private chat with the bot (menu button, bottom left).",
+      me?.username ? [[{ text: "Open the bot", url: `https://t.me/${me.username}` }]] : undefined);
   }
 
   async cmd_status(chat) {

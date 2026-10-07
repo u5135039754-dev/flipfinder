@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>flipFinder</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #0f1115);
+    --card: var(--tg-theme-secondary-bg-color, #181b22);
+    --text: var(--tg-theme-text-color, #eceef3);
+    --muted: var(--tg-theme-hint-color, #8a90a0);
+    --accent: var(--tg-theme-button-color, #3d8bfd);
+    --accent-text: var(--tg-theme-button-text-color, #ffffff);
+    --line: rgba(127, 135, 155, 0.18);
+    --good: #2fbf71;
+    --bad: #e5534b;
+    --warn: #e0a526;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body { font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding-bottom: 76px; }
+  header { position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 12px 16px 8px; border-bottom: 1px solid var(--line); }
+  h1 { font-size: 18px; margin: 0; display: flex; justify-content: space-between; align-items: baseline; }
+  h1 small { font-size: 13px; color: var(--muted); font-weight: 500; }
+  main { padding: 12px 16px; }
+  .chips { display: flex; gap: 6px; overflow-x: auto; padding: 8px 0 2px; scrollbar-width: none; }
+  .chips::-webkit-scrollbar { display: none; }
+  .chip { flex: none; border: 1px solid var(--line); background: var(--card); color: var(--text); border-radius: 999px;
+    padding: 6px 12px; font-size: 13px; }
+  .chip.on { background: var(--accent); color: var(--accent-text); border-color: transparent; }
+  .card { background: var(--card); border-radius: var(--radius); padding: 12px; margin-bottom: 10px; }
+  .deal { display: grid; grid-template-columns: 72px 1fr; gap: 12px; }
+  .thumb { width: 72px; height: 72px; border-radius: 10px; object-fit: cover; background: var(--line); }
+  .title { font-weight: 600; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .meta { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+  .nums { margin-top: 4px; font-size: 14px; }
+  .profit { color: var(--good); font-weight: 600; }
+  .status { margin-top: 6px; font-size: 13px; color: var(--warn); }
+  .actions { grid-column: 1 / -1; display: flex; gap: 6px; flex-wrap: wrap; }
+  button { font: inherit; }
+  .btn { border: 0; border-radius: 10px; padding: 8px 12px; background: var(--line); color: var(--text); font-size: 14px; }
+  .btn.primary { background: var(--accent); color: var(--accent-text); font-weight: 600; }
+  .btn.on { outline: 2px solid var(--accent); }
+  .btn[disabled] { opacity: 0.5; }
+  .empty { text-align: center; color: var(--muted); padding: 40px 16px; }
+  .big { font-size: 28px; font-weight: 700; }
+  .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
+  .row:first-child { border-top: 0; }
+  .label { color: var(--muted); font-size: 13px; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; text-align: center; }
+  .grid3 b { display: block; font-size: 16px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 18px 0 8px; }
+  input[type=number], input[type=text] { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line);
+    border-radius: 10px; padding: 10px; font: inherit; }
+  .switch { position: relative; width: 44px; height: 26px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch span { position: absolute; inset: 0; background: var(--line); border-radius: 26px; transition: .2s; }
+  .switch span::before { content: ""; position: absolute; width: 20px; height: 20px; left: 3px; top: 3px; background: #fff;
+    border-radius: 50%; transition: .2s; }
+  .switch input:checked + span { background: var(--good); }
+  .switch input:checked + span::before { transform: translateX(18px); }
+  .q { flex: 1; min-width: 0; }
+  .q div:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  nav { position: fixed; bottom: 0; left: 0; right: 0; display: grid; grid-template-columns: repeat(4, 1fr);
+    background: var(--card); border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); z-index: 6; }
+  nav button { border: 0; background: none; color: var(--muted); padding: 8px 0 10px; font-size: 11.5px; }
+  nav button div { font-size: 20px; }
+  nav button.on { color: var(--accent); }
+  .sheet-bg { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 10; display: flex; align-items: flex-end; }
+  .sheet { background: var(--card); width: 100%; border-radius: 18px 18px 0 0; padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); }
+  .sheet h3 { margin: 0 0 10px; font-size: 16px; }
+  .sheet .fields { display: grid; gap: 8px; margin-bottom: 12px; }
+  .sheet pre { white-space: pre-wrap; background: var(--bg); padding: 10px; border-radius: 10px; max-height: 50vh; overflow: auto;
+    font: 13.5px/1.4 inherit; user-select: text; }
+  .toast { position: fixed; left: 16px; right: 16px; bottom: 86px; background: #2b303b; color: #fff; padding: 10px 14px;
+    border-radius: 12px; z-index: 20; font-size: 14px; box-shadow: 0 6px 20px rgba(0,0,0,.35); }
+  .toast.err { background: #5a2321; }
+  .members .row b { font-size: 15px; }
+</style>
+</head>
+<body>
+<header><h1><span>💸 flipFinder</span><small id="cash"></small></h1><div id="filters"></div></header>
+<main id="main"><div class="empty">Loading…</div></main>
+<nav id="tabs"></nav>
+<script>
+"use strict";
+const tg = window.Telegram?.WebApp;
+const TABS = [["deals", "🔥", "Deals"], ["stock", "📦", "Stock"], ["pot", "💰", "Pot"], ["settings", "⚙️", "Settings"]];
+const PLATFORMS = { vinted: "Vinted", ebay: "eBay", subito: "Subito" };
+const state = { tab: "deals", data: null, cat: "All", platform: "All", max: null, busy: false };
+try { Object.assign(state, JSON.parse(localStorage.getItem("ff-filters") || "{}"), { busy: false, data: null }); } catch {}
+state.tab = new URLSearchParams(location.search).get("tab") || state.tab;   // e.g. a link straight to the pot
+
+// --- tiny DOM helper: text is always set as text, never parsed as HTML
+function h(tag, props = {}, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) {
+    if (k === "class") el.className = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else if (v === true) el.setAttribute(k, "");
+    else if (v !== false && v != null) el.setAttribute(k, v);
+  }
+  for (const kid of kids.flat()) if (kid != null && kid !== false) el.append(kid instanceof Node ? kid : String(kid));
+  return el;
+}
+const euro = (x) => x == null ? "–" : "€" + Number(x).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const euro0 = (x) => x == null ? "–" : "€" + Math.round(x).toLocaleString("en-US");
+const ago = (ts) => { const m = Math.max(0, (Date.now() / 1000 - ts) / 60); return m < 60 ? `${Math.round(m)}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`; };
+const haptic = (kind) => { try { tg?.HapticFeedback?.notificationOccurred(kind); } catch {} };
+
+function toast(text, err = false) {
+  document.querySelectorAll(".toast").forEach((t) => t.remove());
+  const t = h("div", { class: "toast" + (err ? " err" : "") }, text);
+  document.body.append(t);
+  setTimeout(() => t.remove(), err ? 4500 : 2600);
+}
+
+async function api(path, body) {
+  const r = await fetch(`api/${path}`, {
+    method: body ? "POST" : "GET",
+    headers: { authorization: `tma ${tg?.initData || ""}`, "content-type": "application/json" },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await r.json().catch(() => ({ error: "No answer from the server" }));
+  if (!r.ok) throw new Error(data.error || `Error ${r.status}`);
+  return data;
+}
+
+async function act(body, okText) {
+  if (state.busy) return;
+  state.busy = true;
+  try {
+    const res = await api("action", body);
+    state.data = res.state;
+    haptic("success");
+    if (res.notice || okText) toast(okText || res.notice.split("\n")[0]);
+    render();
+    return res;
+  } catch (e) {
+    haptic("error");
+    toast(e.message, true);
+  } finally {
+    state.busy = false;
+  }
+}
+
+// --- bottom sheet with number fields
+function sheet(title, fields, onSave, extra) {
+  const inputs = fields.map((f) => h("input", { type: f.type || "number", inputmode: "decimal", step: "0.01",
+    placeholder: f.label, value: f.value ?? "" }));
+  const close = () => bg.remove();
+  const bg = h("div", { class: "sheet-bg", onclick: (e) => { if (e.target === bg) close(); } },
+    h("div", { class: "sheet" }, h("h3", {}, title), extra || null,
+      fields.length ? h("div", { class: "fields" }, fields.map((f, i) => h("label", {}, h("div", { class: "label" }, f.label), inputs[i]))) : null,
+      h("div", { class: "actions" },
+        onSave ? h("button", { class: "btn primary", onclick: async () => { const ok = await onSave(inputs.map((i) => i.value)); if (ok !== false) close(); } }, "Save") : null,
+        h("button", { class: "btn", onclick: close }, onSave ? "Cancel" : "Close"))));
+  document.body.append(bg);
+  inputs[0]?.focus();
+}
+
+function showText(title, text) {
+  const pre = h("pre", {}, text);
+  sheet(title, [], null, h("div", {}, pre, h("div", { class: "actions", style: "margin-bottom:10px" },
+    h("button", { class: "btn primary", onclick: async () => {
+      try { await navigator.clipboard.writeText(text); toast("Copied"); }
+      catch { const r = document.createRange(); r.selectNodeContents(pre); getSelection().removeAllRanges(); getSelection().addRange(r); toast("Selected: copy it with your phone's menu"); }
+    } }, "Copy"))));
+}
+
+// --- tabs
+function render() {
+  const d = state.data;
+  document.getElementById("tabs").replaceChildren(...TABS.map(([id, icon, label]) =>
+    h("button", { class: state.tab === id ? "on" : "", onclick: () => { state.tab = id; render(); window.scrollTo(0, 0); } },
+      h("div", {}, icon), label)));
+  document.getElementById("cash").textContent = d?.pot?.started ? `pot ${euro0(d.pot.cash)}` : "";
+  document.getElementById("filters").replaceChildren(state.tab === "deals" && d ? filters(d) : "");
+  const main = document.getElementById("main");
+  if (!d) return;
+  main.replaceChildren(...({ deals: dealsTab, stock: stockTab, pot: potTab, settings: settingsTab })[state.tab](d));
+}
+
+function filters(d) {
+  const cats = ["All", ...new Set(d.deals.map((x) => x.group || "Other"))];
+  const chip = (label, on, fn) => h("button", { class: "chip" + (on ? " on" : ""), onclick: fn }, label);
+  const save = () => { try { localStorage.setItem("ff-filters", JSON.stringify({ cat: state.cat, platform: state.platform, max: state.max })); } catch {} render(); };
+  return h("div", {},
+    h("div", { class: "chips" }, cats.map((c) => chip(c, state.cat === c, () => { state.cat = c; save(); }))),
+    h("div", { class: "chips" },
+      ["All", "vinted", "ebay", "subito"].map((p) => chip(PLATFORMS[p] || "All platforms", state.platform === p, () => { state.platform = p; save(); })),
+      [30, 50, 100, 250].map((m) => chip(`≤ €${m}`, state.max === m, () => { state.max = state.max === m ? null : m; save(); }))));
+}
+
+function dealCard(x, d) {
+  const me = d.me;
+  const mineOrOwner = x.mine || me.owner;
+  const btns = [];
+  if (x.status === "new") btns.push(h("button", { class: "btn primary", onclick: () => act({ action: "claim", key: x.key }) }, "✋ Claim"));
+  if (x.status === "claimed" && mineOrOwner) {
+    btns.push(h("button", { class: "btn primary", onclick: () => sheet(`💸 What did you pay for #${x.n}?`,
+      [{ label: "Total paid (€)", value: x.cost }], ([v]) => act({ action: "bought", key: x.key, amount: v }).then((r) => !!r)) }, "💸 Bought"));
+  }
+  if (x.status === "bought" && mineOrOwner) btns.push(h("button", { class: "btn primary", onclick: () => act({ action: "listed", key: x.key }) }, "🏷 Listed"));
+  if (x.status === "listed" && mineOrOwner) {
+    btns.push(h("button", { class: "btn primary", onclick: () => sheet(`✅ What did #${x.n} sell for?`,
+      [{ label: "Sale price (€)" }], ([v]) => act({ action: "sold", key: x.key, amount: v }).then((r) => !!r)) }, "✅ Sold"));
+  }
+  if (["new", "claimed"].includes(x.status)) {
+    btns.push(h("button", { class: "btn" + (x.voted === "up" ? " on" : ""), onclick: () => act({ action: "up", key: x.key }) }, `👍${x.up ? " " + x.up : ""}`));
+    btns.push(h("button", { class: "btn" + (x.voted === "down" ? " on" : ""), onclick: () => act({ action: "down", key: x.key }) }, `👎${x.down ? " " + x.down : ""}`));
+    btns.push(h("button", { class: "btn", onclick: async () => { const r = await api("action", { action: "message", key: x.key }).catch((e) => toast(e.message, true));
+      if (r) showText("📩 Message for the seller", r.notice.replace(/^📩 Copy and send this to the seller:\s*/, "").replace(/\s*Open the listing$/, "")); } }, "📩"));
+  }
+  if (["bought", "listed"].includes(x.status)) {
+    btns.push(h("button", { class: "btn", onclick: async () => { const r = await api("action", { action: "sell", key: x.key }).catch((e) => toast(e.message, true));
+      if (r) showText(`📝 Listing for #${x.n}`, r.notice); } }, "📝 Listing"));
+  }
+  btns.push(h("button", { class: "btn", onclick: () => tg?.openLink ? tg.openLink(x.url) : window.open(x.url) }, "Open ↗"));
+  const status = x.status === "new" ? null : x.status === "claimed"
+    ? `✋ ${x.mine ? "You have it" : x.who + " has it"}${x.needs_ok ? ` · needs a 👍 from someone else (over €${d.pot.approval_over})` : ""}`
+    : x.status === "bought" ? `💸 Bought by ${x.mine ? "you" : x.who} for ${euro(x.paid)}` : `🏷 Listed by ${x.mine ? "you" : x.who} · paid ${euro(x.paid)}`;
+  return h("div", { class: "card deal" },
+    x.photo ? h("img", { class: "thumb", src: x.photo, alt: "", loading: "lazy", referrerpolicy: "no-referrer" }) : h("div", { class: "thumb" }),
+    h("div", {},
+      h("div", { class: "title" }, `#${x.n} ${x.title}`),
+      h("div", { class: "meta" }, `${PLATFORMS[x.source] || x.source} · ${x.group || "Other"} · ${ago(x.sent)}`),
+      h("div", { class: "nums" }, `${euro(x.cost)} → worth ${euro0(x.value_now || x.value)} `, x.profit != null ? h("span", { class: "profit" }, `+${euro0(x.profit)}`) : ""),
+      status ? h("div", { class: "status" }, status) : ""),
+    h("div", { class: "actions" }, btns));
+}
+
+function dealsTab(d) {
+  const list = d.deals.filter((x) => (state.cat === "All" || (x.group || "Other") === state.cat)
+    && (state.platform === "All" || x.source === state.platform) && (state.max == null || (x.cost ?? 0) <= state.max));
+  return list.length ? list.map((x) => dealCard(x, d)) : [h("div", { class: "empty" }, d.deals.length ? "No deals match these filters" : "No deals in the last 7 days")];
+}
+
+function stockTab(d) {
+  if (!d.stock.length) return [h("div", { class: "empty" }, "Nothing in stock right now")];
+  const tied = d.stock.reduce((s, x) => s + (x.paid || 0), 0);
+  return [h("div", { class: "card" }, h("div", { class: "label" }, "Tied up in stock"), h("div", { class: "big" }, euro(tied))),
+    ...d.stock.map((x) => dealCard(x, d))];
+}
+
+function potTab(d) {
+  const p = d.pot;
+  const out = [h("div", { class: "card" },
+    h("div", { class: "label" }, "Cash in the pot"), h("div", { class: "big" }, euro(p.cash)),
+    h("div", { class: "grid3", style: "margin-top:12px" },
+      h("div", {}, h("b", {}, euro0(p.stock)), h("span", { class: "label" }, "in stock")),
+      h("div", {}, h("b", {}, euro0(p.cash + p.stock)), h("span", { class: "label" }, "total")),
+      h("div", {}, h("b", { class: p.profit >= 0 ? "profit" : "" }, euro0(p.profit)), h("span", { class: "label" }, "profit"))),
+    h("div", { class: "label", style: "margin-top:10px" }, `Profit split ${p.split === "equal" ? "equally" : "by contribution"} · stock counts at what we paid · budget limit ${euro0(d.settings.budget)}`))];
+  out.push(h("h2", {}, "Members"));
+  out.push(p.members.length ? h("div", { class: "card members" }, [...p.members].sort((a, b) => b.account - a.account).map((m) =>
+    h("div", { class: "row" },
+      h("div", {}, h("b", {}, m.name), h("div", { class: "label" }, `put in ${euro(m.net)} · profit ${euro(m.profit)}${p.shares[m.name] ? ` · ${Math.round(p.shares[m.name] * 100)}%` : ""}`)),
+      h("div", { style: "text-align:right" }, h("b", {}, euro(m.account)), h("div", { class: "label" }, "back today"))))) :
+    h("div", { class: "empty" }, "No money in yet: the owner adds it with /deposit name amount"));
+  out.push(h("h2", {}, "Ledger"));
+  const what = (e) => ({ deposit: `Deposit · ${e.member}`, withdraw: `Withdrawal · ${e.member}`, buy: `Bought #${e.n}`, sale: `Sold #${e.n}`,
+    fix: `Correction #${e.n}${e.note ? " · " + e.note : ""}`, undo: `Undo of entry ${e.ref}` })[e.kind] || e.kind;
+  out.push(p.ledger.length ? h("div", { class: "card" }, p.ledger.map((e) => h("div", { class: "row" },
+    h("div", {}, h("div", {}, `${e.id}. ${what(e)}`), h("div", { class: "label" }, new Date(e.at * 1000).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }))),
+    h("b", { class: e.amount >= 0 ? "profit" : "" }, `${e.amount >= 0 ? "+" : "−"}${euro(Math.abs(e.amount))}`)))) :
+    h("div", { class: "empty" }, "Nothing yet"));
+  return out;
+}
+
+function settingsTab(d) {
+  const s = d.settings;
+  const out = [h("h2", {}, "Budget mode"), h("div", { class: "card" },
+    h("div", { class: "row" }, h("div", {}, h("div", {}, `Budget ${euro(s.budget_setting)}`), h("div", { class: "label" }, `In effect: ${euro(s.budget)} (never more than the pot's cash)`)),
+      h("button", { class: "btn", onclick: () => sheet("🎯 Budget-mode budget", [{ label: "Budget (€)", value: s.budget_setting }], ([v]) => act({ action: "budget", value: v }).then((r) => !!r)) }, "Edit")))];
+  out.push(h("h2", {}, "Deal rules"), h("div", { class: "card" }, Object.entries(s.rules).map(([name, value]) =>
+    h("div", { class: "row" }, h("div", {}, name.replace("_", " "), h("div", { class: "label" }, name.endsWith("roi") ? `${value}%` : name === "min_profit" ? euro(value) : value)),
+      h("button", { class: "btn", onclick: () => sheet(`Rule: ${name}`, [{ label: name, value }], ([v]) => act({ action: "rule", name, value: v }).then((r) => !!r)) }, "Edit")))));
+  if (d.me.owner) {
+    out.push(h("h2", {}, "Profit split"), h("div", { class: "card" }, h("div", { class: "actions" },
+      ["contribution", "equal"].map((m) => h("button", { class: "btn" + (d.pot.split === m ? " primary" : ""), onclick: () => d.pot.split !== m && act({ action: "split", value: m }) },
+        m === "equal" ? "Equally" : "By contribution")))));
+  }
+  const groups = {};
+  for (const x of s.searches) (groups[x.group] ??= []).push(x);
+  for (const [group, list] of Object.entries(groups)) {
+    out.push(h("h2", {}, `${group} · ${list.filter((x) => x.enabled).length}/${list.length} on`));
+    out.push(h("div", { class: "card" }, list.map((x) => h("div", { class: "row" },
+      h("label", { class: "switch" }, h("input", { type: "checkbox", checked: x.enabled, onchange: () => act({ action: "toggle", query: x.query }) }), h("span")),
+      h("div", { class: "q" }, h("div", {}, x.query), h("div", { class: "label" }, `${x.price_from != null ? euro0(x.price_from) : "any"} – ${x.price_to != null ? euro0(x.price_to) : "no max"}${x.budget ? " · budget" : ""}`)),
+      h("button", { class: "btn", onclick: () => sheet(`Price range: ${x.query}`, [{ label: "From (€)", value: x.price_from }, { label: "To (€)", value: x.price_to }],
+        ([a, b]) => act({ action: "price", query: x.query, from: a, to: b }).then((r) => !!r)) }, "€")))));
+  }
+  out.push(h("div", { class: "label", style: "margin:14px 2px" }, "Search and price changes apply from the next scan (every ~5 min)."));
+  return out;
+}
+
+async function load() {
+  try {
+    state.data = await api("state");
+  } catch (e) {
+    document.getElementById("main").replaceChildren(h("div", { class: "empty" }, e.message));
+    return;
+  }
+  render();
+}
+
+tg?.ready();
+tg?.expand();
+try { tg?.setHeaderColor?.("bg_color"); } catch {}
+render();
+load();
+document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
+</script>
+</body>
+</html>

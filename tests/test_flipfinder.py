@@ -935,6 +935,7 @@ def test_budget_and_guitar_searches_take_turns(tmp_path: Path, monkeypatch):
     budget = Search("boss ds 1", budget=True, every_minutes=10)
     guitar = Search("fender player stratocaster")
     phone = Search("iphone 13", filters={"catalog": [3661]})
+    s.cfg.searches = [budget, guitar, phone]
     t0 = 1_800_000_000 - (1_800_000_000 % 300)              # start of an even 5-minute slot
     for x in (budget, guitar, phone):
         s.known.add(x)
@@ -945,8 +946,10 @@ def test_budget_and_guitar_searches_take_turns(tmp_path: Path, monkeypatch):
     for x in (budget, guitar, phone):
         s.known.last[sc_mod._sid(x)] = t0 + 30
     assert [s._turn(x) for x in (budget, guitar, phone)] == [False, True, True]
-    s.known.last[sc_mod._sid(budget)] = t0 + 330 - 13 * 60     # skipped runs: overdue, runs anyway
-    assert s._turn(budget)
+    s.known.last[sc_mod._sid(budget)] = t0 + 330 - 13 * 60     # skipped runs: overdue, runs anyway...
+    assert [s._turn(x) for x in (budget, guitar, phone)] == [True, False, True]   # ...instead of guitars, not as well
+    s.known.last[sc_mod._sid(guitar)] = t0 + 330 - 20 * 60     # both overdue: the one that waited longer
+    assert [s._turn(x) for x in (budget, guitar, phone)] == [False, True, True]
     s.cfg.stagger = False
     s.known.last[sc_mod._sid(guitar)] = t0 + 329
     assert s._turn(guitar)                                       # without stagger: every run as before

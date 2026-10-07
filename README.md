@@ -179,6 +179,16 @@ in an append-only ledger in the Worker's private storage.
   corrects a price with a new entry (shared like the original sale).
 - The budget-mode limit is the smaller of /budget and the cash in the pot.
 
+### The app
+
+Tap **📱 Open app** next to the message box in the private chat with the bot (or send /app) for a
+Telegram Mini App with four tabs: **Deals** (filter by category, platform and price; claim, vote,
+mark bought/listed/sold), **Stock**, **Pot** (cash, stock, profit, each member's share and the
+ledger) and **Settings** (searches on/off, price ranges, budget, rules, profit split). It's served
+by the same Worker (`worker/public/app/`), every request is checked against Telegram's signed login
+data, and only allowed users get in. Everything it does goes through the same code as the chat
+buttons, so deal messages update and money moves are posted in Summary the same way.
+
 ### Topics, reminders, quiet hours, weekly report
 
 - **Topics:** turn on Topics in the group and create Guitars, Electronics, Budget and Summary, then

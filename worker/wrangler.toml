@@ -2,6 +2,10 @@ name = "flipfinder"
 main = "src/index.js"
 compatibility_date = "2026-09-01"
 
+# The Mini App's page (public/app/index.html, served at /app/); its API is in the Worker
+[assets]
+directory = "./public"
+
 # Reminders, overnight queue, weekly report
 [triggers]
 crons = ["*/5 * * * *"]

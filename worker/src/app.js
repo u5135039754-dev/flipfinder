@@ -10,7 +10,10 @@ import { Telegram } from "./telegram.js";
 import { Bot, COMMANDS, COMMANDS_VERSION } from "./bot.js";
 import { compare, keyboard } from "./deals.js";
 import { TOPIC_FOR_GROUP, dueReminders, weeklyDue, weeklyReport } from "./group.js";
-import { DAY, inQuietHours, nowSeconds } from "./util.js";
+import { DAY, UserError, inQuietHours, nowSeconds } from "./util.js";
+import { action, snapshot, verifyInitData } from "./webapp.js";
+
+export const MENU_VERSION = 1;   // bump to set the "📱 Open app" menu button again
 
 export const MAX_QUEUE_FLUSH = 15;
 
@@ -48,7 +51,10 @@ export async function handleRequest(request, env, opts = {}) {
       return new Response("forbidden", { status: 403 });
     }
     const update = await request.json();
-    const { bot } = await open(env, opts);
+    const ctx = await open(env, opts);
+    const { bot, store } = ctx;
+    const appUrl = `${url.origin}/app/`;
+    if ((await store.get("app_url")) !== appUrl) await store.put("app_url", appUrl);   // for the menu button
     try {
       await bot.handle(update);
     } catch (e) {
@@ -56,6 +62,7 @@ export async function handleRequest(request, env, opts = {}) {
     }
     return new Response("ok");
   }
+  if (url.pathname.startsWith("/app/api/")) return handleApp(request, env, opts, url);
   if (url.pathname.startsWith("/api/")) {
     const auth = request.headers.get("authorization") || "";
     if (!sameSecret(auth, `Bearer ${env.API_KEY || ""}`) || !env.API_KEY) return json({ error: "unauthorized" }, 401);
@@ -66,6 +73,33 @@ export async function handleRequest(request, env, opts = {}) {
     return json(await handler(await open(env, opts), body));
   }
   return new Response("flipFinder", { status: 404 });
+}
+
+// --- the Mini App's API
+
+async function handleApp(request, env, opts, url) {
+  const auth = request.headers.get("authorization") || "";
+  const ctx = await open(env, opts);
+  const user = await verifyInitData(auth.startsWith("tma ") ? auth.slice(4) : "", env.TELEGRAM_BOT_TOKEN, ctx.now);
+  if (!user) return json({ error: "Open the app from Telegram" }, 401);
+  const { bot } = ctx;
+  if (!bot.allowed(user.id)) return json({ error: "This app is only for the flipFinder group" }, 403);
+  bot.capture = [];
+  try {
+    if (request.method === "GET" && url.pathname === "/app/api/state") return json(await snapshot(bot, user));
+    if (request.method === "POST" && url.pathname === "/app/api/action") {
+      const notice = await action(bot, user, await request.json());
+      await bot.save();
+      bot._deals = null;
+      bot._pot = null;
+      return json({ ok: true, notice, state: await snapshot(bot, user) });
+    }
+    return json({ error: "not found" }, 404);
+  } catch (e) {
+    if (e instanceof UserError) return json({ error: e.message }, 400);
+    console.error("app request failed", e?.stack || e);
+    return json({ error: "Something went wrong" }, 500);
+  }
 }
 
 // --- the scanner's API
@@ -175,6 +209,16 @@ export async function runCron(env, opts = {}) {
     }
     if (ok) {
       settings.commands_version = COMMANDS_VERSION;
+      bot.changed = true;
+    }
+  }
+  // the "📱 Open app" button next to the message box in private chats
+  const appUrl = await store.get("app_url");
+  if (appUrl && settings.menu_version !== `${MENU_VERSION}:${appUrl}`) {
+    const ok = await tg.call("setChatMenuButton", { menu_button: { type: "web_app", text: "📱 Open app",
+      web_app: { url: appUrl } } });
+    if (ok !== null) {
+      settings.menu_version = `${MENU_VERSION}:${appUrl}`;
       bot.changed = true;
     }
   }

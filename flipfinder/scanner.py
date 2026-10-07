@@ -28,7 +28,7 @@ MAX_POOL_REBUILDS = 4
 SEED_ALERTS = 3
 # Which 5-minute slot (even 0 / odd 1) each group runs in when `stagger` is on
 STAGGER_SLOTS = {"Budget": 0, "Guitars": 1, "Amps": 1, "Pedals": 1, "Audio": 1}
-STAGGER_OVERDUE = 12   # minutes: a staggered search this late runs regardless of its slot
+STAGGER_OVERDUE = 12   # minutes: a group this late takes the next run instead of the other one
 
 # Subito and eBay price pools are one call each; at most this many are rebuilt per run
 MAX_SUBITO_POOLS = 4
@@ -467,6 +467,7 @@ class Scanner:
         self.first_ebay = self.ebay_due and not self.seen.has_platform("ebay")
         calls_before = self.ebay.calls if self.ebay else 0
         self.subito_pools = self.ebay_pools = 0
+        self._group_slot = self._pick_slot()   # which of budget / guitars runs this time
         self._fetch_subito()
         # budget searches first: an overlapping normal search ("boss") would otherwise mark
         # their listings as seen under the normal rules before they're checked
@@ -525,20 +526,36 @@ class Scanner:
         self.subito_new = list(found.values())
         self.first_subito = bool(self.subito_new) and not self.seen.has_platform("subito")
 
-    def _turn(self, s: Search) -> bool:
-        """
-        Whether a known search runs this time. Budget searches and the guitar/amp/pedal/
-        audio searches take turns (5-minute slots, budget on even ones), so a run never
-        has both groups; electronics run every time. A group that hasn't run for
-        STAGGER_OVERDUE minutes runs anyway, in case a run was skipped.
-        """
+    def _slot_of(self, s: Search):
         from .settings import search_group
-        want = STAGGER_SLOTS.get("Budget" if s.budget else search_group(s)) if self.cfg.stagger else None
+        return STAGGER_SLOTS.get("Budget" if s.budget else search_group(s)) if self.cfg.stagger else None
+
+    def _pick_slot(self) -> int:
+        """
+        Budget searches (slot 0) and guitar/amp/pedal/audio searches (slot 1) take turns by
+        5-minute slot. After a gap (skipped runs) both can be overdue: then only the one that
+        waited longer runs, and the other gets the next run, so a run never has both.
+        """
+        now = time.time()
+        slot = int(now // 300) % 2
+        last = {0: 0.0, 1: 0.0}
+        for x in self.cfg.searches:
+            k = self._slot_of(x)
+            if k is not None and x.enabled and self.known.has(x):
+                last[k] = max(last[k], self.known.last.get(_sid(x), 0.0))
+        late = {k: now - (last[k] or now) for k in last}
+        other = 1 - slot
+        if late[other] >= STAGGER_OVERDUE * 60 and late[other] > late[slot]:
+            return other
+        return slot
+
+    def _turn(self, s: Search) -> bool:
+        """Whether a known search runs this time: electronics every run, the two staggered groups in turn."""
+        want = self._slot_of(s)
         if want is None:
             return self.known.due(s)
-        if int(time.time() // 300) % 2 == want:
-            return True
-        return time.time() - self.known.last.get(_sid(s), 0.0) >= STAGGER_OVERDUE * 60
+        pick = getattr(self, "_group_slot", None)
+        return want == (pick if pick is not None else self._pick_slot())
 
     @property
     def failed(self) -> bool:
