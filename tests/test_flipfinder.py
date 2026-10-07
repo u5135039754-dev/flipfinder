@@ -1035,6 +1035,7 @@ def test_worker_errors_never_print_the_url_or_key(caplog, monkeypatch):
     import requests
     from flipfinder.cloud import Cloud
     c = Cloud("https://secret-worker.example.workers.dev", "KEY123")
+    c.retry_wait = 0
 
     def boom(*a, **k):
         raise requests.ConnectionError("https://secret-worker.example.workers.dev/api/state KEY123")
@@ -1059,3 +1060,32 @@ def test_workflow_has_no_telegram_secrets_and_cannot_push():
 def test_private_files_are_never_committed():
     ignored = Path(".gitignore").read_text(encoding="utf-8").splitlines()
     assert {"settings.json", "deals.json", ".env"} <= set(ignored)
+
+
+def test_worker_calls_retry_once_but_never_resend_after_a_timeout(monkeypatch):
+    import requests
+    from flipfinder.cloud import Cloud
+    c = Cloud("https://w.example", "K")
+    c.retry_wait = 0
+    calls = []
+
+    def flaky(errors):
+        def request(method, url, **k):
+            calls.append(method)
+            if errors:
+                raise errors.pop(0)
+            r = requests.Response()
+            r.status_code, r._content = 200, b'{"status": "sent"}'
+            return r
+        return request
+    monkeypatch.setattr(c.session, "request", flaky([requests.ConnectionError()]))
+    assert c.report_run(notify=[{"text": "x"}]) == {"status": "sent"} and calls == ["POST", "POST"]
+    calls.clear()
+    monkeypatch.setattr(c.session, "request", flaky([requests.ReadTimeout()]))
+    assert c.report_run(notify=[{"text": "x"}]) == {} and calls == ["POST"]          # may have arrived: no resend
+    calls.clear()
+    monkeypatch.setattr(c.session, "request", flaky([requests.ReadTimeout()]))
+    assert c.state() == {"status": "sent"} and calls == ["GET", "GET"]               # a read is safe to repeat
+    calls.clear()
+    monkeypatch.setattr(c.session, "request", flaky([requests.ConnectionError(), requests.ConnectionError()]))
+    assert c.state() is None and calls == ["GET", "GET"]                              # only once

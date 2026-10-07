@@ -31,8 +31,8 @@ STAGGER_SLOTS = {"Budget": 0, "Guitars": 1, "Amps": 1, "Pedals": 1, "Audio": 1}
 STAGGER_OVERDUE = 12   # minutes: a staggered search this late runs regardless of its slot
 
 # Subito and eBay price pools are one call each; at most this many are rebuilt per run
-MAX_SUBITO_POOLS = 6
-MAX_EBAY_POOLS = 10
+MAX_SUBITO_POOLS = 4
+MAX_EBAY_POOLS = 4
 
 
 class PoolCache:

@@ -9,6 +9,7 @@ FLIPFINDER_API_URL / FLIPFINDER_API_KEY (GitHub secrets, or .env) point at it.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import asdict
 
 import requests
@@ -48,19 +49,32 @@ def catalog(cfg) -> dict:
 
 class Cloud:
     def __init__(self, url: str, key: str, timeout: float = 30):
-        self.url, self.timeout = url.rstrip("/"), timeout
+        self.url, self.timeout, self.retry_wait = url.rstrip("/"), timeout, 3
         self.session = requests.Session()
         self.session.headers["Authorization"] = f"Bearer {key}"
 
     def _call(self, method: str, path: str, body=None) -> dict | None:
-        try:
-            r = self.session.request(method, self.url + path, json=body, timeout=self.timeout)
-            r.raise_for_status()
-            return r.json()
-        except (requests.RequestException, ValueError) as e:
-            # never print the response or URL in full: the run logs are public
-            log.error("flipFinder Worker %s %s failed: %s", method, path, type(e).__name__)
-            return None
+        """
+        One retry: always when the connection failed (nothing reached the Worker), and on a
+        timeout or server error only for reads, since a deal or message may already have gone out.
+        """
+        for attempt in (1, 2):
+            try:
+                r = self.session.request(method, self.url + path, json=body, timeout=self.timeout)
+                r.raise_for_status()
+                return r.json()
+            except (requests.RequestException, ValueError) as e:
+                retry = attempt == 1 and (
+                    isinstance(e, requests.ConnectionError) and not isinstance(e, requests.ReadTimeout)
+                    or method in ("GET", "PUT") and (isinstance(e, requests.Timeout) or
+                                                     getattr(getattr(e, "response", None), "status_code", 0) >= 500))
+                # never print the response or URL in full: the run logs are public
+                log.log(logging.WARNING if retry else logging.ERROR, "flipFinder Worker %s %s failed: %s%s",
+                        method, path, type(e).__name__, ", retrying" if retry else "")
+                if not retry:
+                    return None
+                time.sleep(self.retry_wait)
+        return None
 
     def state(self) -> dict | None:
         """Telegram settings, the home area, the pool, and deals we own (to value them)."""
