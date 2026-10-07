@@ -17,7 +17,13 @@ jobs:
   scan:
     runs-on: ubuntu-latest
     timeout-minutes: 15   # normal runs take ~3 min; the first run after adding many searches longer
+    env:
+      HEALTHCHECK_URL: ${{ secrets.HEALTHCHECK_URL }}   # healthchecks.io ping address (optional)
     steps:
+      # healthchecks.io: "started" now, success or failure at the end; no ping for 35 min = alert
+      - name: Health check start
+        run: '[ -z "$HEALTHCHECK_URL" ] || curl -fsS -m 10 --retry 3 -o /dev/null "$HEALTHCHECK_URL/start" || true'
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
@@ -49,3 +55,11 @@ jobs:
         with:
           path: data
           key: flipfinder-data-${{ github.run_id }}
+
+      # runs even when an earlier step failed (pip install, the scan...) or the job timed out
+      - name: Health check result
+        if: always()
+        run: |
+          [ -z "$HEALTHCHECK_URL" ] && exit 0
+          if [ "${{ job.status }}" = "success" ]; then url="$HEALTHCHECK_URL"; else url="$HEALTHCHECK_URL/fail"; fi
+          curl -fsS -m 10 --retry 3 -o /dev/null "$url" || true

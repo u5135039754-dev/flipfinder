@@ -1092,3 +1092,16 @@ def test_worker_calls_retry_once_but_never_resend_after_a_timeout(monkeypatch):
     calls.clear()
     monkeypatch.setattr(c.session, "request", flaky([requests.ConnectionError(), requests.ConnectionError()]))
     assert c.state() is None and calls == ["GET", "GET"]                              # only once
+
+
+def test_workflow_pings_healthchecks_on_start_success_and_any_failure():
+    import yaml
+    wf = yaml.safe_load(Path(".github/workflows/flipfinder.yml").read_text(encoding="utf-8"))
+    job = wf["jobs"]["scan"]
+    steps = job["steps"]
+    assert job["env"]["HEALTHCHECK_URL"] == "${{ secrets.HEALTHCHECK_URL }}"
+    assert steps[0]["name"] == "Health check start" and "/start" in steps[0]["run"]
+    last = steps[-1]
+    assert last["name"] == "Health check result" and last["if"] == "always()"
+    assert "job.status" in last["run"] and "/fail" in last["run"]
+    assert all("|| true" in x["run"] for x in (steps[0], last))       # a healthchecks.io hiccup never fails a run
