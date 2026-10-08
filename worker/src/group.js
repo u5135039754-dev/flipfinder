@@ -8,7 +8,7 @@ export const TOPIC_FOR_GROUP = {
   Audio: "electronics", Electronics: "electronics", Budget: "budget",
 };
 export const TOPIC_NAMES = { guitars: "Guitars", electronics: "Electronics", budget: "Budget", summary: "Summary",
-  crypto: "Crypto" };
+  crypto: "Crypto", rules: "Rules" };
 
 // Pinned intro per topic ("general" = the main chat), posted when a topic is set with /topic
 // and again with /intro; an intro that's already there is edited, not posted twice

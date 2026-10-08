@@ -242,6 +242,14 @@ Kept in the Worker's private storage (names and roles too, never in the repo).
 - **Sunday report** adds duty hours vs target, deals caught per shift, average reaction time, open
   tasks, stock waiting to be listed or sold, and bot health.
 
+### Rules topic (team handbook)
+
+Create a topic, send /topic rules in it, and the handbook is posted there: one pinned message per
+section. /handbook reposts it anywhere; /handbook edit <section> (owner only) replaces a section,
+with the new text on the lines below or as a reply, and the pinned copy is edited in place. The
+text lives only in the Worker's private storage (key `handbook`), never in the repo. /rules still
+shows the deal rules.
+
 ### Crypto topic (news only)
 
 A separate, read-only Crypto topic (create it, then send /topic crypto there). It never touches the
@@ -273,7 +281,7 @@ does it, not the scanner:
   but not sold after 14 days gets a price-cut suggestion based on the current market value.
 - **/sell 12** (or a name) writes a ready-to-copy listing: title, honest description to complete,
   a suggested price and a quick-sale price. Add en or uk for English or Ukrainian.
-- **Quiet hours:** no deal alerts 00:00-07:30 Italy time; deals found overnight are sent at 07:30,
+- **Quiet hours:** no deal alerts 00:00-08:00 Italy time; deals found overnight are sent at 08:00,
   best first (by the Worker's 5-minute timer, which also sends reminders and the weekly report).
   Failure alerts still go out.
 - **Weekly report** on Sunday at 20:00 in Summary: deals found/claimed/bought/sold, profit per

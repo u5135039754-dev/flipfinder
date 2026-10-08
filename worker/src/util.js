@@ -120,10 +120,10 @@ export function rome(ts) {
   };
 }
 
-/** No deal alerts 00:00-07:30 Italy time. */
+/** No deal alerts 00:00-08:00 Italy time (duty starts at 08:00). */
 export function inQuietHours(ts) {
   const t = rome(ts);
-  return t.hour * 60 + t.minute < 7 * 60 + 30;
+  return t.hour < 8;
 }
 
 /** The moment it's `hour:minute` on `date` ("2026-10-08") in Italy, as seconds. */

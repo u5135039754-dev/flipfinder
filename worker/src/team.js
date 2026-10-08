@@ -20,7 +20,8 @@ export const UNCLAIMED_AFTER = 10 * 60;
 export const BUYER_TARGET = 8;              // hours a day for the main watcher
 export const OTHERS_CAP = Math.round((DUTY_TO - DUTY_FROM) * 0.2 * 10) / 10;   // 2.8 h: 20% of the 14 h
 export const TASK_LATE_DAYS = 3;
-export const COLORS = ["#4f8cff", "#2fbf71", "#e0a526", "#c45ad6", "#e5534b", "#3fc1c9"];
+// a colour slot per person: the app maps it to the validated categorical palette (light/dark)
+export const SLOTS = 6;
 
 const mention = (m) => `<a href="tg://user?id=${m.id}">${esc(m.name)}</a>`;
 const hours = (x) => (Math.round(x * 10) / 10).toString();
@@ -42,7 +43,7 @@ export class Team {
     const ids = [this.bot.ownerId, ...(s.allowed_users || [])];
     return [...new Set(ids.map(Number))].map((id, i) => ({
       id, name: s.people?.[id] || (id === this.bot.ownerId ? "Owner" : `user ${id}`),
-      role: s.roles?.[id] || (id === this.bot.ownerId ? "manager" : ""), color: COLORS[i % COLORS.length],
+      role: s.roles?.[id] || (id === this.bot.ownerId ? "manager" : ""), slot: i % SLOTS,
     }));
   }
 

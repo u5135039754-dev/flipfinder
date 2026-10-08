@@ -40,7 +40,7 @@ test("a photo Telegram can't load falls back to text; a deleted topic falls back
   assert.ok(texts[1].message_thread_id === 99 && !("message_thread_id" in texts[2]));
 });
 
-test("quiet hours: deals wait, then go out best first after 07:30, at most 15 at a time", async () => {
+test("quiet hours: deals wait, then go out best first after 08:00, at most 15 at a time", async () => {
   const t = await setup({ now: NIGHT });
   for (const [n, profit] of [[1, 20], [2, 45], [3, 30]]) {
     assert.equal((await t.api("POST", "/api/deal", deal(n, profit))).body.status, "queued");

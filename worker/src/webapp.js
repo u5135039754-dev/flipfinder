@@ -45,7 +45,8 @@ export async function snapshot(bot, user) {
   const card = ([key, d]) => ({
     key, n: d.n, title: d.title, url: d.url, photo: d.photo || "", source: d.source || "vinted",
     group: d.group || "", topic: TOPIC_FOR_GROUP[d.group || ""] || "", cost: d.cost ?? null, value: d.value ?? null,
-    profit: d.profit ?? null, status: d.status, who: d.who || "", mine: d.who_id === user.id, sent: d.sent || 0,
+    profit: d.profit ?? null, roi: d.cost ? Math.round((d.profit || 0) / d.cost * 100) : null, rating: d.rating ?? null,
+    status: d.status, who: d.who || "", mine: d.who_id === user.id, sent: d.sent || 0,
     paid: d.paid ?? null, value_now: d.value_now ?? null, sell_days: d.sell_days ?? null, demand: d.demand || "", seller: d.seller || "",
     up: Object.values(d.votes || {}).filter((v) => v === "up").length,
     down: Object.values(d.votes || {}).filter((v) => v === "down").length,
@@ -56,6 +57,15 @@ export async function snapshot(bot, user) {
   const stockList = deals.filter(([, d]) => ["bought", "listed"].includes(d.status));
   const pot = await bot.pot();
   const ledger = await bot.store.ledger();
+  // profit over time for the Pot chart: the running total after each entry that moved it
+  let running = 0;
+  const series = [];
+  for (const e of ledger) {
+    const x = Object.values(e.profit || {}).reduce((s, v) => s + v, 0);
+    if (!x) continue;
+    running = Math.round((running + x) * 100) / 100;
+    series.push({ at: e.at, profit: running });
+  }
   const view = await bot.view();
   return {
     me: { id: user.id, name: [user.first_name, user.last_name].filter(Boolean).join(" "), owner: user.id === bot.ownerId,
@@ -63,7 +73,7 @@ export async function snapshot(bot, user) {
     schedule: await bot.team.grid(),
     deals: open.map(card).sort((a, b) => b.sent - a.sent),
     stock: stockList.map(card),
-    pot: { ...pot, shares: shares(pot, bot.splitMode()), split: bot.splitMode(),
+    pot: { ...pot, shares: shares(pot, bot.splitMode()), split: bot.splitMode(), series,
       ledger: ledger.slice(-60).reverse().map((e) => ({ id: e.id, at: e.at, kind: e.kind, amount: e.amount,
         member: e.member || "", n: e.n || null, note: e.note || "", ref: e.ref || null })) },
     settings: {

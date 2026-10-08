@@ -29,7 +29,7 @@ def deal_record(deal: Deal) -> dict:
         "title": it.title, "url": it.url, "source": it.source,
         "cost": deal.cost or round(it.total_price + deal.shipping, 2), "value": deal.market_value,
         "low": sample[1] if len(sample) > 1 else None,   # ~25th percentile: a quick-sale price
-        "profit": deal.profit, "query": getattr(deal, "query", ""), "condition": it.condition,
+        "profit": deal.profit, "rating": deal.rating, "query": getattr(deal, "query", ""), "condition": it.condition,
         "item": asdict(it), "sell_days": deal.sell_days, "sold_count": deal.sold_count,
         "demand": demand_line(deal) if deal.demand else "",
         "seller": " · ".join(x.replace("👤 ", "") for x in seller_lines(deal)),

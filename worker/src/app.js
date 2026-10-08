@@ -138,7 +138,7 @@ const API = {
     return { ok: true };
   },
 
-  /** A deal found by the scanner: numbered, sent to every chat (or kept for 07:30 in quiet hours). */
+  /** A deal found by the scanner: numbered, sent to every chat (or kept for 08:00 in quiet hours). */
   async "POST /api/deal"(ctx, body) {
     const { store, tg, now, bot } = ctx;
     const quiet = inQuietHours(now);

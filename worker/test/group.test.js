@@ -10,7 +10,7 @@ const at = (y, mo, d, h, mi) => Date.UTC(y, mo - 1, d, h, mi) / 1000;
 test("quiet hours are Italy time", () => {
   // October: Italy is UTC+2
   assert.ok(!inQuietHours(at(2026, 10, 7, 21, 59)) && inQuietHours(at(2026, 10, 7, 22, 0)));   // 23:59 / 00:00
-  assert.ok(inQuietHours(at(2026, 10, 7, 5, 29)) && !inQuietHours(at(2026, 10, 7, 5, 30)));    // 07:29 / 07:30
+  assert.ok(inQuietHours(at(2026, 10, 7, 5, 59)) && !inQuietHours(at(2026, 10, 7, 6, 0)));     // 07:59 / 08:00
   assert.ok(inQuietHours(at(2026, 1, 15, 6, 0)));       // 07:00 in Rome (winter)
   assert.ok(!inQuietHours(at(2026, 7, 15, 6, 0)));      // 08:00 in Rome (summer)
 });

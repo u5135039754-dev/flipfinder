@@ -1,116 +1,269 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>flipFinder</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
+  /* Telegram sets --tg-theme-*; these are the fallbacks (dark) and the app's own roles */
   :root {
-    --bg: var(--tg-theme-bg-color, #0f1115);
-    --card: var(--tg-theme-secondary-bg-color, #181b22);
-    --text: var(--tg-theme-text-color, #eceef3);
-    --muted: var(--tg-theme-hint-color, #8a90a0);
+    --bg: var(--tg-theme-bg-color, #0f1218);
+    --card: var(--tg-theme-section-bg-color, var(--tg-theme-secondary-bg-color, #191e27));
+    --card-2: var(--tg-theme-secondary-bg-color, #202633);
+    --text: var(--tg-theme-text-color, #eef1f6);
+    --muted: var(--tg-theme-hint-color, #8b93a5);
     --accent: var(--tg-theme-button-color, #3d8bfd);
     --accent-text: var(--tg-theme-button-text-color, #ffffff);
-    --line: rgba(127, 135, 155, 0.18);
-    --good: #2fbf71;
-    --bad: #e5534b;
-    --warn: #e0a526;
-    --radius: 14px;
+    --line: color-mix(in srgb, var(--text) 10%, transparent);
+    --soft: color-mix(in srgb, var(--text) 6%, transparent);
+    --profit: #3fd29a;          /* profit text on dark */
+    --profit-bg: rgba(63, 210, 154, 0.14);
+    --warn: #f0b429;
+    --warn-bg: rgba(240, 180, 41, 0.14);
+    --bad: #ff6b6b;
+    --bad-bg: rgba(255, 107, 107, 0.14);
+    --empty: rgba(229, 83, 75, 0.22);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 10px 28px rgba(0, 0, 0, 0.22);
+    --radius: 18px;
+    /* chart roles (validated palette, dark steps) */
+    --cash: #3987e5;
+    --stock: #d95926;
+    --line-profit: #199e70;
+  }
+  :root[data-theme="light"] {
+    --line: color-mix(in srgb, var(--text) 9%, transparent);
+    --soft: color-mix(in srgb, var(--text) 5%, transparent);
+    --profit: #0b7a52;
+    --profit-bg: rgba(11, 122, 82, 0.1);
+    --warn: #9a6400;
+    --warn-bg: rgba(237, 161, 0, 0.14);
+    --bad: #c62828;
+    --bad-bg: rgba(198, 40, 40, 0.09);
+    --empty: rgba(227, 73, 72, 0.16);
+    --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 8px 24px rgba(16, 24, 40, 0.07);
+    --cash: #2a78d6;
+    --stock: #eb6834;
+    --line-profit: #1baf7a;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { margin: 0; background: var(--bg); color: var(--text); }
-  body { font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding-bottom: 76px; }
-  header { position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 12px 16px 8px; border-bottom: 1px solid var(--line); }
-  h1 { font-size: 18px; margin: 0; display: flex; justify-content: space-between; align-items: baseline; }
-  h1 small { font-size: 13px; color: var(--muted); font-weight: 500; }
-  main { padding: 12px 16px; }
-  .chips { display: flex; gap: 6px; overflow-x: auto; padding: 8px 0 2px; scrollbar-width: none; }
-  .chips::-webkit-scrollbar { display: none; }
-  .chip { flex: none; border: 1px solid var(--line); background: var(--card); color: var(--text); border-radius: 999px;
-    padding: 6px 12px; font-size: 13px; }
-  .chip.on { background: var(--accent); color: var(--accent-text); border-color: transparent; }
-  .card { background: var(--card); border-radius: var(--radius); padding: 12px; margin-bottom: 10px; }
-  .deal { display: grid; grid-template-columns: 72px 1fr; gap: 12px; }
-  .thumb { width: 72px; height: 72px; border-radius: 10px; object-fit: cover; background: var(--line); }
-  .title { font-weight: 600; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-  .meta { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
-  .nums { margin-top: 4px; font-size: 14px; }
-  .profit { color: var(--good); font-weight: 600; }
-  .status { margin-top: 6px; font-size: 13px; color: var(--warn); }
-  .actions { grid-column: 1 / -1; display: flex; gap: 6px; flex-wrap: wrap; }
-  button { font: inherit; }
-  .btn { border: 0; border-radius: 10px; padding: 8px 12px; background: var(--line); color: var(--text); font-size: 14px; }
-  .btn.primary { background: var(--accent); color: var(--accent-text); font-weight: 600; }
-  .btn.on { outline: 2px solid var(--accent); }
-  .btn[disabled] { opacity: 0.5; }
-  .empty { text-align: center; color: var(--muted); padding: 40px 16px; }
-  .big { font-size: 28px; font-weight: 700; }
-  .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
-  .row:first-child { border-top: 0; }
+  body { font: 15px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+    padding-bottom: calc(84px + env(safe-area-inset-bottom)); -webkit-font-smoothing: antialiased; overscroll-behavior-y: contain; }
+  button { font: inherit; color: inherit; }
+  header { padding: 14px 16px 6px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  header h1 { margin: 0; font-size: 22px; letter-spacing: -0.02em; }
+  .pill { background: var(--soft); border-radius: 999px; padding: 6px 12px; font-size: 13px; font-weight: 600; }
+  .pill:empty { display: none; }
+  main { padding: 6px 16px 16px; }
+  main.enter { animation: enter 0.22s ease-out; }
+  @keyframes enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  .card { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px; margin-bottom: 14px; }
+  h2 { font-size: 13px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); margin: 22px 4px 10px; }
   .label { color: var(--muted); font-size: 13px; }
-  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; text-align: center; }
-  .grid3 b { display: block; font-size: 16px; }
-  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 18px 0 8px; }
+  .muted { color: var(--muted); }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
+  .row:first-child { border-top: 0; padding-top: 2px; }
+  .row:last-child { padding-bottom: 2px; }
+
+  /* chips and filters */
+  .chips { display: flex; gap: 8px; overflow-x: auto; padding: 4px 0; scrollbar-width: none; }
+  .chips::-webkit-scrollbar { display: none; }
+  .chip { flex: none; border: 0; background: var(--soft); border-radius: 999px; padding: 7px 13px; font-size: 13px; font-weight: 500; }
+  .chip.on { background: var(--accent); color: var(--accent-text); }
+  .filters { position: sticky; top: 0; z-index: 4; background: var(--bg); margin: 0 -16px; padding: 4px 16px 8px; }
+  .tag { display: inline-flex; align-items: center; gap: 4px; border-radius: 8px; padding: 3px 8px; font-size: 12px; font-weight: 600;
+    background: var(--soft); white-space: nowrap; }
+  .tag.good { background: var(--profit-bg); color: var(--profit); }
+  .tag.warn { background: var(--warn-bg); color: var(--warn); }
+  .tag.bad { background: var(--bad-bg); color: var(--bad); }
+
+  /* buttons */
+  .btn { border: 0; border-radius: 12px; padding: 10px 14px; background: var(--soft); font-size: 14px; font-weight: 600; min-height: 42px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px; transition: transform 0.08s ease, opacity 0.15s; }
+  .btn:active { transform: scale(0.97); }
+  .btn.primary { background: var(--accent); color: var(--accent-text); }
+  .btn.good { background: #1f9d6a; color: #fff; }
+  .btn.danger { background: var(--bad-bg); color: var(--bad); }
+  .btn.icon { min-width: 42px; padding: 10px; }
+  .btn.on { box-shadow: inset 0 0 0 2px var(--accent); }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+  .actions .grow { flex: 1; }
+
+  /* deal cards */
+  .deal { padding: 0; overflow: hidden; }
+  .deal .photo { position: relative; aspect-ratio: 16 / 10; background: linear-gradient(135deg, var(--card-2), var(--soft)); }
+  .deal .photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .deal .photo .over { position: absolute; left: 10px; right: 10px; top: 10px; display: flex; justify-content: space-between; }
+  .deal .photo .over .tag { background: rgba(0, 0, 0, 0.55); color: #fff; backdrop-filter: blur(6px); }
+  .deal .photo .who { position: absolute; left: 10px; bottom: 10px; right: 10px; }
+  .deal .photo .who .tag { background: rgba(0, 0, 0, 0.62); color: #fff; backdrop-filter: blur(6px); font-size: 13px; padding: 5px 10px;
+    white-space: normal; }
+  .deal .body { padding: 14px 16px 16px; }
+  .deal .title { font-weight: 650; font-size: 16px; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .deal .price { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; }
+  .deal .price b { font-size: 20px; letter-spacing: -0.01em; }
+  .deal .price .arrow { color: var(--muted); font-weight: 500; margin: 0 4px; }
+  .badge { border-radius: 10px; padding: 5px 10px; font-weight: 700; font-size: 14px; background: var(--profit-bg); color: var(--profit); white-space: nowrap; }
+  .deal .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .deal .meta { margin-top: 10px; font-size: 12.5px; color: var(--muted); }
+  .deal.taken .photo img { filter: grayscale(0.85); opacity: 0.65; }
+  .deal.taken .body > :not(.actions) { opacity: 0.62; }
+
+  /* skeletons, empty states */
+  .sk { background: linear-gradient(90deg, var(--soft) 0%, var(--line) 50%, var(--soft) 100%); background-size: 200% 100%;
+    animation: sk 1.2s linear infinite; border-radius: 10px; }
+  @keyframes sk { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+  .empty { text-align: center; padding: 48px 20px; color: var(--muted); }
+  .empty .big { font-size: 40px; margin-bottom: 8px; }
+  .empty b { display: block; color: var(--text); font-size: 17px; margin-bottom: 4px; }
+
+  /* pot */
+  .hero { font-size: 40px; font-weight: 750; letter-spacing: -0.03em; line-height: 1.1; margin: 4px 0 2px; }
+  .ring-wrap { display: grid; grid-template-columns: 128px 1fr; gap: 16px; align-items: center; }
+  .legend .item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 0; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; flex: none; }
+  .bar { height: 6px; border-radius: 6px; background: var(--soft); overflow: hidden; margin-top: 8px; }
+  .bar > i { display: block; height: 100%; border-radius: 6px; }
+  .chart { position: relative; touch-action: pan-y; }
+  .chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .tip { position: absolute; top: -6px; transform: translateX(-50%); background: var(--text); color: var(--bg); border-radius: 8px;
+    padding: 4px 8px; font-size: 12px; font-weight: 600; pointer-events: none; white-space: nowrap; }
+  .money-pos { color: var(--profit); font-weight: 650; }
+
+  /* schedule */
+  /* the round duty button */
+  .duty { display: flex; flex-direction: column; align-items: center; padding: 10px 0 4px; }
+  .dutybtn { position: relative; width: 140px; height: 140px; border-radius: 50%; border: 0; color: #fff; cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+    background: radial-gradient(circle at 32% 28%, #4fe0a4 0%, #1fae74 45%, #13805a 100%);
+    box-shadow: 0 10px 26px rgba(19, 128, 90, 0.38), inset 0 -6px 14px rgba(0, 0, 0, 0.18), inset 0 6px 12px rgba(255, 255, 255, 0.22);
+    transition: transform 0.12s ease, box-shadow 0.2s; -webkit-user-select: none; user-select: none; }
+  .dutybtn:active { transform: scale(0.94); }
+  .dutybtn svg { width: 46px; height: 46px; }
+  .dutybtn.on { background: radial-gradient(circle at 32% 28%, #ff8a80 0%, #e5484d 45%, #b3262c 100%);
+    box-shadow: 0 10px 26px rgba(179, 38, 44, 0.4), inset 0 -6px 14px rgba(0, 0, 0, 0.2), inset 0 6px 12px rgba(255, 255, 255, 0.2); }
+  .dutybtn.on::after { content: ""; position: absolute; inset: -10px; border-radius: 50%; border: 3px solid rgba(229, 72, 77, 0.55);
+    animation: glow 1.8s ease-out infinite; pointer-events: none; }
+  @keyframes glow { 0% { transform: scale(0.94); opacity: 0.9; } 100% { transform: scale(1.18); opacity: 0; } }
+  .dutybtn .timer { font-size: 22px; font-weight: 800; letter-spacing: 0.01em; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .dutybtn .sub { font-size: 11px; font-weight: 600; opacity: 0.9; text-transform: uppercase; letter-spacing: 0.06em; }
+  .duty .label-big { margin-top: 14px; font-size: 17px; font-weight: 700; }
+  .duty .next { margin-top: 4px; font-size: 13.5px; color: var(--muted); text-align: center; }
+  .gridwrap { position: relative; }
+  .grid { display: grid; grid-template-columns: 34px repeat(7, 1fr); gap: 3px; }
+  .grid .hd { font-size: 11px; color: var(--muted); text-align: center; padding: 4px 0; border-radius: 8px; line-height: 1.2; height: 40px; }
+  .grid .hd.today { background: var(--accent); color: var(--accent-text); font-weight: 700; }
+  .grid .hr { font-size: 10.5px; color: var(--muted); display: flex; align-items: center; height: 28px; }
+  .grid .c { height: 28px; border-radius: 7px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: #fff; }
+  .grid .c.free { background: var(--empty); }
+  .grid .c.past { opacity: 0.35; }
+  .grid .c.mine { box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.85); }
+  .grid .c.todaycol { outline: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); }
+  .nowline { position: absolute; left: 34px; right: 0; height: 2px; background: var(--bad); border-radius: 2px; pointer-events: none; z-index: 2; }
+  .nowline::before { content: ""; position: absolute; left: -5px; top: -4px; width: 10px; height: 10px; border-radius: 50%; background: var(--bad); }
+  .seg { display: grid; grid-template-columns: 1fr 1fr; background: var(--soft); border-radius: 12px; padding: 3px; margin-bottom: 12px; }
+  .seg button { border: 0; background: none; border-radius: 10px; padding: 8px; font-weight: 600; font-size: 13.5px; color: var(--muted); }
+  .seg button.on { background: var(--card); color: var(--text); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18); }
+
+  /* inputs, switches */
   input[type=number], input[type=text] { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line);
-    border-radius: 10px; padding: 10px; font: inherit; }
-  .switch { position: relative; width: 44px; height: 26px; flex: none; }
+    border-radius: 12px; padding: 12px; font: inherit; font-size: 16px; }
+  .switch { position: relative; width: 48px; height: 28px; flex: none; }
   .switch input { opacity: 0; width: 0; height: 0; }
-  .switch span { position: absolute; inset: 0; background: var(--line); border-radius: 26px; transition: .2s; }
-  .switch span::before { content: ""; position: absolute; width: 20px; height: 20px; left: 3px; top: 3px; background: #fff;
-    border-radius: 50%; transition: .2s; }
-  .switch input:checked + span { background: var(--good); }
-  .switch input:checked + span::before { transform: translateX(18px); }
+  .switch span { position: absolute; inset: 0; background: var(--line); border-radius: 28px; transition: 0.2s; }
+  .switch span::before { content: ""; position: absolute; width: 22px; height: 22px; left: 3px; top: 3px; background: #fff;
+    border-radius: 50%; transition: 0.2s; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); }
+  .switch input:checked + span { background: #1f9d6a; }
+  .switch input:checked + span::before { transform: translateX(20px); }
   .q { flex: 1; min-width: 0; }
-  .q div:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  nav { position: fixed; bottom: 0; left: 0; right: 0; display: grid; grid-template-columns: repeat(5, 1fr);
-    background: var(--card); border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); z-index: 6; }
-  nav button { border: 0; background: none; color: var(--muted); padding: 8px 0 10px; font-size: 11.5px; }
-  nav button div { font-size: 20px; }
+  .q > div:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+
+  /* tab bar */
+  nav { position: fixed; bottom: 0; left: 0; right: 0; z-index: 6; display: grid; grid-template-columns: repeat(5, 1fr);
+    padding: 6px 8px calc(8px + env(safe-area-inset-bottom));
+    background: color-mix(in srgb, var(--card) 88%, transparent); backdrop-filter: blur(16px); border-top: 1px solid var(--line); }
+  nav button { border: 0; background: none; color: var(--muted); display: flex; flex-direction: column; align-items: center; gap: 3px;
+    font-size: 11px; font-weight: 600; padding: 4px 0; }
+  nav svg { width: 24px; height: 24px; padding: 3px 14px; box-sizing: content-box; border-radius: 999px; transition: background 0.2s; }
   nav button.on { color: var(--accent); }
-  .sheet-bg { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 10; display: flex; align-items: flex-end; }
-  .sheet { background: var(--card); width: 100%; border-radius: 18px 18px 0 0; padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); }
-  .sheet h3 { margin: 0 0 10px; font-size: 16px; }
-  .sheet .fields { display: grid; gap: 8px; margin-bottom: 12px; }
-  .sheet pre { white-space: pre-wrap; background: var(--bg); padding: 10px; border-radius: 10px; max-height: 50vh; overflow: auto;
-    font: 13.5px/1.4 inherit; user-select: text; }
-  .toast { position: fixed; left: 16px; right: 16px; bottom: 86px; background: #2b303b; color: #fff; padding: 10px 14px;
-    border-radius: 12px; z-index: 20; font-size: 14px; box-shadow: 0 6px 20px rgba(0,0,0,.35); }
-  .toast.err { background: #5a2321; }
-  .members .row b { font-size: 15px; }
+  nav button.on svg { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+
+  /* sheets, toasts, pull to refresh */
+  .sheet-bg { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); z-index: 10; display: flex; align-items: flex-end; animation: fade 0.15s; }
+  .sheet { background: var(--card); width: 100%; border-radius: 22px 22px 0 0; padding: 10px 16px calc(18px + env(safe-area-inset-bottom));
+    animation: up 0.22s ease-out; }
+  .sheet .handle { width: 38px; height: 5px; border-radius: 5px; background: var(--line); margin: 0 auto 12px; }
+  .sheet h3 { margin: 0 0 12px; font-size: 17px; }
+  .sheet .fields { display: grid; gap: 10px; margin-bottom: 14px; }
+  .sheet pre { white-space: pre-wrap; background: var(--bg); padding: 12px; border-radius: 12px; max-height: 50vh; overflow: auto;
+    font: 14px/1.45 inherit; user-select: text; margin: 0 0 12px; }
+  @keyframes up { from { transform: translateY(40px); opacity: 0.6; } to { transform: none; opacity: 1; } }
+  @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+  .toast { position: fixed; left: 16px; right: 16px; bottom: calc(92px + env(safe-area-inset-bottom)); background: var(--text); color: var(--bg);
+    padding: 12px 16px; border-radius: 14px; z-index: 20; font-size: 14px; font-weight: 500; box-shadow: var(--shadow); animation: up 0.2s ease-out; }
+  .toast.err { background: #d64545; color: #fff; }
+  .ptr { height: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 13px; transition: height 0.2s; }
 </style>
 </head>
 <body>
-<header><h1><span>💸 flipFinder</span><small id="cash"></small></h1><div id="filters"></div></header>
-<main id="main"><div class="empty">Loading…</div></main>
+<div class="ptr" id="ptr">↓ Pull to refresh</div>
+<header><h1>flipFinder</h1><span class="pill" id="cash"></span></header>
+<main id="main"></main>
 <nav id="tabs"></nav>
 <script>
 "use strict";
 const tg = window.Telegram?.WebApp;
-const TABS = [["deals", "🔥", "Deals"], ["stock", "📦", "Stock"], ["pot", "💰", "Pot"], ["schedule", "📅", "Schedule"],
-  ["settings", "⚙️", "Settings"]];
+const ICONS = {
+  deals: '<path d="M12 3c2 3.5 5.5 5.2 5.5 9.5a5.5 5.5 0 0 1-11 0c0-2.2 1-3.6 2.2-4.8.2 1.6 1 2.6 2.2 3C10.3 8.6 10.7 5.6 12 3z"/>',
+  stock: '<path d="M3.5 7.5 12 3l8.5 4.5v9L12 21l-8.5-4.5z"/><path d="M3.5 7.5 12 12l8.5-4.5M12 12v9"/>',
+  pot: '<rect x="3" y="6" width="18" height="13" rx="3"/><path d="M16 12.5h2M3 9.5h18"/>',
+  schedule: '<rect x="3.5" y="5" width="17" height="15" rx="3"/><path d="M8 3v4M16 3v4M3.5 10h17"/>',
+  settings: '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
+};
+const TABS = [["deals", "Deals"], ["stock", "Stock"], ["pot", "Pot"], ["schedule", "Schedule"], ["settings", "Settings"]];
 const PLATFORMS = { vinted: "Vinted", ebay: "eBay", subito: "Subito" };
-const state = { tab: "deals", data: null, cat: "All", platform: "All", max: null, busy: false };
+// one colour per person: the validated categorical palette, in its fixed order (red stays for empty hours)
+const PEOPLE = { dark: ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#9085e9"],
+  light: ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#4a3aa7"] };
+const ROME = "Europe/Rome";
+const state = { tab: "deals", data: null, cat: "All", platform: "All", max: null, busy: false, week: 0 };
 try { Object.assign(state, JSON.parse(localStorage.getItem("ff-filters") || "{}"), { busy: false, data: null }); } catch {}
-state.tab = new URLSearchParams(location.search).get("tab") || state.tab;   // e.g. a link straight to the pot
+state.tab = new URLSearchParams(location.search).get("tab") || state.tab;
 
-// --- tiny DOM helper: text is always set as text, never parsed as HTML
+// --- helpers: text is always set as text, never parsed as HTML
 function h(tag, props = {}, ...kids) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(props || {})) {
     if (k === "class") el.className = v;
+    else if (k === "style") el.style.cssText = v;
     else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
     else if (v === true) el.setAttribute(k, "");
     else if (v !== false && v != null) el.setAttribute(k, v);
   }
-  for (const kid of kids.flat()) if (kid != null && kid !== false) el.append(kid instanceof Node ? kid : String(kid));
+  for (const kid of kids.flat()) if (kid != null && kid !== false && kid !== "") el.append(kid instanceof Node ? kid : String(kid));
   return el;
 }
-const euro = (x) => x == null ? "–" : "€" + Number(x).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const euro0 = (x) => x == null ? "–" : "€" + Math.round(x).toLocaleString("en-US");
-const ago = (ts) => { const m = Math.max(0, (Date.now() / 1000 - ts) / 60); return m < 60 ? `${Math.round(m)}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`; };
-const haptic = (kind) => { try { tg?.HapticFeedback?.notificationOccurred(kind); } catch {} };
+function svg(tag, attrs = {}, ...kids) {
+  const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  for (const kid of kids.flat()) if (kid) el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  return el;
+}
+const theme = () => document.documentElement.dataset.theme === "light" ? "light" : "dark";
+const personColor = (m) => PEOPLE[theme()][(m?.slot ?? 0) % 6];
+const euro = (x) => x == null ? "–" : (x < 0 ? "−€" : "€") + Math.abs(Number(x)).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const euro0 = (x) => x == null ? "–" : (x < 0 ? "−€" : "€") + Math.abs(Math.round(x)).toLocaleString("en-US");
+const ago = (ts) => { const m = Math.max(0, (Date.now() / 1000 - ts) / 60); return m < 1 ? "just now" : m < 60 ? `${Math.round(m)} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; };
+const hhmm = (ts) => new Date(ts * 1000).toLocaleTimeString("en-GB", { timeZone: ROME, hour: "2-digit", minute: "2-digit" });
+const day = (ts) => new Date(ts * 1000).toLocaleDateString("en-GB", { timeZone: ROME, day: "2-digit", month: "short" });
+const romeNow = () => {
+  const p = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: ROME, hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+    .formatToParts(new Date()).map((x) => [x.type, x.value]));
+  return { h: +p.hour, m: +p.minute };
+};
+const tap = (kind = "light") => { try { tg?.HapticFeedback?.impactOccurred(kind); } catch {} };
+const notify = (kind) => { try { tg?.HapticFeedback?.notificationOccurred(kind); } catch {} };
 
 function toast(text, err = false) {
   document.querySelectorAll(".toast").forEach((t) => t.remove());
@@ -120,11 +273,9 @@ function toast(text, err = false) {
 }
 
 async function api(path, body) {
-  const r = await fetch(`api/${path}`, {
-    method: body ? "POST" : "GET",
+  const r = await fetch(`api/${path}`, { method: body ? "POST" : "GET",
     headers: { authorization: `tma ${tg?.initData || ""}`, "content-type": "application/json" },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+    body: body ? JSON.stringify(body) : undefined });
   const data = await r.json().catch(() => ({ error: "No answer from the server" }));
   if (!r.ok) throw new Error(data.error || `Error ${r.status}`);
   return data;
@@ -133,217 +284,390 @@ async function api(path, body) {
 async function act(body, okText) {
   if (state.busy) return;
   state.busy = true;
+  tap("medium");
   try {
     const res = await api("action", body);
     state.data = res.state;
-    haptic("success");
+    notify("success");
     if (res.notice || okText) toast(okText || res.notice.split("\n")[0]);
-    render();
+    render(false);
     return res;
   } catch (e) {
-    haptic("error");
+    notify("error");
     toast(e.message, true);
   } finally {
     state.busy = false;
   }
 }
 
-// --- bottom sheet with number fields
 function sheet(title, fields, onSave, extra) {
-  const inputs = fields.map((f) => h("input", { type: f.type || "number", inputmode: "decimal", step: "0.01",
-    placeholder: f.label, value: f.value ?? "" }));
+  const inputs = fields.map((f) => h("input", { type: f.type || "number", inputmode: "decimal", step: "0.01", placeholder: f.label, value: f.value ?? "" }));
   const close = () => bg.remove();
   const bg = h("div", { class: "sheet-bg", onclick: (e) => { if (e.target === bg) close(); } },
-    h("div", { class: "sheet" }, h("h3", {}, title), extra || null,
-      fields.length ? h("div", { class: "fields" }, fields.map((f, i) => h("label", {}, h("div", { class: "label" }, f.label), inputs[i]))) : null,
-      h("div", { class: "actions" },
-        onSave ? h("button", { class: "btn primary", onclick: async () => { const ok = await onSave(inputs.map((i) => i.value)); if (ok !== false) close(); } }, "Save") : null,
-        h("button", { class: "btn", onclick: close }, onSave ? "Cancel" : "Close"))));
+    h("div", { class: "sheet" }, h("div", { class: "handle" }), h("h3", {}, title), extra || null,
+      fields.length ? h("div", { class: "fields" }, fields.map((f, i) => h("label", {}, h("div", { class: "label", style: "margin-bottom:6px" }, f.label), inputs[i]))) : null,
+      h("div", { class: "actions", style: "margin-top:0" },
+        onSave ? h("button", { class: "btn primary grow", onclick: async () => { const ok = await onSave(inputs.map((i) => i.value)); if (ok !== false) close(); } }, "Save") : null,
+        h("button", { class: "btn grow", onclick: close }, onSave ? "Cancel" : "Close"))));
   document.body.append(bg);
   inputs[0]?.focus();
+  return close;
 }
 
 function showText(title, text) {
   const pre = h("pre", {}, text);
-  sheet(title, [], null, h("div", {}, pre, h("div", { class: "actions", style: "margin-bottom:10px" },
-    h("button", { class: "btn primary", onclick: async () => {
-      try { await navigator.clipboard.writeText(text); toast("Copied"); }
-      catch { const r = document.createRange(); r.selectNodeContents(pre); getSelection().removeAllRanges(); getSelection().addRange(r); toast("Selected: copy it with your phone's menu"); }
-    } }, "Copy"))));
+  sheet(title, [], null, h("div", {}, pre, h("button", { class: "btn primary", style: "width:100%;margin-bottom:10px", onclick: async () => {
+    try { await navigator.clipboard.writeText(text); toast("Copied ✓"); }
+    catch { const r = document.createRange(); r.selectNodeContents(pre); getSelection().removeAllRanges(); getSelection().addRange(r); toast("Selected: copy it with your phone's menu"); }
+  } }, "Copy")));
 }
 
-// --- tabs
-function render() {
+function empty(icon, title, text) {
+  return h("div", { class: "empty" }, h("div", { class: "big" }, icon), h("b", {}, title), text);
+}
+
+// --- shell
+function render(animate = true) {
   const d = state.data;
-  document.getElementById("tabs").replaceChildren(...TABS.map(([id, icon, label]) =>
-    h("button", { class: state.tab === id ? "on" : "", onclick: () => { state.tab = id; render(); window.scrollTo(0, 0); } },
-      h("div", {}, icon), label)));
-  document.getElementById("cash").textContent = d?.pot?.started ? `pot ${euro0(d.pot.cash)}` : "";
-  document.getElementById("filters").replaceChildren(state.tab === "deals" && d ? filters(d) : "");
+  document.getElementById("tabs").replaceChildren(...TABS.map(([id, label]) => {
+    const b = h("button", { class: state.tab === id ? "on" : "", "aria-label": label,
+      onclick: () => { if (state.tab === id) return; tap("light"); state.tab = id; render(); window.scrollTo(0, 0); } });
+    const icon = svg("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "1.8", "stroke-linecap": "round", "stroke-linejoin": "round" });
+    icon.innerHTML = ICONS[id];   // fixed icon paths, never user data
+    b.append(icon, label);
+    return b;
+  }));
+  document.getElementById("cash").textContent = d?.pot?.started ? `Pot ${euro0(d.pot.cash)}` : "";
   const main = document.getElementById("main");
-  if (!d) return;
-  main.replaceChildren(...({ deals: dealsTab, stock: stockTab, pot: potTab, schedule: scheduleTab, settings: settingsTab })[state.tab](d));
+  main.replaceChildren(...(d ? ({ deals: dealsTab, stock: stockTab, pot: potTab, schedule: scheduleTab, settings: settingsTab })[state.tab](d) : skeleton()));
+  if (animate) { main.classList.remove("enter"); void main.offsetWidth; main.classList.add("enter"); }
+}
+
+function skeleton() {
+  const block = (ht, w = "100%", mt = 0) => h("div", { class: "sk", style: `height:${ht}px;width:${w};margin-top:${mt}px` });
+  return [0, 1, 2].map(() => h("div", { class: "card deal" }, h("div", { class: "sk", style: "aspect-ratio:16/10;border-radius:0" }),
+    h("div", { class: "body" }, block(18, "80%"), block(14, "55%", 10), block(26, "40%", 12))));
+}
+
+// --- Deals
+function demandTag(text) {
+  if (!text) return null;
+  const first = text.split(" · ")[0];
+  if (first.startsWith("📊")) return h("span", { class: "tag", onclick: () => toast(text) }, "📊 Learning");
+  const cls = first.startsWith("🔥") ? "good" : first.startsWith("🐢") ? "warn" : "";
+  return h("span", { class: `tag ${cls}`, onclick: () => toast(text) }, first.replace(" demand", ""));
+}
+function sellerTag(text) {
+  if (!text) return null;
+  const warn = text.split(" · ").find((x) => x.startsWith("⚠️"));
+  if (warn) return h("span", { class: "tag warn", onclick: () => toast(text) }, warn.split(":")[0]);
+  const parts = text.split(" · ").filter((x) => /★|sold/.test(x)).slice(0, 2);
+  return h("span", { class: "tag", onclick: () => toast(`👤 ${text}`) }, `👤 ${parts.join(" · ") || "seller"}`);
+}
+
+function dealCard(x, d) {
+  const me = d.me;
+  const mineOrOwner = x.mine || me.owner;
+  const taken = x.status === "claimed" && !x.mine && !me.manager;
+  const main = [];
+  const small = [];
+  if (x.status === "new") main.push(h("button", { class: "btn primary grow", onclick: () => act({ action: "claim", key: x.key }) }, "✋ Claim"));
+  if (x.status === "claimed" && x.request && me.manager) {
+    main.push(h("button", { class: "btn good grow", onclick: () => act({ action: "approve", key: x.key }) }, `✓ Approve ${euro(x.request.amount)}`));
+    main.push(h("button", { class: "btn danger", onclick: () => act({ action: "reject", key: x.key }) }, "Reject"));
+  } else if (x.status === "claimed" && mineOrOwner && !x.request) {
+    main.push(h("button", { class: "btn primary grow", onclick: () => sheet(me.manager ? `What did you pay for #${x.n}?` : `Agreed price for #${x.n}`,
+      [{ label: me.manager ? "Total paid (€)" : "Agreed price (€) · goes to the manager for approval", value: x.cost }],
+      ([v]) => act({ action: "bought", key: x.key, amount: v }).then((r) => !!r)) }, me.manager ? "💸 Bought" : "🙋 Request buy"));
+  }
+  if (x.status === "bought" && mineOrOwner) main.push(h("button", { class: "btn primary grow", onclick: () => act({ action: "listed", key: x.key }) }, "🏷 Mark listed"));
+  if (x.status === "listed" && mineOrOwner) main.push(h("button", { class: "btn primary grow", onclick: () => sheet(`What did #${x.n} sell for?`,
+    [{ label: "Sale price (€)" }], ([v]) => act({ action: "sold", key: x.key, amount: v }).then((r) => !!r)) }, "✅ Sold"));
+  if (["new", "claimed"].includes(x.status)) {
+    small.push(h("button", { class: "btn icon" + (x.voted === "up" ? " on" : ""), "aria-label": "Good deal", onclick: () => act({ action: "up", key: x.key }) }, `👍${x.up ? " " + x.up : ""}`));
+    small.push(h("button", { class: "btn icon" + (x.voted === "down" ? " on" : ""), "aria-label": "Bad deal", onclick: () => act({ action: "down", key: x.key }) }, `👎${x.down ? " " + x.down : ""}`));
+    small.push(h("button", { class: "btn icon", "aria-label": "Message the seller", onclick: async () => {
+      tap(); const r = await api("action", { action: "message", key: x.key }).catch((e) => toast(e.message, true));
+      if (r) showText("📩 Message for the seller", r.notice.replace(/^📩 Copy and send this to the seller:\s*/, "").replace(/\s*Open the listing$/, "")); } }, "📩"));
+  }
+  if (["bought", "listed"].includes(x.status)) {
+    small.push(h("button", { class: "btn", onclick: async () => {
+      tap(); const r = await api("action", { action: "sell", key: x.key }).catch((e) => toast(e.message, true));
+      if (r) showText(`📝 Listing for #${x.n}`, r.notice); } }, "📝 Listing"));
+  }
+  small.push(h("button", { class: "btn icon", "aria-label": "Open the listing", onclick: () => { tap(); tg?.openLink ? tg.openLink(x.url) : window.open(x.url); } }, "↗"));
+  const who = x.status === "claimed" ? (x.request ? `⏳ ${x.request.by} · waiting for OK ${euro(x.request.amount)}` : `✋ ${x.mine ? "You have it" : x.who + " has it"}`)
+    : x.status === "bought" ? `💸 ${x.mine ? "You" : x.who} · paid ${euro(x.paid)}` : x.status === "listed" ? `🏷 Listed by ${x.mine ? "you" : x.who}` : null;
+  const value = x.value_now || x.value;
+  return h("div", { class: "card deal" + (taken ? " taken" : "") },
+    h("div", { class: "photo" }, x.photo ? h("img", { src: x.photo, alt: "", loading: "lazy", referrerpolicy: "no-referrer" }) : "",
+      h("div", { class: "over" }, h("span", { class: "tag" }, `#${x.n}`), h("span", { class: "tag" }, PLATFORMS[x.source] || x.source)),
+      who ? h("div", { class: "who" }, h("span", { class: "tag" }, who)) : ""),
+    h("div", { class: "body" },
+      h("div", { class: "title" }, x.title),
+      h("div", { class: "price" }, h("div", {}, h("b", {}, euro0(x.cost)), h("span", { class: "arrow" }, "→"), h("b", { class: "muted" }, euro0(value))),
+        x.profit != null ? h("span", { class: "badge" }, `+${euro0(x.profit)}${x.roi != null ? ` · +${x.roi}%` : ""}`) : ""),
+      h("div", { class: "tags" }, demandTag(x.demand), x.rating ? h("span", { class: "tag" }, `★ ${x.rating}/10`) : null, sellerTag(x.seller)),
+      h("div", { class: "meta" }, `${x.group || "Other"} · ${ago(x.sent)}`),
+      h("div", { class: "actions" }, main, small)));
 }
 
 function filters(d) {
   const cats = ["All", ...new Set(d.deals.map((x) => x.group || "Other"))];
-  const chip = (label, on, fn) => h("button", { class: "chip" + (on ? " on" : ""), onclick: fn }, label);
-  const save = () => { try { localStorage.setItem("ff-filters", JSON.stringify({ cat: state.cat, platform: state.platform, max: state.max })); } catch {} render(); };
-  return h("div", {},
+  const chip = (label, on, fn) => h("button", { class: "chip" + (on ? " on" : ""), onclick: () => { tap(); fn(); } }, label);
+  const save = () => { try { localStorage.setItem("ff-filters", JSON.stringify({ cat: state.cat, platform: state.platform, max: state.max })); } catch {} render(false); };
+  return h("div", { class: "filters" },
     h("div", { class: "chips" }, cats.map((c) => chip(c, state.cat === c, () => { state.cat = c; save(); }))),
     h("div", { class: "chips" },
       ["All", "vinted", "ebay", "subito"].map((p) => chip(PLATFORMS[p] || "All platforms", state.platform === p, () => { state.platform = p; save(); })),
       [30, 50, 100, 250].map((m) => chip(`≤ €${m}`, state.max === m, () => { state.max = state.max === m ? null : m; save(); }))));
 }
 
-function dealCard(x, d) {
-  const me = d.me;
-  const mineOrOwner = x.mine || me.owner;
-  const btns = [];
-  if (x.status === "new") btns.push(h("button", { class: "btn primary", onclick: () => act({ action: "claim", key: x.key }) }, "✋ Claim"));
-  if (x.status === "claimed" && x.request && me.manager) {
-    btns.push(h("button", { class: "btn primary", onclick: () => act({ action: "approve", key: x.key }) }, `✅ Approve ${euro(x.request.amount)}`));
-    btns.push(h("button", { class: "btn", onclick: () => act({ action: "reject", key: x.key }) }, "❌ Reject"));
-  } else if (x.status === "claimed" && mineOrOwner && !x.request) {
-    const label = me.manager ? "💸 Bought" : "🙋 Request buy";
-    btns.push(h("button", { class: "btn primary", onclick: () => sheet(me.manager ? `💸 What did you pay for #${x.n}?`
-      : `🙋 What price did you agree for #${x.n}? It goes to the manager for approval.`,
-      [{ label: me.manager ? "Total paid (€)" : "Agreed price (€)", value: x.cost }],
-      ([v]) => act({ action: "bought", key: x.key, amount: v }).then((r) => !!r)) }, label));
-  }
-  if (x.status === "bought" && mineOrOwner) btns.push(h("button", { class: "btn primary", onclick: () => act({ action: "listed", key: x.key }) }, "🏷 Listed"));
-  if (x.status === "listed" && mineOrOwner) {
-    btns.push(h("button", { class: "btn primary", onclick: () => sheet(`✅ What did #${x.n} sell for?`,
-      [{ label: "Sale price (€)" }], ([v]) => act({ action: "sold", key: x.key, amount: v }).then((r) => !!r)) }, "✅ Sold"));
-  }
-  if (["new", "claimed"].includes(x.status)) {
-    btns.push(h("button", { class: "btn" + (x.voted === "up" ? " on" : ""), onclick: () => act({ action: "up", key: x.key }) }, `👍${x.up ? " " + x.up : ""}`));
-    btns.push(h("button", { class: "btn" + (x.voted === "down" ? " on" : ""), onclick: () => act({ action: "down", key: x.key }) }, `👎${x.down ? " " + x.down : ""}`));
-    btns.push(h("button", { class: "btn", onclick: async () => { const r = await api("action", { action: "message", key: x.key }).catch((e) => toast(e.message, true));
-      if (r) showText("📩 Message for the seller", r.notice.replace(/^📩 Copy and send this to the seller:\s*/, "").replace(/\s*Open the listing$/, "")); } }, "📩"));
-  }
-  if (["bought", "listed"].includes(x.status)) {
-    btns.push(h("button", { class: "btn", onclick: async () => { const r = await api("action", { action: "sell", key: x.key }).catch((e) => toast(e.message, true));
-      if (r) showText(`📝 Listing for #${x.n}`, r.notice); } }, "📝 Listing"));
-  }
-  btns.push(h("button", { class: "btn", onclick: () => tg?.openLink ? tg.openLink(x.url) : window.open(x.url) }, "Open ↗"));
-  const status = x.status === "new" ? null : x.status === "claimed"
-    ? `✋ ${x.mine ? "You have it" : x.who + " has it"}${x.request ? ` · ⏳ waiting for OK: ${euro(x.request.amount)} (${x.request.by})` : ""}`
-    : x.status === "bought" ? `💸 Bought by ${x.mine ? "you" : x.who} for ${euro(x.paid)}` : `🏷 Listed by ${x.mine ? "you" : x.who} · paid ${euro(x.paid)}`;
-  return h("div", { class: "card deal" },
-    x.photo ? h("img", { class: "thumb", src: x.photo, alt: "", loading: "lazy", referrerpolicy: "no-referrer" }) : h("div", { class: "thumb" }),
-    h("div", {},
-      h("div", { class: "title" }, `#${x.n} ${x.title}`),
-      h("div", { class: "meta" }, `${PLATFORMS[x.source] || x.source} · ${x.group || "Other"} · ${ago(x.sent)}`),
-      x.demand ? h("div", { class: "meta" }, x.demand) : "",
-      x.seller ? h("div", { class: "meta" }, `👤 ${x.seller}`) : "",
-      h("div", { class: "nums" }, `${euro(x.cost)} → worth ${euro0(x.value_now || x.value)} `, x.profit != null ? h("span", { class: "profit" }, `+${euro0(x.profit)}`) : ""),
-      status ? h("div", { class: "status" }, status) : ""),
-    h("div", { class: "actions" }, btns));
-}
-
 function dealsTab(d) {
   const list = d.deals.filter((x) => (state.cat === "All" || (x.group || "Other") === state.cat)
     && (state.platform === "All" || x.source === state.platform) && (state.max == null || (x.cost ?? 0) <= state.max));
-  return list.length ? list.map((x) => dealCard(x, d)) : [h("div", { class: "empty" }, d.deals.length ? "No deals match these filters" : "No deals in the last 7 days")];
+  return [filters(d), ...(list.length ? list.map((x) => dealCard(x, d)) : [d.deals.length
+    ? empty("🔍", "Nothing matches these filters", "Try another category or platform.")
+    : empty("👀", "No deals right now", "New ones show up here within minutes of being listed.")])];
 }
 
+// --- Stock
 function stockTab(d) {
-  if (!d.stock.length) return [h("div", { class: "empty" }, "Nothing in stock right now")];
+  if (!d.stock.length) return [empty("🛒", "Nothing in stock", "Bought items show up here until they sell.")];
   const tied = d.stock.reduce((s, x) => s + (x.paid || 0), 0);
-  return [h("div", { class: "card" }, h("div", { class: "label" }, "Tied up in stock"), h("div", { class: "big" }, euro(tied))),
-    ...d.stock.map((x) => dealCard(x, d))];
+  const listed = d.stock.filter((x) => x.status === "listed").length;
+  return [h("div", { class: "card" }, h("div", { class: "label" }, "Tied up in stock"), h("div", { class: "hero" }, euro(tied)),
+    h("div", { class: "label" }, `${d.stock.length} item${d.stock.length === 1 ? "" : "s"} · ${listed} listed · ${d.stock.length - listed} to list`)),
+  ...d.stock.map((x) => dealCard(x, d))];
+}
+
+// --- Pot: a ring meter (cash vs stock, labelled) and a single-series profit line
+function ring(cash, stock) {
+  const total = Math.max(cash + stock, 0.01);
+  const r = 48;
+  const c = 2 * Math.PI * r;
+  const gap = cash > 0 && stock > 0 ? 3 : 0;   // a small surface gap between the two parts
+  const a = (Math.max(cash, 0) / total) * c;
+  const s = svg("svg", { viewBox: "0 0 128 128", width: "128", height: "128", role: "img", "aria-label": `Cash ${euro0(cash)}, in stock ${euro0(stock)}` });
+  s.append(svg("circle", { cx: 64, cy: 64, r, fill: "none", stroke: "var(--soft)", "stroke-width": 14 }));
+  if (cash > 0) s.append(svg("circle", { cx: 64, cy: 64, r, fill: "none", stroke: "var(--cash)", "stroke-width": 14,
+    "stroke-dasharray": `${Math.max(a - gap, 0)} ${c}`, transform: "rotate(-90 64 64)" }));
+  if (stock > 0) s.append(svg("circle", { cx: 64, cy: 64, r, fill: "none", stroke: "var(--stock)", "stroke-width": 14,
+    "stroke-dasharray": `${Math.max(c - a - gap, 0)} ${c}`, "stroke-dashoffset": -a, transform: "rotate(-90 64 64)" }));
+  s.append(svg("text", { x: 64, y: 61, "text-anchor": "middle", "font-size": "11", fill: "var(--muted)" }, "total"));
+  s.append(svg("text", { x: 64, y: 78, "text-anchor": "middle", "font-size": "17", "font-weight": "700", fill: "var(--text)" }, euro0(cash + stock)));
+  return s;
+}
+
+function profitChart(series) {
+  series = [...series].sort((a, b) => a.at - b.at);
+  if (series.length < 2) {
+    return h("div", { class: "label", style: "padding:8px 0" },
+      series.length ? `${euro(series[0].profit)} after the first sale: the line starts with the second` : "The line starts after the first sales");
+  }
+  const W = 320, H = 120, P = { l: 4, r: 44, t: 14, b: 18 };
+  const xs = series.map((p) => p.at), ys = series.map((p) => p.profit);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(0, ...ys), y1 = Math.max(...ys, 1);
+  // by time; when everything happened within an hour, evenly spaced so the points don't pile up
+  const even = x1 - x0 < 3600;
+  const X = (t, i) => P.l + (even ? i / (series.length - 1) : (t - x0) / (x1 - x0)) * (W - P.l - P.r);
+  const Y = (v) => P.t + (1 - (v - y0) / Math.max(y1 - y0, 1)) * (H - P.t - P.b);
+  const pts = series.map((p, i) => [X(p.at, i), Y(p.profit)]);
+  const path = pts.map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`).join("");
+  const s = svg("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Profit over time, now ${euro(ys.at(-1))}` });
+  s.append(svg("defs", {}, svg("linearGradient", { id: "pf", x1: 0, y1: 0, x2: 0, y2: 1 },
+    svg("stop", { offset: "0", "stop-color": "var(--line-profit)", "stop-opacity": "0.22" }),
+    svg("stop", { offset: "1", "stop-color": "var(--line-profit)", "stop-opacity": "0" }))));
+  s.append(svg("line", { x1: P.l, x2: W - P.r, y1: Y(0), y2: Y(0), stroke: "var(--line)", "stroke-width": 1 }));
+  s.append(svg("path", { d: `${path}L${pts.at(-1)[0]},${Y(y0)}L${pts[0][0]},${Y(y0)}Z`, fill: "url(#pf)" }));
+  s.append(svg("path", { d: path, fill: "none", stroke: "var(--line-profit)", "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+  const [lx, ly] = pts.at(-1);
+  s.append(svg("circle", { cx: lx, cy: ly, r: 4.5, fill: "var(--line-profit)", stroke: "var(--card)", "stroke-width": 2 }));
+  s.append(svg("text", { x: lx + 8, y: ly + 4, "font-size": "12", "font-weight": "700", fill: "var(--text)" }, euro0(ys.at(-1))));
+  s.append(svg("text", { x: P.l, y: H - 3, "font-size": "10", fill: "var(--muted)" }, day(x0)));
+  s.append(svg("text", { x: W - P.r, y: H - 3, "font-size": "10", fill: "var(--muted)", "text-anchor": "end" }, day(x1)));
+  const cross = svg("line", { y1: P.t - 6, y2: H - P.b, stroke: "var(--muted)", "stroke-width": 1, "stroke-dasharray": "3 3", visibility: "hidden" });
+  const dot = svg("circle", { r: 5, fill: "var(--line-profit)", stroke: "var(--card)", "stroke-width": 2, visibility: "hidden" });
+  s.append(cross, dot);
+  const tip = h("div", { class: "tip", style: "display:none" });
+  const wrap = h("div", { class: "chart" }, s, tip);
+  const show = (ev) => {
+    const rect = s.getBoundingClientRect();
+    const vx = ((ev.clientX - rect.left) / rect.width) * W;
+    let best = 0;
+    pts.forEach(([x], i) => { if (Math.abs(x - vx) < Math.abs(pts[best][0] - vx)) best = i; });
+    const [bx, by] = pts[best];
+    cross.setAttribute("x1", bx); cross.setAttribute("x2", bx); cross.setAttribute("visibility", "visible");
+    dot.setAttribute("cx", bx); dot.setAttribute("cy", by); dot.setAttribute("visibility", "visible");
+    tip.textContent = `${euro(series[best].profit)} · ${day(series[best].at)}`;
+    tip.style.display = "block";
+    tip.style.left = `${(bx / W) * 100}%`;
+  };
+  const hide = () => { cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); tip.style.display = "none"; };
+  wrap.addEventListener("pointerdown", show);
+  wrap.addEventListener("pointermove", show);
+  wrap.addEventListener("pointerleave", hide);
+  wrap.addEventListener("pointerup", () => setTimeout(hide, 1500));
+  return wrap;
 }
 
 function potTab(d) {
   const p = d.pot;
-  const out = [h("div", { class: "card" },
-    h("div", { class: "label" }, "Cash in the pot"), h("div", { class: "big" }, euro(p.cash)),
-    h("div", { class: "grid3", style: "margin-top:12px" },
-      h("div", {}, h("b", {}, euro0(p.stock)), h("span", { class: "label" }, "in stock")),
-      h("div", {}, h("b", {}, euro0(p.cash + p.stock)), h("span", { class: "label" }, "total")),
-      h("div", {}, h("b", { class: p.profit >= 0 ? "profit" : "" }, euro0(p.profit)), h("span", { class: "label" }, "profit"))),
-    h("div", { class: "label", style: "margin-top:10px" }, `Profit split ${p.split === "equal" ? "equally" : "by contribution"} · stock counts at what we paid · budget limit ${euro0(d.settings.budget)}`))];
-  out.push(h("h2", {}, "Members"));
-  out.push(p.members.length ? h("div", { class: "card members" }, [...p.members].sort((a, b) => b.account - a.account).map((m) =>
-    h("div", { class: "row" },
-      h("div", {}, h("b", {}, m.name), h("div", { class: "label" }, `put in ${euro(m.net)} · profit ${euro(m.profit)}${p.shares[m.name] ? ` · ${Math.round(p.shares[m.name] * 100)}%` : ""}`)),
-      h("div", { style: "text-align:right" }, h("b", {}, euro(m.account)), h("div", { class: "label" }, "back today"))))) :
-    h("div", { class: "empty" }, "No money in yet: the owner adds it with /deposit name amount"));
-  out.push(h("h2", {}, "Ledger"));
+  if (!p.started) return [empty("💰", "The pot is empty", "The owner records money with /deposit name amount.")];
+  const out = [h("div", { class: "card" }, h("div", { class: "label" }, "Pot balance (cash)"), h("div", { class: "hero" }, euro(p.cash)),
+    h("div", { class: "label" }, `${euro0(p.stock)} in stock · ${euro0(p.cash + p.stock)} in total`))];
+  out.push(h("div", { class: "card ring-wrap" }, ring(p.cash, p.stock), h("div", { class: "legend" },
+    h("div", { class: "item" }, h("span", {}, h("span", { class: "dot", style: "background:var(--cash)" }), "Cash"), h("b", {}, euro0(p.cash))),
+    h("div", { class: "item" }, h("span", {}, h("span", { class: "dot", style: "background:var(--stock)" }), "In stock"), h("b", {}, euro0(p.stock))),
+    h("div", { class: "label", style: "margin-top:4px" }, "Stock counts at what we paid"))));
+  out.push(h("div", { class: "card" }, h("div", { class: "row", style: "border:0;padding:0 0 8px" },
+    h("div", {}, h("div", { class: "label" }, "Profit so far"), h("div", { style: "font-size:24px;font-weight:750" }, h("span", { class: p.profit >= 0 ? "money-pos" : "" }, euro(p.profit)))),
+    h("span", { class: "tag" }, `split ${p.split === "equal" ? "equally" : "by contribution"}`)), profitChart(p.series || [])));
+  const byName = Object.fromEntries((d.schedule?.members || []).map((m) => [m.name.toLowerCase(), m]));
+  out.push(h("h2", {}, "Members"), h("div", { class: "card" }, [...p.members].sort((a, b) => b.account - a.account).map((m, i) => {
+    const share = p.shares[m.name] || 0;
+    const color = personColor(byName[m.name.toLowerCase()] || { slot: i });
+    return h("div", { class: "row", style: "display:block" },
+      h("div", { style: "display:flex;justify-content:space-between;align-items:baseline;gap:10px" },
+        h("div", {}, h("span", { class: "dot", style: `background:${color}` }), h("b", {}, m.name)), h("b", { style: "font-size:17px" }, euro(m.account))),
+      h("div", { style: "display:flex;justify-content:space-between;gap:10px;margin-top:2px" },
+        h("span", { class: "label" }, `put in ${euro0(m.net)} · share ${Math.round(share * 100)}%`),
+        h("span", { class: m.profit >= 0 ? "money-pos" : "", style: "font-size:13px" }, `${m.profit >= 0 ? "+" : ""}${euro(m.profit)}`)),
+      h("div", { class: "bar" }, h("i", { style: `width:${Math.round(share * 100)}%;background:${color}` })));
+  })), h("div", { class: "label", style: "margin:-6px 4px 0" }, "Big number = what they'd get back if we stopped today"));
+  const icon = { deposit: "⬇️", withdraw: "⬆️", buy: "🛒", sale: "💶", fix: "✏️", undo: "↩️" };
   const what = (e) => ({ deposit: `Deposit · ${e.member}`, withdraw: `Withdrawal · ${e.member}`, buy: `Bought #${e.n}`, sale: `Sold #${e.n}`,
-    fix: `Correction #${e.n}${e.note ? " · " + e.note : ""}`, undo: `Undo of entry ${e.ref}` })[e.kind] || e.kind;
-  out.push(p.ledger.length ? h("div", { class: "card" }, p.ledger.map((e) => h("div", { class: "row" },
-    h("div", {}, h("div", {}, `${e.id}. ${what(e)}`), h("div", { class: "label" }, new Date(e.at * 1000).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }))),
-    h("b", { class: e.amount >= 0 ? "profit" : "" }, `${e.amount >= 0 ? "+" : "−"}${euro(Math.abs(e.amount))}`)))) :
-    h("div", { class: "empty" }, "Nothing yet"));
+    fix: `Correction #${e.n}`, undo: `Undo of ${e.ref}` })[e.kind] || e.kind;
+  out.push(h("h2", {}, "Ledger"), p.ledger.length ? h("div", { class: "card" }, p.ledger.slice(0, 25).map((e) => h("div", { class: "row" },
+    h("div", { style: "display:flex;gap:12px;align-items:center;min-width:0" }, h("span", { style: "font-size:20px" }, icon[e.kind] || "•"),
+      h("div", { style: "min-width:0" }, h("div", { style: "font-weight:500" }, what(e)),
+        h("div", { class: "label" }, `${day(e.at)}, ${hhmm(e.at)}${e.note ? " · " + e.note : ""}`))),
+    h("b", { class: e.amount >= 0 ? "money-pos" : "", style: "white-space:nowrap" }, `${e.amount >= 0 ? "+" : "−"}${euro(Math.abs(e.amount))}`))))
+    : empty("📒", "No money moves yet", ""));
   return out;
 }
 
-// --- 📅 Schedule: duty now, today's hours, the weekly grid
+// --- Schedule
 function scheduleTab(d) {
   const sc = d.schedule;
-  if (!d.me.team) return [h("div", { class: "empty" }, "The schedule starts once the owner sets roles (/setrole name role)")];
+  if (!d.me.team) return [empty("📅", "The schedule starts with roles", "The owner sets them with /setrole name buyer|seller|manager.")];
   const byId = Object.fromEntries(sc.members.map((m) => [m.id, m]));
   const onMe = sc.on && sc.on.id === d.me.id;
-  const hh = (ts) => new Date(ts * 1000).toLocaleTimeString("en-GB", { timeZone: "Europe/Rome", hour: "2-digit", minute: "2-digit" });
-  const out = [h("button", { class: "btn primary", style: `width:100%;padding:16px;font-size:17px;margin-bottom:10px;${onMe ? "background:var(--bad)" : ""}`,
-    onclick: () => act({ action: onMe ? "duty_end" : "duty_start" }) }, onMe ? "🔴 End duty" : "🟢 Start duty"),
-  h("div", { class: "card" }, sc.on ? `👮 On duty: ${sc.on.name} (since ${hh(sc.on.since)}, until ${hh(sc.on.until)})` : "👮 Nobody is on duty")];
+  const out = [dutyButton(sc, onMe, byId)];
+  if (sc.on && !onMe) {
+    out.push(h("div", { class: "card", style: "display:flex;align-items:center;gap:12px;margin-top:14px" },
+      h("span", { class: "dot", style: `width:14px;height:14px;margin:0;background:${personColor(byId[sc.on.id])}` }),
+      h("div", {}, h("b", {}, `${sc.on.name} is on duty`), h("div", { class: "label" }, `since ${hhmm(sc.on.since)} · until ${hhmm(sc.on.until)}`))));
+  }
   out.push(h("h2", {}, "Today"), h("div", { class: "card" }, sc.members.filter((m) => m.role).map((m) => {
     const goal = m.target ?? m.cap;
     const over = m.cap && m.today > m.cap;
-    return h("div", { class: "row" },
-      h("div", {}, h("span", { style: `display:inline-block;width:10px;height:10px;border-radius:50%;background:${m.color};margin-right:8px` }), m.name),
-      h("b", { style: over ? "color:var(--bad)" : "" }, `${m.today} / ${goal} h${m.cap ? " max" : ""}`));
+    return h("div", { class: "row", style: "display:block" },
+      h("div", { style: "display:flex;justify-content:space-between" },
+        h("span", {}, h("span", { class: "dot", style: `background:${personColor(m)}` }), m.name),
+        h("b", { style: over ? "color:var(--bad)" : "" }, `${m.today} / ${goal} h${m.cap ? " max" : ""}`)),
+      h("div", { class: "bar" }, h("i", { style: `width:${Math.min(100, (m.today / goal) * 100)}%;background:${over ? "var(--bad)" : personColor(m)}` })));
   })));
-  state.week ??= 0;
-  out.push(h("div", { class: "chips" }, ["This week", "Next week"].map((label, i) =>
-    h("button", { class: "chip" + (state.week === i ? " on" : ""), onclick: () => { state.week = i; render(); } }, label))));
+  out.push(h("div", { class: "seg", style: "margin-top:18px" }, ["This week", "Next week"].map((label, i) =>
+    h("button", { class: state.week === i ? "on" : "", onclick: () => { tap(); state.week = i; render(false); } }, label))));
   const week = sc.weeks[state.week];
-  const cell = (day, hour) => {
-    const id = day.blocks[hour];
-    const m = id ? byId[id] : null;
-    const past = day.date < sc.today || (day.date === sc.today && hour < new Date().toLocaleString("en-GB", { timeZone: "Europe/Rome", hour: "2-digit", hourCycle: "h23" }) * 1);
-    const mine = id === d.me.id;
-    const style = `background:${m ? m.color : "rgba(229,83,75,.28)"};opacity:${past ? 0.35 : 1};border-radius:6px;height:26px;` +
-      `font-size:11px;display:flex;align-items:center;justify-content:center;color:#fff;${mine ? "outline:2px solid #fff;" : ""}`;
-    return h("div", { style, onclick: () => {
-      if (past) return toast("That hour is over", true);
-      if (!id) return act({ action: "block", date: day.date, hour });
-      if (!mine) return toast(`That's ${m ? m.name : "someone"}'s block: ask them to swap`, true);
-      sheet(`${day.label} ${hour}:00–${hour + 1}:00 is yours`, [], null, h("div", { class: "actions", style: "margin-bottom:10px" },
-        h("button", { class: "btn", onclick: () => { document.querySelector(".sheet-bg")?.remove(); act({ action: "block", date: day.date, hour }); } }, "Free this hour"),
-        h("button", { class: "btn primary", onclick: () => { document.querySelector(".sheet-bg")?.remove(); act({ action: "swap_block", date: day.date, hour }); } }, "🙋 Need a swap")));
-    } }, m ? m.name.slice(0, 1) : "");
-  };
-  const cols = `34px repeat(7, 1fr)`;
-  const grid = [h("div", { style: `display:grid;grid-template-columns:${cols};gap:3px;font-size:11px;color:var(--muted);text-align:center` },
-    h("div"), week.map((day) => h("div", { style: day.date === sc.today ? "color:var(--accent);font-weight:700" : "" }, day.label)))];
+  const now = romeNow();
+  const grid = h("div", { class: "grid" }, h("div"), week.map((dd) => {
+    const [wd, n] = dd.label.split(" ");
+    return h("div", { class: "hd" + (dd.date === sc.today ? " today" : "") }, h("div", {}, wd), h("b", {}, n));
+  }));
   for (let hour = sc.from; hour < sc.to; hour++) {
-    grid.push(h("div", { style: `display:grid;grid-template-columns:${cols};gap:3px;margin-top:3px` },
-      h("div", { style: "font-size:11px;color:var(--muted);display:flex;align-items:center" }, `${hour}:00`),
-      week.map((day) => cell(day, hour))));
+    grid.append(h("div", { class: "hr" }, `${hour}:00`));
+    for (const dd of week) {
+      const id = dd.blocks[hour];
+      const m = id ? byId[id] : null;
+      const past = dd.date < sc.today || (dd.date === sc.today && hour < now.h);
+      const mine = id === d.me.id;
+      const cls = ["c", m ? "" : "free", past ? "past" : "", mine ? "mine" : "", dd.date === sc.today ? "todaycol" : ""].filter(Boolean).join(" ");
+      grid.append(h("div", { class: cls, style: m ? `background:${personColor(m)}` : "", onclick: () => {
+        if (past) return toast("That hour is over", true);
+        if (!id) return act({ action: "block", date: dd.date, hour });
+        if (!mine) return toast(`That's ${m ? m.name : "someone"}'s hour: ask them to swap`, true);
+        tap();
+        const close = sheet(`${dd.label} · ${hour}:00–${hour + 1}:00 is yours`, [], null, h("div", { class: "actions", style: "margin:0 0 10px" },
+          h("button", { class: "btn grow", onclick: () => { close(); act({ action: "block", date: dd.date, hour }); } }, "Free this hour"),
+          h("button", { class: "btn primary grow", onclick: () => { close(); act({ action: "swap_block", date: dd.date, hour }); } }, "🙋 Need a swap")));
+      } }, m ? m.name.slice(0, 1) : ""));
+    }
   }
-  out.push(h("div", { class: "card" }, grid,
-    h("div", { class: "label", style: "margin-top:10px" }, "Tap an empty (red) hour to take it, your own to free it or ask for a swap."),
-    h("div", { class: "chips" }, sc.members.filter((m) => m.role).map((m) =>
-      h("span", { class: "chip", style: `border-color:${m.color}` }, h("span", { style: `color:${m.color}` }, "● "), m.name)))));
+  const wrap = h("div", { class: "gridwrap" }, grid);
+  if (week.some((dd) => dd.date === sc.today) && now.h >= sc.from && now.h < sc.to) {
+    const top = 40 + 3 + (now.h - sc.from) * 31 + (now.m / 60) * 28;   // header row, then 28px rows with 3px gaps
+    wrap.append(h("div", { class: "nowline", style: `top:${top}px` }));   // on top of the grid, not one of its cells
+  }
+  out.push(h("div", { class: "card", style: "padding:12px" }, wrap,
+    h("div", { class: "label", style: "margin-top:12px" }, "Tap an empty (red) hour to take it · tap yours to free it or ask for a swap"),
+    h("div", { class: "chips", style: "margin-top:6px" }, sc.members.filter((m) => m.role).map((m) =>
+      h("span", { class: "chip" }, h("span", { class: "dot", style: `background:${personColor(m)}` }), m.name)))));
   return out;
 }
 
+// the round Start / End duty button, with a live timer while you're on
+const POWER = '<path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/>';
+const STOP = '<rect x="6.5" y="6.5" width="11" height="11" rx="2.5" fill="currentColor" stroke="none"/>';
+let dutyTimer = null;
+
+function nextShift(sc, onMe) {
+  if (onMe) return `You're on until ${hhmm(sc.on.until)}`;
+  const byId = Object.fromEntries(sc.members.map((m) => [m.id, m]));
+  const now = romeNow();
+  const days = [...sc.weeks[0], ...sc.weeks[1]].filter((dd) => dd.date >= sc.today);
+  for (const dd of days) {
+    for (let hour = sc.from; hour < sc.to; hour++) {
+      const id = dd.blocks[hour];
+      if (!id || (dd.date === sc.today && hour <= now.h)) continue;
+      if (sc.on && id === sc.on.id && dd.date === sc.today) continue;   // the shift that's on now
+      let end = hour;
+      while (end < sc.to && dd.blocks[end] === id) end++;
+      const when = dd.date === sc.today ? "" : dd.date === days[1]?.date ? "tomorrow " : `${dd.label.split(" ")[0]} `;
+      return `Next shift: ${byId[id]?.name || "someone"} ${when}${hour}:00–${end}:00`;
+    }
+  }
+  return "No shifts planned yet: tap the red hours below";
+}
+
+function dutyButton(sc, onMe) {
+  clearInterval(dutyTimer);
+  const icon = svg("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "2.4", "stroke-linecap": "round" });
+  icon.innerHTML = onMe ? STOP : POWER;   // fixed icon paths
+  const timer = h("div", { class: "timer" });
+  const tick = () => {
+    const mins = Math.max(0, Math.floor((Date.now() / 1000 - sc.on.since) / 60));
+    timer.textContent = `${Math.floor(mins / 60)}:${String(mins % 60).padStart(2, "0")}`;
+  };
+  const btn = h("button", { class: "dutybtn" + (onMe ? " on" : ""), "aria-label": onMe ? "End duty" : "Start duty",
+    onclick: () => { tap("heavy"); act({ action: onMe ? "duty_end" : "duty_start" }); } },
+  icon, onMe ? timer : "", onMe ? h("div", { class: "sub" }, "on duty") : "");
+  if (onMe) {
+    tick();
+    dutyTimer = setInterval(() => { if (document.body.contains(timer)) tick(); else clearInterval(dutyTimer); }, 15000);
+  }
+  return h("div", { class: "duty" }, btn, h("div", { class: "label-big" }, onMe ? "End duty" : "Start duty"),
+    h("div", { class: "next" }, nextShift(sc, onMe)));
+}
+
+// --- Settings
 function settingsTab(d) {
   const s = d.settings;
-  const out = [h("h2", {}, "Budget mode"), h("div", { class: "card" },
-    h("div", { class: "row" }, h("div", {}, h("div", {}, `Budget ${euro(s.budget_setting)}`), h("div", { class: "label" }, `In effect: ${euro(s.budget)} (never more than the pot's cash)`)),
-      h("button", { class: "btn", onclick: () => sheet("🎯 Budget-mode budget", [{ label: "Budget (€)", value: s.budget_setting }], ([v]) => act({ action: "budget", value: v }).then((r) => !!r)) }, "Edit")))];
+  const edit = (label, onclick) => h("button", { class: "btn", onclick }, label);
+  const out = [h("h2", { style: "margin-top:8px" }, "Budget mode"), h("div", { class: "card" },
+    h("div", { class: "row" }, h("div", {}, h("div", { style: "font-weight:600" }, `Budget ${euro(s.budget_setting)}`),
+      h("div", { class: "label" }, `In effect: ${euro(s.budget)} (never more than the pot's cash)`)),
+    edit("Edit", () => sheet("Budget-mode budget", [{ label: "Budget (€)", value: s.budget_setting }], ([v]) => act({ action: "budget", value: v }).then((r) => !!r)))))];
+  const ruleText = (name, v) => name.endsWith("roi") ? `${v}%` : name === "min_profit" ? euro(v) : `${v} / 10`;
+  const ruleName = (name) => name.replace("_", " ").replace("roi", "ROI");
   out.push(h("h2", {}, "Deal rules"), h("div", { class: "card" }, Object.entries(s.rules).map(([name, value]) =>
-    h("div", { class: "row" }, h("div", {}, name.replace("_", " "), h("div", { class: "label" }, name.endsWith("roi") ? `${value}%` : name === "min_profit" ? euro(value) : value)),
-      h("button", { class: "btn", onclick: () => sheet(`Rule: ${name}`, [{ label: name, value }], ([v]) => act({ action: "rule", name, value: v }).then((r) => !!r)) }, "Edit")))));
+    h("div", { class: "row" }, h("div", {}, h("div", { style: "font-weight:500" }, ruleName(name)), h("div", { class: "label" }, ruleText(name, value))),
+      edit("Edit", () => sheet(ruleName(name), [{ label: ruleName(name), value }], ([v]) => act({ action: "rule", name, value: v }).then((r) => !!r)))))));
   if (d.me.owner) {
-    out.push(h("h2", {}, "Profit split"), h("div", { class: "card" }, h("div", { class: "actions" },
-      ["contribution", "equal"].map((m) => h("button", { class: "btn" + (d.pot.split === m ? " primary" : ""), onclick: () => d.pot.split !== m && act({ action: "split", value: m }) },
-        m === "equal" ? "Equally" : "By contribution")))));
+    out.push(h("h2", {}, "Profit split"), h("div", { class: "seg" }, ["contribution", "equal"].map((m) =>
+      h("button", { class: d.pot.split === m ? "on" : "", onclick: () => d.pot.split !== m && act({ action: "split", value: m }) },
+        m === "equal" ? "Equally" : "By contribution"))));
   }
   const groups = {};
   for (const x of s.searches) (groups[x.group] ??= []).push(x);
@@ -351,30 +675,57 @@ function settingsTab(d) {
     out.push(h("h2", {}, `${group} · ${list.filter((x) => x.enabled).length}/${list.length} on`));
     out.push(h("div", { class: "card" }, list.map((x) => h("div", { class: "row" },
       h("label", { class: "switch" }, h("input", { type: "checkbox", checked: x.enabled, onchange: () => act({ action: "toggle", query: x.query }) }), h("span")),
-      h("div", { class: "q" }, h("div", {}, x.query), h("div", { class: "label" }, `${x.price_from != null ? euro0(x.price_from) : "any"} – ${x.price_to != null ? euro0(x.price_to) : "no max"}${x.budget ? " · budget" : ""}`)),
-      h("button", { class: "btn", onclick: () => sheet(`Price range: ${x.query}`, [{ label: "From (€)", value: x.price_from }, { label: "To (€)", value: x.price_to }],
-        ([a, b]) => act({ action: "price", query: x.query, from: a, to: b }).then((r) => !!r)) }, "€")))));
+      h("div", { class: "q" }, h("div", {}, x.query), h("div", { class: "label" },
+        `${x.price_from != null ? euro0(x.price_from) : "any"} – ${x.price_to != null ? euro0(x.price_to) : "no max"}${x.budget ? " · budget" : ""}`)),
+      edit("€", () => sheet(`Price range: ${x.query}`, [{ label: "From (€)", value: x.price_from }, { label: "To (€)", value: x.price_to }],
+        ([a, b]) => act({ action: "price", query: x.query, from: a, to: b }).then((r) => !!r)))))));
   }
-  out.push(h("div", { class: "label", style: "margin:14px 2px" }, "Search and price changes apply from the next scan (every ~5 min)."));
+  out.push(h("div", { class: "label", style: "margin:14px 4px" }, "Search and price changes apply from the next scan (every ~5 min)."));
   return out;
 }
 
-async function load() {
+// --- loading, pull to refresh
+async function load(animate = true) {
   try {
     state.data = await api("state");
   } catch (e) {
-    document.getElementById("main").replaceChildren(h("div", { class: "empty" }, e.message));
+    document.getElementById("main").replaceChildren(empty("⚠️", "Couldn't load", e.message));
     return;
   }
-  render();
+  render(animate);
 }
 
+let startY = null;
+const ptr = document.getElementById("ptr");
+window.addEventListener("touchstart", (e) => { startY = window.scrollY <= 0 && !document.querySelector(".sheet-bg") ? e.touches[0].clientY : null; }, { passive: true });
+window.addEventListener("touchmove", (e) => {
+  if (startY === null) return;
+  const dy = e.touches[0].clientY - startY;
+  ptr.style.height = `${Math.max(0, Math.min(dy * 0.5, 56))}px`;
+  ptr.textContent = dy > 90 ? "↻ Release to refresh" : "↓ Pull to refresh";
+}, { passive: true });
+window.addEventListener("touchend", async () => {
+  if (startY === null) return;
+  const go = parseInt(ptr.style.height || "0", 10) >= 45;
+  startY = null;
+  if (!go) { ptr.style.height = "0"; return; }
+  ptr.textContent = "Refreshing…";
+  tap("light");
+  await load(false);
+  ptr.style.height = "0";
+});
+
+function applyTheme() {
+  document.documentElement.dataset.theme = tg?.colorScheme === "light" ? "light" : "dark";
+}
+applyTheme();
+tg?.onEvent?.("themeChanged", () => { applyTheme(); render(false); });
 tg?.ready();
 tg?.expand();
-try { tg?.setHeaderColor?.("bg_color"); } catch {}
+try { tg?.setHeaderColor?.("bg_color"); tg?.setBackgroundColor?.("bg_color"); } catch {}
 render();
 load();
-document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
+document.addEventListener("visibilitychange", () => { if (!document.hidden) load(false); });
 </script>
 </body>
 </html>

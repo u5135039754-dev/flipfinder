@@ -6,12 +6,13 @@ import { RULES, applySettings, effectiveBudget, searchId } from "./searches.js";
 import { SELLER_MESSAGE, fullText, keyboard, stock, profit, findDeal } from "./deals.js";
 import { allocate, entryLine, memberKey, potText, reverse, shares, summarize } from "./pot.js";
 import { ROLES, Team } from "./team.js";
+import { Handbook } from "./handbook.js";
 import { INTROS, TOPIC_FOR_GROUP, TOPIC_NAMES, mention, pricesFor, sellListing } from "./group.js";
 import { DEFAULT_WATCH, MAX_WATCH, findCoin, watchlist } from "./crypto.js";
 import { rome, romeTs } from "./util.js";
 import { UserError, closeMatches, esc, euro, g, parseNumber, queryAndRange, splitArgs } from "./util.js";
 
-export const COMMANDS_VERSION = 10;   // bump when the list below changes, so it's registered again
+export const COMMANDS_VERSION = 11;   // bump when the list below changes, so it's registered again
 export const COMMANDS = [
   ["help", "List all commands"],
   ["app", "Open the flipFinder app: deals, stock, pot and settings"],
@@ -36,6 +37,7 @@ export const COMMANDS = [
   ["duty", "Who's on duty, with Start / End / Swap buttons"],
   ["task", "Tasks: /task add Photos for #12 @Anna by fri · /task done 3"],
   ["tasks", "Open tasks"],
+  ["handbook", "The team handbook (owner: /handbook edit buying, then the new text)"],
   ["setrole", "Owner only: /setrole Anna seller (manager, buyer or seller)"],
   ["ledger", "Every money action, newest last: /ledger or /ledger 30"],
   ["deposit", "Owner only: money put in: /deposit Marco 100"],
@@ -63,6 +65,7 @@ export class Bot {
     this.changed = false;          // settings changed: saved at the end
     this.capture = null;           // the Mini App: replies and pop-ups collected here instead of sent
     this.team = new Team(this);
+    this.handbook = new Handbook(this);
     this._deals = null;
   }
 
@@ -293,6 +296,29 @@ Add one with /watch link, remove with /unwatch sol`);
     const who = this.team.member(t.who);
     await this.reply(chat, `📝 Task ${t.n} for ${who ? `<a href="tg://user?id=${who.id}">${esc(who.name)}</a>` : "?"}: ` +
       `${esc(t.text)}${t.due ? ` · due ${this.team.taskLine(t).split(" · due ")[1]}` : ""}`);
+  }
+
+  async cmd_handbook(chat, args, user, msg) {
+    if ((args[0] || "").toLowerCase() !== "edit") {
+      await this.handbook.post(chat, msg?.is_topic_message ? msg.message_thread_id : null, false);
+      return;
+    }
+    if (user !== this.ownerId) throw new UserError("Only the owner can edit the handbook");
+    if (!args[1]) throw new UserError("Which section? e.g. /handbook edit buying");
+    // the new text can come in the same message, on the lines after "/handbook edit buying"
+    const full = msg?.text || "";
+    const nl = full.indexOf("\n");
+    if (nl > 0 && full.slice(nl + 1).trim()) {
+      const { section, updated } = await this.handbook.edit(args[1], full.slice(nl + 1));
+      return this.reply(chat, `✅ Updated "${esc(section.title)}"${updated ? ` and its pinned copy` : ""}`);
+    }
+    const s = await this.handbook.find(args[1]);
+    const sent = await this.tg.call("sendMessage", { chat_id: chat, parse_mode: "HTML",
+      text: `✏️ Reply to this message with the new text for <b>${esc(s.title)}</b> (it replaces the whole section).\n\nNow:\n${esc(s.text)}`,
+      reply_markup: { force_reply: true, input_field_placeholder: "the new section text" } });
+    const pending = await this.store.get("pending", {});
+    pending[String(user)] = { handbook: s.key, chat, ask_msg: sent?.message_id ?? null };
+    await this.store.put("pending", pending);
   }
 
   async cmd_tasks(chat) {
@@ -612,6 +638,10 @@ Add one with /watch link, remove with /unwatch sol`);
    * in place (and pinned again in case someone unpinned it); a new one only when it's gone.
    */
   async postIntro(chat, key) {
+    if (key === "rules") {   // the Rules topic gets the handbook, one pinned message per section
+      const thread = this.settings.topics?.rules;
+      return thread ? (await this.handbook.post(chat, thread, true)) > 0 : false;
+    }
     const text = INTROS[key];
     const thread = key === "general" ? null : this.settings.topics?.[key];
     if (key !== "general" && !thread) return false;
@@ -755,6 +785,13 @@ Add one with /watch link, remove with /unwatch sol`);
   async onPriceReply(chat, user, text) {
     const pending = (await this.store.get("pending", {}))[String(user)];
     if (!pending || String(pending.chat) !== String(chat)) return;   // just chatting
+    if (pending.handbook) {
+      const all = await this.store.get("pending", {});
+      delete all[String(user)];
+      await this.store.put("pending", all);
+      const { section, updated } = await this.handbook.edit(pending.handbook, text);
+      return this.reply(chat, `✅ Updated "${esc(section.title)}"${updated ? ` and its pinned copy` : ""}`);
+    }
     const amount = parseNumber(text);
     if (amount === null) return this.reply(chat, `⚠️ I need just the amount, e.g. 45 (got ${esc(text.slice(0, 30))})`);
     if (!(amount >= 0 && amount <= 100_000)) return this.reply(chat, "⚠️ That amount doesn't look right");
