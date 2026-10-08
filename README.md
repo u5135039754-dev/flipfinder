@@ -242,6 +242,18 @@ Kept in the Worker's private storage (names and roles too, never in the repo).
 - **Sunday report** adds duty hours vs target, deals caught per shift, average reaction time, open
   tasks, stock waiting to be listed or sold, and bot health.
 
+### Members only
+
+Roles are the only key. Only people with a role (the owner always has one) can use the bot, the
+Mini App and the group: /allow <id> is the first step, /setrole <name|id> buyer|seller|manager
+opens the door, /setrole <name> none or /removerole <name> closes it at once (the owner is then asked
+whether to remove them from the group: ban + unban, so they can ask again later). Without a role:
+"🔒 You're not a member of FLIP MAFIA" in a private chat, silence in the group, and the app shows
+"🔒 Members only" with no data sent. The group should be invite-only with a join-request link: the
+bot approves requests from people with a role and declines the rest, telling the owner. Every day
+at 10:00 the owner gets a list of anyone in the group without a role (nobody is removed
+automatically). The bot needs the admin rights "Invite users via link" and "Ban users".
+
 ### Rules topic (team handbook)
 
 The handbook is a page in the Mini App (📖 Handbook: section cards with the person in charge and

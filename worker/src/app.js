@@ -10,12 +10,15 @@ import { Telegram } from "./telegram.js";
 import { Bot, COMMANDS, COMMANDS_VERSION } from "./bot.js";
 import { compare, keyboard } from "./deals.js";
 import { TOPIC_FOR_GROUP, dueReminders, weeklyDue, weeklyReport } from "./group.js";
-import { DAY, UserError, inQuietHours, nowSeconds } from "./util.js";
+import { DAY, UserError, inQuietHours, nowSeconds, rome } from "./util.js";
 import { action, snapshot, verifyInitData } from "./webapp.js";
 import { runCrypto } from "./crypto.js";
 import { recordRun } from "./team.js";
 
 export const MENU_VERSION = 1;   // bump to set the "📱 Open app" menu button again
+export const WEBHOOK_VERSION = 1;   // bump when the update types below change
+export const UPDATE_TYPES = ["message", "callback_query", "chat_join_request", "chat_member"];
+export const MEMBER_CHECK_HOUR = 10;   // the daily "in the group without a role" check, Italy time
 
 export const MAX_QUEUE_FLUSH = 15;
 export const CLEANUP_DELAY = 10;   // seconds a command and its answer stay in the Rules topic
@@ -113,7 +116,8 @@ async function handleApp(request, env, opts, url) {
   const user = await verifyInitData(auth.startsWith("tma ") ? auth.slice(4) : "", env.TELEGRAM_BOT_TOKEN, ctx.now);
   if (!user) return json({ error: "Open the app from Telegram" }, 401);
   const { bot } = ctx;
-  if (!bot.allowed(user.id)) return json({ error: "This app is only for the flipFinder group" }, 403);
+  // every call, not just the first: a role taken away closes the app at once, and no data leaves
+  if (!bot.allowed(user.id)) return json({ error: "🔒 Members only", locked: true }, 403);
   bot.capture = [];
   bot.team.learn(user);   // names for mentions and requests, also from the app
   try {
@@ -271,6 +275,21 @@ export async function runCron(env, opts = {}) {
       settings.menu_version = `${MENU_VERSION}:${appUrl}`;
       bot.changed = true;
     }
+  }
+  // the webhook also gets join requests and joins/leaves (for the members-only group)
+  if (appUrl && env.WEBHOOK_SECRET && settings.webhook_version !== WEBHOOK_VERSION) {
+    const ok = await tg.call("setWebhook", { url: new URL("/telegram", appUrl).href, secret_token: env.WEBHOOK_SECRET,
+      allowed_updates: UPDATE_TYPES });
+    if (ok !== null) {
+      settings.webhook_version = WEBHOOK_VERSION;
+      bot.changed = true;
+    }
+  }
+  // once a day: anyone in the group without a role? (the owner gets a list, nobody is removed)
+  const today = rome(now);
+  if (today.hour >= MEMBER_CHECK_HOUR && (await store.get("member_check")) !== today.date) {
+    await store.put("member_check", today.date);
+    await bot.memberCheck();
   }
   // weekly report, Sunday 20:00 Italy time
   if (weeklyDue(await store.get("last_weekly"), now)) {

@@ -19,15 +19,16 @@ test("setprice validates and saves", async () => {
   assert.deepEqual((await t.settings()).prices, { "boss katana": [90, 260] });
 });
 
-test("strangers are ignored and /allow is owner only", async () => {
+test("strangers are ignored; /allow is only the first step, a role unlocks the bot", async () => {
   const t = await setup();
   await t.updates(msg("/budget 10", { user: 999 }), msg("/allow 555"), msg("/budget 50", { user: MARCO }),
-    msg("/allow 777", { user: MARCO }));
+    msg("/setrole 555 seller"), msg("/budget 50", { user: MARCO }), msg("/allow 777", { user: MARCO }));
   const r = t.tg.texts();
-  assert.equal(r.length, 3);                                   // nothing for the stranger
-  assert.match(r[0], /User 555 can now use commands/);
-  assert.match(r[1], /Budget is now €50/);                     // 555 is allowed now
-  assert.match(r[2], /Only the owner/);
+  assert.equal(r.length, 4);                                   // nothing for the stranger, nor for 555 without a role
+  assert.match(r[0], /User 555 is on the list\. They can use the bot once they have a role: \/setrole 555/);
+  assert.match(r[1], /is now seller/);
+  assert.match(r[2], /Budget is now €50/);                     // 555 has a role now
+  assert.match(r[3], /Only the owner/);
   const s = await t.settings();
   assert.deepEqual(s.allowed_users, [MARCO]);
   assert.equal(s.budget, 50);
@@ -187,7 +188,7 @@ test("owner id comes from the environment, not the code", async () => {
   await t.update(msg("/allow 7"));
   assert.equal(t.tg.texts().length, 0);   // 1000001 isn't the owner any more: ignored
   await t.update(msg("/allow 7", { user: 42 }));
-  assert.match(t.tg.texts()[0], /User 7 can now use commands/);
+  assert.match(t.tg.texts()[0], /User 7 is on the list/);
   assert.notEqual(OWNER, 42);
 });
 

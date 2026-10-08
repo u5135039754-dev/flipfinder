@@ -17,15 +17,16 @@ const inGroup = (t) => t.tg.sent().filter((p) => String(p.chat_id) === GROUP).ma
 const tapAt = async (t, data, user, when, chat = Number(GROUP)) => t.update(tap(data, { user, chat }), when);
 
 test("/roles and /setrole (owner only, people the bot knows)", async () => {
-  const t = await setup({ settings: { allowed_users: [MARCO, LUCA] } });
-  await t.update(msg("/roles", { user: MARCO, first: "Marco" }));
-  assert.match(t.tg.texts()[0], /Marco<\/b>: no role yet/);
+  const t = await setup({ settings: { allowed_users: [MARCO, LUCA], roles: {} } });
+  await t.updates(msg("/roles", { user: MARCO, first: "Marco" }), msg("/roles"));
+  assert.equal(t.tg.texts().length, 1);                                  // Marco has no role yet: ignored
+  assert.match(t.tg.texts()[0], /Marco<\/b>: no role yet \(🔒 blocked\)/);   // but his name was learned
   t.tg.clear();
-  await t.updates(msg("/setrole Marco buyer", { user: MARCO }), msg("/setrole Marco buyer"), msg("/setrole Nobody seller"),
+  await t.updates(msg("/setrole Marco buyer"), msg("/setrole Marco buyer", { user: MARCO }), msg("/setrole Nobody seller"),
     msg("/setrole Marco boss"), msg("/roles"));
   const r = t.tg.texts();
-  assert.match(r[0], /Only the owner/);
-  assert.match(r[1], /Marco is now buyer: buying \+ main deal watcher/);
+  assert.match(r[0], /Marco is now buyer: buying \+ main deal watcher/);
+  assert.match(r[1], /Only the owner/);                                  // a role, but not the owner
   assert.match(r[2], /I don't know "Nobody" yet/);
   assert.match(r[3], /Roles: manager, buyer, seller/);
   assert.ok(r[4].includes("<b>Marco</b>: buying + main deal watcher · duty target 8 h/day"));
@@ -33,7 +34,7 @@ test("/roles and /setrole (owner only, people the bot knows)", async () => {
 });
 
 test("nothing about duty happens until roles are set", async () => {
-  const t = await setup({ settings: { allowed_users: [MARCO] } });
+  const t = await setup({ settings: { allowed_users: [MARCO], roles: {} } });
   await t.cron(at(9));
   assert.equal(inGroup(t).length, 0);
   assert.equal(t.tg.sent("pinChatMessage").length, 0);

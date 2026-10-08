@@ -52,7 +52,7 @@ test("only allowed users get the app's data", async () => {
   assert.equal((await app(t, "stranger", "state")).status, 403);
   const r = await app(t, "marco", "state");
   assert.equal(r.status, 200);
-  assert.deepEqual(r.body.me, { id: MARCO, name: "Marco", owner: false, manager: false, team: false });
+  assert.deepEqual(r.body.me, { id: MARCO, name: "Marco", owner: false, manager: false, team: true });
   assert.equal(r.body.deals[0].title, "Boss DS-1 distortion");
   assert.equal(r.body.deals[0].source, "vinted");
   assert.equal(r.body.deals[0].sell_days, null);
@@ -161,7 +161,7 @@ test("seller message and listing text come back to the app", async () => {
 });
 
 test("the menu button points at the app once the Worker knows its address; /app opens it", async () => {
-  const t = await setup({ settings: members });
+  const t = await setup({ settings: { ...members, roles: {} } });   // no team yet: no duty posts in the way
   await t.cron();
   assert.equal(t.tg.sent("setChatMenuButton").length, 0);                       // address not known yet
   await t.update(msg("/app"));                                                   // the webhook tells it

@@ -12,7 +12,7 @@ import { DEFAULT_WATCH, MAX_WATCH, findCoin, watchlist } from "./crypto.js";
 import { rome, romeTs } from "./util.js";
 import { UserError, closeMatches, esc, euro, g, parseNumber, queryAndRange, splitArgs } from "./util.js";
 
-export const COMMANDS_VERSION = 11;   // bump when the list below changes, so it's registered again
+export const COMMANDS_VERSION = 12;   // bump when the list below changes, so it's registered again
 export const COMMANDS = [
   ["help", "List all commands"],
   ["app", "Open the flipFinder app: deals, stock, pot and settings"],
@@ -38,17 +38,20 @@ export const COMMANDS = [
   ["task", "Tasks: /task add Photos for #12 @Anna by fri · /task done 3"],
   ["tasks", "Open tasks"],
   ["handbook", "The team handbook (owner: /handbook edit buying, then the new rules)"],
-  ["setrole", "Owner only: /setrole Anna seller (manager, buyer or seller)"],
+  ["setrole", "Owner only: /setrole Anna seller (manager, buyer, seller, or none to remove it)"],
+  ["removerole", "Owner only: /removerole Anna (blocks them right away)"],
   ["ledger", "Every money action, newest last: /ledger or /ledger 30"],
   ["deposit", "Owner only: money put in: /deposit Marco 100"],
   ["withdraw", "Owner only: money taken out: /withdraw Marco 50"],
   ["fix", "Owner only: correct a price: /fix 12 paid 45 or /fix 12 sold 80"],
   ["undo", "Owner only: cancel a deposit, withdrawal or fix with a new entry: /undo 7"],
   ["split", "Owner only: how profit is shared: /split contribution or /split equal"],
-  ["allow", "Owner only: let another user use commands: /allow 123456789"],
+  ["allow", "Owner only: first step for a new member: /allow 123456789, then /setrole"],
   ["intro", "Owner only: post or update the pinned intro in every topic"],
 ];
-const OWNER_ONLY = new Set(["allow", "intro", "deposit", "withdraw", "fix", "undo", "split", "setrole"]);
+const OWNER_ONLY = new Set(["allow", "intro", "deposit", "withdraw", "fix", "undo", "split", "setrole", "removerole"]);
+export const LOCKED = "🔒 You're not a member of FLIP MAFIA";
+const IN_GROUP = new Set(["member", "administrator", "creator", "restricted"]);
 
 export function claimerName(user) {
   const name = [user.first_name, user.last_name].filter(Boolean).join(" ");
@@ -71,7 +74,13 @@ export class Bot {
     this._deals = null;
   }
 
+  /** Only people with a role (the owner always has one) can use the bot, the app and the group. */
   allowed(user) {
+    return this.team.hasRole(user);
+  }
+
+  /** On the /allow list (the first step), with or without a role yet. */
+  listed(user) {
     return user === this.ownerId || this.settings.allowed_users.includes(user);
   }
 
@@ -174,7 +183,10 @@ export class Bot {
   async handle(update) {
     try {
       const m = update.message;
-      if (update.callback_query) await this.onButton(update.callback_query);
+      if (m) await this.seeInGroup(m);
+      if (update.chat_join_request) await this.onJoinRequest(update.chat_join_request);
+      else if (update.chat_member) await this.onMemberChange(update.chat_member);
+      else if (update.callback_query) await this.onButton(update.callback_query);
       else if (m?.pinned_message && m.is_topic_message && m.message_thread_id === this.settings.topics?.rules) {
         // only the handbook is pinned there: no "pinned a message" notices
         await this.tg.call("deleteMessage", { chat_id: m.chat.id, message_id: m.message_id });
@@ -189,7 +201,12 @@ export class Bot {
     const text = (msg.text || "").trim();
     const user = msg.from?.id;
     const chat = msg.chat.id;
-    if (!this.allowed(user)) return;   // not someone we take commands from: ignore quietly
+    if (!this.allowed(user)) {
+      if (this.listed(user)) this.team.learn(msg.from);   // their name, for /setrole
+      // in the group: ignore quietly; in a private chat: one short answer
+      if (msg.chat.type === "private" || (!Telegram.isGroup(chat) && chat === user)) await this.reply(chat, LOCKED);
+      return;
+    }
     this.team.learn(msg.from);
     this.learnTopic(msg);
     this.enterRules(msg, text.startsWith("/"));
@@ -290,8 +307,151 @@ Add one with /watch link, remove with /unwatch sol`);
 
   async cmd_setrole(chat, args, user) {
     if (user !== this.ownerId) throw new UserError("Only the owner can use /setrole");
-    if (args.length < 2) throw new UserError(`Use /setrole <name> <role>. Roles: ${Object.keys(ROLES).join(", ")}`);
-    await this.reply(chat, this.team.setRole(args.slice(0, -1).join(" "), args.at(-1).toLowerCase()));
+    if (args.length < 2) throw new UserError(`Use /setrole <name> <role>. Roles: ${Object.keys(ROLES).join(", ")}, or none`);
+    const name = args.slice(0, -1).join(" ");
+    const role = args.at(-1).toLowerCase();
+    if (role === "none") return this.takeRole(chat, name);
+    await this.reply(chat, this.team.setRole(name, role));
+  }
+
+  async cmd_removerole(chat, args, user) {
+    if (user !== this.ownerId) throw new UserError("Only the owner can use /removerole");
+    if (!args.length) throw new UserError("Use /removerole <name>");
+    return this.takeRole(chat, args.join(" "));
+  }
+
+  /** Role gone: blocked at once; if they're in the group, ask the owner whether to remove them too. */
+  async takeRole(chat, name) {
+    const m = this.team.removeRole(name);
+    await this.reply(chat, `🔒 ${esc(m.name)} no longer has a role: the bot and the app are closed to them from now on.`);
+    for (const group of this.tg.groups) {
+      const cm = await this.tg.call("getChatMember", { chat_id: group, user_id: m.id });
+      if (!IN_GROUP.has(cm?.status)) continue;
+      await this.tg.call("sendMessage", { chat_id: this.ownerId, parse_mode: "HTML",
+        text: `Remove <b>${esc(m.name)}</b> from the group too?`,
+        reply_markup: { inline_keyboard: [[{ text: "Yes, remove", callback_data: `kick:${m.id}:y` },
+          { text: "No, keep", callback_data: `kick:${m.id}:n` }]] } });
+      break;
+    }
+  }
+
+  /** "Remove from the group too?": out (ban + unban at once, so they can ask to join again later). */
+  async onKick(cq, chat, msg, user, rest) {
+    if (user !== this.ownerId) return this.answer(cq, "Only the owner decides that");
+    const [id, yes] = rest.split(":");
+    const uid = Number(id);
+    const name = this.team.member(uid)?.name || `user ${uid}`;
+    const done = (text) => this.tg.call("editMessageText", { chat_id: chat, message_id: msg.message_id, text, parse_mode: "HTML" });
+    if (yes !== "y") {
+      await done(`👍 ${esc(name)} stays in the group (without a role they can't use the bot or the app)`);
+      return this.answer(cq, "Kept");
+    }
+    if (this.team.hasRole(uid)) {
+      await done(`ℹ️ ${esc(name)} has a role again, so I didn't remove them`);
+      return this.answer(cq, "Not removed");
+    }
+    let ok = true;
+    for (const group of this.tg.groups) {
+      const r = await this.tg.request("banChatMember", { chat_id: group, user_id: uid, revoke_messages: false });
+      if (!r.ok) {
+        ok = false;
+        await done(`⚠️ Couldn't remove ${esc(name)}: ${esc(r.error)}. The bot needs the "Ban users" admin right.`);
+        continue;
+      }
+      await this.tg.call("unbanChatMember", { chat_id: group, user_id: uid, only_if_banned: true });
+    }
+    if (ok) await done(`🚪 ${esc(name)} is out of the group. They can ask to join again; I'll only let them in with a role.`);
+    return this.answer(cq, ok ? "Removed" : "Couldn't remove");
+  }
+
+  // --- the group: join requests, who's in it
+  /** Join requests: in with a role, otherwise declined and the owner told. */
+  async onJoinRequest(r) {
+    const group = String(r.chat?.id);
+    if (!this.tg.groups.includes(group)) return;
+    const u = r.from || {};
+    if (this.listed(u.id)) this.team.learn(u);
+    const name = [u.first_name, u.last_name].filter(Boolean).join(" ") || (u.username ? `@${u.username}` : "someone");
+    if (this.allowed(u.id)) {
+      await this.tg.call("approveChatJoinRequest", { chat_id: group, user_id: u.id });
+      await this.rememberMember(u, true);
+      return;
+    }
+    await this.tg.call("declineChatJoinRequest", { chat_id: group, user_id: u.id });
+    await this.tg.call("sendMessage", { chat_id: this.ownerId, parse_mode: "HTML",
+      text: `❗ ${esc(name)} (<code>${u.id}</code>) asked to join, no role\n` +
+        `To let them in: /allow ${u.id}, then /setrole ${u.id} buyer|seller|manager, and ask them to request again.` });
+  }
+
+  /** Someone joined or left (Telegram's chat_member updates). */
+  async onMemberChange(cm) {
+    if (!this.tg.groups.includes(String(cm.chat?.id))) return;
+    const u = cm.new_chat_member?.user;
+    if (u && !u.is_bot) await this.rememberMember(u, IN_GROUP.has(cm.new_chat_member.status));
+  }
+
+  /** Everyone who writes in the group, joins or leaves: so the daily check knows who's there. */
+  async seeInGroup(m) {
+    if (!this.tg.groups.includes(String(m.chat?.id))) return;
+    for (const u of m.new_chat_members || []) if (!u.is_bot) await this.rememberMember(u, true);
+    if (m.left_chat_member && !m.left_chat_member.is_bot) await this.rememberMember(m.left_chat_member, false);
+    if (m.from && !m.from.is_bot) await this.rememberMember(m.from, true);
+  }
+
+  async rememberMember(u, inside) {
+    const seen = await this.groupSeen();
+    const name = [u.first_name, u.last_name].filter(Boolean).join(" ") || (u.username ? `@${u.username}` : "");
+    if (inside ? seen[u.id] === name : !(u.id in seen)) return;
+    if (inside) seen[u.id] = name;
+    else delete seen[u.id];
+    await this.store.put("group_seen", seen);
+  }
+
+  async groupSeen() {
+    this._seen ??= await this.store.get("group_seen", {});
+    return this._seen;
+  }
+
+  /**
+   * Once a day: who's in the group without a role? The owner gets a list; nobody is removed.
+   * Telegram doesn't list a group's members, so this checks everyone the bot has ever seen there
+   * and says how many it can't identify.
+   */
+  async memberCheck(maxLookups = 30) {
+    const lines = [];
+    for (const group of this.tg.groups) {
+      const count = await this.tg.call("getChatMemberCount", { chat_id: group });
+      const list = await this.tg.call("getChatAdministrators", { chat_id: group });
+      const admins = Array.isArray(list) ? list : [];
+      const inside = new Map(admins.map((a) => [a.user.id, a.user]));
+      const seen = await this.groupSeen();
+      const s = this.settings;
+      const candidates = [...new Set([...Object.keys(seen), ...(s.allowed_users || []), ...Object.keys(s.roles || {}),
+        ...Object.keys(s.people || {})].map(Number))].filter((id) => !inside.has(id)).slice(0, maxLookups);
+      let changed = false;
+      for (const id of candidates) {
+        const cm = await this.tg.call("getChatMember", { chat_id: group, user_id: id });
+        if (!cm?.status) continue;
+        if (IN_GROUP.has(cm.status)) inside.set(id, cm.user);
+        else if (id in seen) {
+          delete seen[id];
+          changed = true;
+        }
+      }
+      if (changed) await this.store.put("group_seen", seen);
+      const noRole = [...inside.values()].filter((u) => !u.is_bot && !this.allowed(u.id));
+      const unknown = typeof count === "number" ? Math.max(0, count - inside.size) : 0;
+      for (const u of noRole) {
+        const name = [u.first_name, u.last_name].filter(Boolean).join(" ") || (u.username ? `@${u.username}` : "?");
+        lines.push(`· ${esc(name)} (<code>${u.id}</code>)`);
+      }
+      if (unknown) lines.push(`· ${unknown} more I can't identify (they haven't written since I joined): check the member list`);
+    }
+    if (!lines.length) return null;
+    const text = ["👥 <b>Daily member check</b>: in the group without a role", ...lines, "",
+      "Nobody was removed. Give them a role with /setrole, or remove them from the group."].join("\n");
+    await this.tg.call("sendMessage", { chat_id: this.ownerId, parse_mode: "HTML", text });
+    return text;
   }
 
   async cmd_duty(chat) {
@@ -486,7 +646,8 @@ Add one with /watch link, remove with /unwatch sol`);
       this.settings.allowed_users.push(uid);
       this.changed = true;
     }
-    await this.reply(chat, `✅ User ${uid} can now use commands`);
+    await this.reply(chat, `✅ User ${uid} is on the list. They can use the bot once they have a role: ` +
+      `/setrole ${uid} buyer|seller|manager`);
   }
 
   async cmd_stock(chat) {
@@ -1017,13 +1178,17 @@ Add one with /watch link, remove with /unwatch sol`);
     const data = cq.data || "";
     const msg = cq.message || {};
     const chat = msg.chat?.id;
-    if (!this.allowed(user)) return;   // only allowed users can press buttons
+    if (!this.allowed(user)) {   // no role: a short note in a private chat, nothing at all in the group
+      if (msg.chat?.type === "private") await this.answer(cq, LOCKED);
+      return;
+    }
     this.team.learn(cq.from);
     if (data === "claim" || data === "claimed") return this.onClaim(cq, msg, chat, data);
     const colon = data.indexOf(":");
     const kind = colon < 0 ? data : data.slice(0, colon);
     const rest = colon < 0 ? "" : data.slice(colon + 1);
     if (kind === "pay") return this.onUseCost(cq, chat, user, rest);
+    if (kind === "kick") return this.onKick(cq, chat, msg, user, rest);
     if (kind === "ap" || kind === "rj") return this.decideBuy(cq, user, rest, kind === "ap");
     if (kind === "wait") return this.answer(cq, "Waiting for the manager's OK");
     if (kind === "duty") {

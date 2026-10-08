@@ -75,6 +75,10 @@ export async function setup({ settings, catalog = CATALOG, chatIds = `${OWNER},$
   const env = { DB: db, TELEGRAM_BOT_TOKEN: "TOKEN", TELEGRAM_CHAT_ID: chatIds, OWNER_ID: String(OWNER),
     API_KEY: "test-key", WEBHOOK_SECRET: "hook-secret" };
   if (catalog) await store.put("catalog", catalog);
+  // roles are the only key: test members on the allow list get one unless the test says otherwise
+  if (settings?.allowed_users && !settings.roles) {
+    settings = { ...settings, roles: Object.fromEntries(settings.allowed_users.map((id) => [id, "seller"])) };
+  }
   if (settings) await store.put("settings", settings);
   const ctx = { db, store, tg, env, now };
   ctx.update = async (u, at) => {

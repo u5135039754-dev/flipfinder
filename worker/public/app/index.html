@@ -301,8 +301,19 @@ async function api(path, body) {
     headers: { authorization: `tma ${tg?.initData || ""}`, "content-type": "application/json" },
     body: body ? JSON.stringify(body) : undefined });
   const data = await r.json().catch(() => ({ error: "No answer from the server" }));
+  if (data.locked) { showLocked(); throw new Error(data.error); }
   if (!r.ok) throw new Error(data.error || `Error ${r.status}`);
   return data;
+}
+
+// no role: nothing but this screen (the server sends no data at all)
+function showLocked() {
+  state.locked = true;
+  state.data = null;
+  document.getElementById("tabs").replaceChildren();
+  document.getElementById("cash").textContent = "";
+  document.getElementById("main").replaceChildren(empty("🔒", "Members only", "This app is for FLIP MAFIA members. Ask the owner for a role."));
+  tg?.BackButton?.hide();
 }
 
 async function act(body, okText) {
@@ -352,6 +363,7 @@ function empty(icon, title, text) {
 
 // --- shell
 function render(animate = true) {
+  if (state.locked) return showLocked();
   const d = state.data;
   document.getElementById("tabs").replaceChildren(...TABS.map(([id, label]) => {
     const b = h("button", { class: state.tab === id ? "on" : "", "aria-label": label,

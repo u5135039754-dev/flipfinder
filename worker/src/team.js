@@ -69,6 +69,13 @@ export class Team {
     return Object.keys(this.bot.settings.roles || {}).length > 0;
   }
 
+  /** Roles are the only key: the owner always has one, everyone else needs /setrole. */
+  hasRole(id) {
+    if (Number(id) === this.bot.ownerId) return true;
+    const role = this.bot.settings.roles?.[Number(id)];
+    return Boolean(role && ROLES[role]);
+  }
+
   isManager(id) {
     return Number(id) === this.bot.ownerId || this.member(id)?.role === "manager";
   }
@@ -93,20 +100,33 @@ export class Team {
     const lines = ["👥 <b>Who does what</b>"];
     for (const m of this.members()) {
       const lim = this.limit(m);
-      lines.push(`· <b>${esc(m.name)}</b>: ${m.role ? ROLES[m.role] : "no role yet"}` +
+      lines.push(`· <b>${esc(m.name)}</b>: ${m.role ? ROLES[m.role] : "no role yet (🔒 blocked)"}` +
         (m.role ? ` · duty ${lim.target ? `target ${lim.target} h/day` : `up to ${lim.cap} h/day`}` : ""));
     }
-    lines.push("", "The owner changes roles with /setrole &lt;name&gt; manager|buyer|seller");
+    lines.push("", "The owner changes roles with /setrole &lt;name&gt; manager|buyer|seller|none");
     return lines.join("\n");
   }
 
   setRole(name, role) {
     const m = this.find(name);
     if (!m) throw new UserError(`I don't know "${name}" yet: they need to send the bot a message first (and be /allow-ed)`);
-    if (!ROLES[role]) throw new UserError(`Roles: ${Object.keys(ROLES).join(", ")}`);
+    if (!ROLES[role]) throw new UserError(`Roles: ${Object.keys(ROLES).join(", ")} (or none to remove it)`);
     this.bot.settings.roles = { ...(this.bot.settings.roles || {}), [m.id]: role };
     this.bot.changed = true;
     return `✅ ${esc(m.name)} is now ${role}: ${ROLES[role]}`;
+  }
+
+  /** Takes someone's role away: from that moment the bot, the app and the group are closed to them. */
+  removeRole(name) {
+    const m = this.find(name);
+    if (!m) throw new UserError(`I don't know "${name}"`);
+    if (m.id === this.bot.ownerId) throw new UserError("You're the owner: you always keep a role, so you can't lock yourself out");
+    if (!this.bot.settings.roles?.[m.id]) throw new UserError(`${m.name} has no role`);
+    const roles = { ...this.bot.settings.roles };
+    delete roles[m.id];
+    this.bot.settings.roles = roles;
+    this.bot.changed = true;
+    return m;
   }
 
   // --- duty state
