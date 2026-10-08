@@ -46,6 +46,7 @@ class Deal:
     sold_count: int = 0            # likely-sold comparables used in market_value
     sell_days: float | None = None   # comparables usually sell in this many days
     demand: dict = field(default_factory=dict)   # label, sold per week, listed now, sell-through, favourites
+    seller_warnings: list = field(default_factory=list)   # "⚠️ New seller..." lines for the alert
 
 
 @dataclass
@@ -387,6 +388,38 @@ def demand(item: Item, comps: list[Item], rules: Rules, query: str, sell_days: f
     return {**out, "label": label, "learning": False, "sold_week": sold_week, "ratio": ratio}
 
 
+NEW_SELLER_MAX_ROI = 100     # brand-new sellers (no reviews, nothing sold) are skipped from this ROI
+LOW_STARS, LOW_STARS_MIN_REVIEWS = 4.5, 5
+LOW_EBAY_PCT, LOW_EBAY_MIN = 97.0, 10
+NEW_SELLER = "new seller"     # how the skip shows up in `blocked`
+
+
+def seller_check(seller: dict | None, roi: float) -> tuple[str | None, list[str]]:
+    """
+    (blocked reason or None, warnings). A seller with no reviews and nothing sold, at a
+    suspiciously big discount (ROI >= 100%), is the classic scam profile: skipped. Otherwise
+    new sellers and low ratings only get a warning line.
+    """
+    if not seller:
+        return None, []
+    reviews, sold = seller.get("reviews"), seller.get("sold")
+    if reviews == 0 and sold == 0 and roi >= NEW_SELLER_MAX_ROI:
+        return f"{NEW_SELLER} (no reviews, nothing sold) at +{roi:.0f}%", []
+    warn = []
+    if reviews == 0:
+        warn.append("⚠️ New seller: no reviews" + (", nothing sold yet" if sold == 0 else ""))
+    elif seller.get("source") == "ebay":
+        pct = seller.get("positive_pct")
+        if pct is not None and pct < LOW_EBAY_PCT and (reviews or 0) >= LOW_EBAY_MIN:
+            warn.append(f"⚠️ Low feedback: {pct:g}% positive")
+    else:
+        stars = seller.get("stars")
+        if stars is not None and stars < LOW_STARS and (reviews or 0) >= LOW_STARS_MIN_REVIEWS:
+            neg = seller.get("negative")
+            warn.append(f"⚠️ Low rating: {stars:g}★" + (f" ({neg} negative)" if neg else ""))
+    return None, warn
+
+
 def speed_points(sell_days: float | None) -> int:
     if sell_days is None:
         return 0
@@ -511,6 +544,9 @@ def assess(item: Item, pool: list[Item], rules: Rules, query: str = "",
     roi = round(profit / cost * 100, 1) if cost > 0 else 0.0
     rating = max(1, min(10, rate(profit, roi, n, rules) + speed_points(sell_days)))
     blocked = blocked_reasons(profit, roi, rating, rules, cost)
+    seller_block, seller_warn = seller_check(item.seller, roi)
+    if seller_block:
+        blocked.append(seller_block)
     by_price = sorted(comps, key=lambda p: p.price)
     sample = [by_price[i * (n - 1) // 4] for i in range(5)]   # cheapest, quartiles, priciest
     deal = Deal(item, value, n, profit, roi, rating, basis, sample,
@@ -519,7 +555,7 @@ def assess(item: Item, pool: list[Item], rules: Rules, query: str = "",
                 by_platform=by_platform, resell_on=resell_on, sell_fee=round(sell_fee, 2),
                 cost=round(cost, 2), missing_part=missing, budget=rules.budget, check=rules.check,
                 asking_value=asking, sold_count=sold_n, sell_days=sell_days,
-                demand=demand(item, comps, rules, query, sell_days))
+                demand=demand(item, comps, rules, query, sell_days), seller_warnings=seller_warn)
     # How close it came: the weakest of profit/ROI/rating as a share of what the rule needs
     deal.closeness = round(min(
         1.0,
@@ -546,4 +582,4 @@ def is_near_miss(deal: Deal | None) -> bool:
     blocked by max_roi (that's "too good to be true", not "almost").
     """
     return bool(deal and deal.blocked and deal.profit > 0 and deal.closeness >= NEAR_MISS_CLOSENESS
-                and not any(b.startswith(("ROI >", "cost >")) for b in deal.blocked))
+                and not any(b.startswith(("ROI >", "cost >", NEW_SELLER)) for b in deal.blocked))

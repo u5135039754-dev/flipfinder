@@ -16,7 +16,7 @@ import requests
 
 from .analyzer import Deal
 from .settings import search_group
-from .telegram import demand_line
+from .telegram import demand_line, seller_lines
 
 log = logging.getLogger(__name__)
 
@@ -32,6 +32,7 @@ def deal_record(deal: Deal) -> dict:
         "profit": deal.profit, "query": getattr(deal, "query", ""), "condition": it.condition,
         "item": asdict(it), "sell_days": deal.sell_days, "sold_count": deal.sold_count,
         "demand": demand_line(deal) if deal.demand else "",
+        "seller": " · ".join(x.replace("👤 ", "") for x in seller_lines(deal)),
         # queue order overnight: budget deals by profit per euro, the rest by rating, then profit
         "score": [int(deal.budget), round(deal.per_euro, 4) if deal.budget else 0, deal.rating, deal.profit],
     }

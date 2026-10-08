@@ -236,6 +236,7 @@ function dealCard(x, d) {
       h("div", { class: "title" }, `#${x.n} ${x.title}`),
       h("div", { class: "meta" }, `${PLATFORMS[x.source] || x.source} · ${x.group || "Other"} · ${ago(x.sent)}`),
       x.demand ? h("div", { class: "meta" }, x.demand) : "",
+      x.seller ? h("div", { class: "meta" }, `👤 ${x.seller}`) : "",
       h("div", { class: "nums" }, `${euro(x.cost)} → worth ${euro0(x.value_now || x.value)} `, x.profit != null ? h("span", { class: "profit" }, `+${euro0(x.profit)}`) : ""),
       status ? h("div", { class: "status" }, status) : ""),
     h("div", { class: "actions" }, btns));

@@ -38,7 +38,7 @@ class RunStats:
         self.path = path
         self.data = {
             "since": time.time(), "runs": 0, "failed_runs": 0, "checked": 0, "deals_sent": 0,
-            "best_miss": None, "consecutive_failures": 0, "last_summary_day": "",
+            "best_miss": None, "consecutive_failures": 0, "last_summary_day": "", "seller_skipped": 0,
         }
         if path.exists():
             try:
@@ -46,8 +46,9 @@ class RunStats:
             except (json.JSONDecodeError, OSError):
                 pass
 
-    def record_run(self, checked: int, deals_sent: int, best_miss: dict | None):
+    def record_run(self, checked: int, deals_sent: int, best_miss: dict | None, seller_skipped: int = 0):
         d = self.data
+        d["seller_skipped"] = d.get("seller_skipped", 0) + seller_skipped
         d["last_run"] = time.time()
         d["runs"] += 1
         d["checked"] += checked
@@ -87,6 +88,9 @@ class RunStats:
             f"📊 <b>flipFinder · {period}</b>",
             f"Runs: {d['runs']:,} · Listings checked: {d['checked']:,} · Deals: {d['deals_sent']:,}",
         ]
+        if d.get("seller_skipped"):
+            n = d["seller_skipped"]
+            lines.append(f"🛡 {n} deal{'s' if n > 1 else ''} skipped: brand-new seller and suspiciously cheap")
         if d["failed_runs"]:
             lines.append(f"⚠️ {d['failed_runs']:,} run(s) failed")
         if d["runs"] < expected * 0.8:
@@ -107,7 +111,7 @@ class RunStats:
     def mark_summary_sent(self, now: datetime | None = None):
         now = (now or datetime.now(SUMMARY_TZ)).astimezone(SUMMARY_TZ)
         streak = self.data["consecutive_failures"]
-        self.data.update({"since": now.timestamp(), "runs": 0, "failed_runs": 0, "checked": 0,
+        self.data.update({"since": now.timestamp(), "runs": 0, "failed_runs": 0, "checked": 0, "seller_skipped": 0,
                           "deals_sent": 0, "best_miss": None, "consecutive_failures": streak,
                           "last_summary_day": now.date().isoformat()})
 

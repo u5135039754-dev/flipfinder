@@ -1397,3 +1397,105 @@ def test_demand_table_per_search_and_model(tmp_path: Path):
     assert "still learning · 6 listed" in rows[0]["text"]
     assert "still learning · 12 listed" in table["iphone 13"]["all"]
     assert not s.demand_due()                                       # sent: the next one in 30 min
+
+
+# --- Seller trust ---
+
+def _rsc(payload: str) -> str:
+    return "<script>self.__next_f.push([1," + json.dumps(payload) + "])</script>"
+
+
+def test_item_page_reads_the_seller():
+    payload = ('{"x":[{"data":{"badges":[],"business":false,"feedback_count":256,"feedback_reputation":0.98,'
+               '"name":"someone","seller_id":"123","user_info":[{"key":"last-logged-in","text":"Ultima visita 2 ore fa"}]},'
+               '"exposures":[],"name":"user_info_header","section":"sidebar"},'
+               '{"data":{"badges":[{"type":"SPEEDY_SHIPPING"},{"type":"ACTIVE_LISTER"}],"username":"someone"},'
+               '"exposures":[],"name":"seller_badges_info","section":"sidebar"}]}')
+    d = parse_item_page(_rsc(payload))
+    assert (d.seller_id, d.reviews, d.reputation, d.business) == (123, 256, 0.98, False)
+    assert d.last_seen == "Ultima visita 2 ore fa" and d.badges == ["SPEEDY_SHIPPING", "ACTIVE_LISTER"]
+    assert parse_item_page(_rsc('{"x":1}')).reviews is None                      # no seller block: unknown
+
+
+def test_last_seen_in_english():
+    from flipfinder.vinted import seen_english
+    assert seen_english("Ultima visita 2 ore fa") == "seen 2 h ago"
+    assert seen_english("Ultima visita un'ora fa") == "seen 1 h ago"
+    assert seen_english("Ultima visita 15 minuti fa") == "seen 15 min ago"
+    assert seen_english("Ultima visita 3 giorni fa") == "seen 3 days ago"
+    assert seen_english("Ultima visita ieri") == "seen 1 day ago"
+    assert seen_english("qualcosa di nuovo") == ""
+
+
+def test_profile_page_gives_items_sold():
+    from flipfinder.vinted import parse_profile_page
+    payload = ('{"user":{"feedback_count":256,"given_item_count":251,"taken_item_count":146,"item_count":127,'
+               '"positive_feedback_count":251,"negative_feedback_count":5}}')
+    assert parse_profile_page(_rsc(payload)) == {"sold": 251, "bought": 146, "listed": 127, "positive": 251,
+                                                  "negative": 5, "reviews": 256}
+
+
+def test_ebay_seller_feedback():
+    from flipfinder.ebay import ebay_seller, item_from_ebay
+    raw = {"itemId": "v1|123|0", "title": "x", "price": {"value": "10", "currency": "EUR"},
+           "seller": {"username": "shop", "feedbackPercentage": "99.8", "feedbackScore": 1234}}
+    assert item_from_ebay(raw).seller == {"source": "ebay", "positive_pct": 99.8, "reviews": 1234, "sold": None}
+    assert ebay_seller({"feedbackScore": 0}) == {"source": "ebay", "positive_pct": None, "reviews": 0, "sold": 0}
+    assert ebay_seller(None) is None
+
+
+def test_brand_new_sellers_are_skipped_only_when_suspiciously_cheap():
+    from flipfinder.analyzer import seller_check
+    new = {"source": "vinted", "reviews": 0, "sold": 0}
+    assert seller_check(new, 120)[0].startswith("new seller (no reviews, nothing sold) at +120%")
+    assert seller_check(new, 99) == (None, ["⚠️ New seller: no reviews, nothing sold yet"])
+    assert seller_check({**new, "sold": 4}, 150) == (None, ["⚠️ New seller: no reviews"])   # has sold things: warn only
+    assert seller_check({"reviews": 0, "sold": None}, 150) == (None, ["⚠️ New seller: no reviews"])   # unknown: no skip
+    assert seller_check({"source": "vinted", "reviews": 12, "stars": 3.9, "negative": 4}, 50) == \
+        (None, ["⚠️ Low rating: 3.9★ (4 negative)"])
+    assert seller_check({"source": "vinted", "reviews": 3, "stars": 3.0}, 50) == (None, [])   # too few to judge
+    assert seller_check({"source": "ebay", "reviews": 40, "positive_pct": 94.1}, 50) == \
+        (None, ["⚠️ Low feedback: 94.1% positive"])
+    assert seller_check(None, 300) == (None, [])
+
+
+def test_seller_lines_in_the_alert():
+    pool = [titled(10 + i, "Boss DS-1 distortion", 60, "Boss") for i in range(12)]
+    item = titled(1, "Boss DS-1 distortion", 25, "Boss")
+    item.seller = {"source": "vinted", "reviews": 256, "stars": 4.9, "sold": 251, "fast": True, "seen": "seen 2 h ago",
+                   "business": True}
+    msg = format_deal(assess(item, pool, Rules(min_profit=1, min_roi=1, max_roi=500)))
+    assert "👤 4.9★ · 256 reviews · 251 sold · ⚡ fast shipper · seen 2 h ago" in msg and "🏪 Business seller" in msg
+    item.seller = {"source": "vinted", "reviews": 0, "sold": 0, "stars": None}
+    d = assess(item, pool, Rules(min_profit=1, min_roi=1, max_roi=500))
+    assert d.blocked and d.blocked[-1].startswith("new seller")                     # 25 -> 60: ROI well over 100%
+    item.seller = {"source": "ebay", "reviews": 1234, "positive_pct": 99.8}
+    assert "👤 99.8% positive · 1,234 feedback" in format_deal(assess(item, pool, Rules(min_profit=1, min_roi=1, max_roi=500)))
+
+
+def test_a_scan_skips_brand_new_sellers_and_counts_them(tmp_path: Path, caplog):
+    import flipfinder.scanner as sc_mod
+    from flipfinder.vinted import ItemDetails
+    s = _fake_scanner(tmp_path, 1, lambda searches: [sc_mod._key(x) for x in searches])
+    s.client.details = lambda item: ItemDetails(shipping=5.0, seller_id=9, reviews=0, reputation=0.0)
+    s.client.seller_profile = lambda sid: {"sold": 0, "negative": 0}
+    with caplog.at_level("INFO"):
+        deals = s.scan()
+    assert deals == [] and s.seller_skipped > 0
+    assert "skipped a deal, brand-new seller" in caplog.text and "near" not in [m for m in s.near_misses]
+    (tmp_path / "b").mkdir()
+    s2 = _fake_scanner(tmp_path / "b", 1, lambda searches: [sc_mod._key(x) for x in searches])
+    s2.client.details = lambda item: ItemDetails(shipping=5.0, seller_id=9, reviews=40, reputation=1.0, last_seen="Ultima visita 5 minuti fa")
+    s2.client.seller_profile = lambda sid: {"sold": 38, "negative": 0}
+    deals = s2.scan()
+    assert deals and deals[0].item.seller == {"source": "vinted", "reviews": 40, "stars": 5.0, "business": False,
+                                              "seen": "seen 5 min ago", "fast": False, "sold": 38, "negative": 0}
+    assert "👤 5★ · 40 reviews · 38 sold · seen 5 min ago" in format_deal(deals[0])
+
+
+def test_summary_counts_skipped_sellers(tmp_path: Path):
+    from flipfinder.health import RunStats
+    s = RunStats(tmp_path / "stats.json")
+    s.record_run(10, 0, None, seller_skipped=2)
+    s.record_run(10, 0, None)
+    assert "🛡 2 deals skipped: brand-new seller and suspiciously cheap" in s.summary_text(Rules())

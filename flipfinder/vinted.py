@@ -46,6 +46,7 @@ class Item:
     distance_km: float | None = None  # Subito: from the home town
     delivery: str = ""                # Subito: "pickup" (travel cost) or "shipping"
     negotiable: bool = False          # Subito: "trattabile"
+    seller: dict | None = None        # trust: reviews, rating, items sold... (seller_line in telegram.py)
 
     @property
     def key(self) -> str:
@@ -208,6 +209,11 @@ class VintedClient:
         r.encoding = "utf-8"
         return item_page_status("".join(json.loads(c) for c in _RSC_CHUNK.findall(r.text)))
 
+    def seller_profile(self, seller_id: int) -> dict:
+        r = self._get(f"/member/{seller_id}", {})
+        r.encoding = "utf-8"
+        return parse_profile_page(r.text)
+
     def search(self, query: str, *, order: str = "newest_first", page: int = 1,
                per_page: int = 96, price_from: float | None = None,
                price_to: float | None = None, extra: dict | None = None) -> list[Item]:
@@ -259,6 +265,12 @@ class ItemDetails:
     shipping_available: bool = True
     description: str = ""
     city: str = ""
+    seller_id: int | None = None
+    reviews: int | None = None         # feedback_count
+    reputation: float | None = None    # 0-1 (x5 = stars)
+    business: bool = False
+    last_seen: str = ""                # "Ultima visita 2 ore fa"
+    badges: list = field(default_factory=list)   # e.g. SPEEDY_SHIPPING, ACTIVE_LISTER
 
 
 def parse_item_page(html: str) -> ItemDetails:
@@ -272,7 +284,8 @@ def parse_item_page(html: str) -> ItemDetails:
     if '"isShippingAvailable":false' in data:
         details.shipping_available = False
 
-    for name, key in (("description", "description"), ("user_info_header", "user_info")):
+    for name, key in (("description", "description"), ("user_info_header", "user_info"),
+                      ("seller_badges_info", "badges")):
         m = re.search(r'"name":"%s","section"' % name, data)
         if not m:
             continue
@@ -281,15 +294,58 @@ def parse_item_page(html: str) -> ItemDetails:
             block, _ = json.JSONDecoder().raw_decode(data, start)
         except ValueError:
             continue
-        value = block.get("data", {}).get(key)
+        block = block.get("data", {})
+        value = block.get(key)
         if name == "description":
             details.description = _text(value)
+        elif name == "seller_badges_info":
+            details.badges = [str(b.get("type")) for b in value or [] if isinstance(b, dict) and b.get("type")]
         else:
-            # only there when the seller chose to show their city
             for entry in value or []:
-                if entry.get("key") == "location":
+                if entry.get("key") == "location":   # only there when the seller chose to show their city
                     details.city = _text(entry.get("text"))
+                elif entry.get("key") == "last-logged-in":
+                    details.last_seen = _text(entry.get("text"))
+            try:
+                details.seller_id = int(block["seller_id"]) if block.get("seller_id") else None
+            except (TypeError, ValueError):
+                details.seller_id = None
+            if block.get("feedback_count") is not None:
+                details.reviews = int(block["feedback_count"])
+                details.reputation = float(block.get("feedback_reputation") or 0)
+            details.business = bool(block.get("business"))
     return details
+
+
+_PROFILE = {"sold": "given_item_count", "bought": "taken_item_count", "listed": "item_count",
+            "positive": "positive_feedback_count", "negative": "negative_feedback_count",
+            "reviews": "feedback_count"}
+
+
+def parse_profile_page(html: str) -> dict:
+    """Seller numbers from /member/<id>: items sold (given), reviews by kind, items for sale."""
+    data = "".join(json.loads(c) for c in _RSC_CHUNK.findall(html))
+    out = {}
+    for name, key in _PROFILE.items():
+        m = re.search(r'"%s"\s*:\s*(\d+)' % key, data)
+        if m:
+            out[name] = int(m.group(1))
+    return out
+
+
+_SEEN = [(r"(\d+) minut", "{} min"), (r"un minuto", "1 min"), (r"(\d+) or[ae]", "{} h"), (r"un'ora", "1 h"),
+         (r"(\d+) giorn", "{} days"), (r"un giorno|ieri", "1 day"), (r"(\d+) settiman", "{} weeks"),
+         (r"una settimana", "1 week"), (r"(\d+) mes", "{} months"), (r"un mese", "1 month"), (r"adesso|ora$|online", "now")]
+
+
+def seen_english(text: str) -> str:
+    """'Ultima visita 2 ore fa' -> 'seen 2 h ago' (Vinted shows it in Italian)."""
+    low = text.lower()
+    for pattern, out in _SEEN:
+        m = re.search(pattern, low)
+        if m:
+            return "online now" if out == "now" else "seen " + out.format(*m.groups()) + " ago"
+    return ""
 
 
 def item_page_status(data: str) -> str:

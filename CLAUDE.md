@@ -10,6 +10,7 @@ Python 3.10+ app that finds underpriced Vinted listings and sends Telegram alert
 - `flipfinder/ebay.py` eBay Browse API client (EBAY_IT, Buy It Now, app token), searched every 20 min, pools every 3 h (~3,050 of 5,000 calls/day), calls/day in `data/ebay.json`
 - `flipfinder/subito.py` Subito app JSON API (hades.subito.it, app headers; the website is Akamai-blocked): new listings per category in the home province, kept within `radius_km`, pickup travel cost vs seller shipping
 - `flipfinder/sold.py` sold-price tracking: pool history, gone listings checked via item page (`can_buy:false` = sold, 404 = deleted), listing dates from id anchors, adaptive checks per run (halve on 403/429), demand (analyzer.demand, /demand table sent to the Worker every 30 min)
+- seller trust: `vinted.parse_item_page` (feedback_count/reputation/badges/last seen) + `parse_profile_page` (/member/<id>: given_item_count = sold), eBay `ebay_seller`; `analyzer.seller_check` skips 0 reviews + 0 sold at ROI >= 100%, warns otherwise; `telegram.seller_lines`
 - `flipfinder/storage.py` seen items in `data/seen.json` as `platform:id` (14 day expiry)
 - `flipfinder/telegram.py` deal alert text only (the Worker sends)
 - `flipfinder/cloud.py` client for the Worker API (FLIPFINDER_API_URL / FLIPFINDER_API_KEY): state (Telegram settings, home area, pool, owned deals), catalog, deals, run report

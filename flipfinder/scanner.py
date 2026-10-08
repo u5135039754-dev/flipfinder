@@ -9,7 +9,7 @@ from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .analyzer import (Deal, Rules, assess, blend_sold, demand, is_near_miss, is_pickup_only, is_relevant,
+from .analyzer import (NEW_SELLER, Deal, Rules, assess, blend_sold, demand, is_near_miss, is_pickup_only, is_relevant,
                        model_numbers, model_tokens)
 from .config import Config, Search
 from .ebay import CATEGORY_FOR_VINTED_CATALOG as EBAY_CATEGORY_FOR_VINTED_CATALOG
@@ -395,6 +395,9 @@ class Scanner:
                 deals.append(deal)
             elif is_near_miss(deal):
                 self.near_misses.append((s.query, deal))
+            elif deal and any(b.startswith(NEW_SELLER) for b in deal.blocked):
+                self.seller_skipped += 1
+                log.info("'%s': skipped a deal, brand-new seller at +%.0f%% ROI (item %s)", s.query, deal.roi, item.id)
         return [tag(d, s) for d in deals]
 
     def _seed(self, s: Search, listed: list[Item], fresh: list[Item]):
@@ -459,14 +462,31 @@ class Scanner:
             log.warning("Couldn't open item %s, using estimated shipping: %s", item.id, e)
             return assess(item, pool, rules, query)
         pickup = not d.shipping_available or is_pickup_only(f"{item.title}\n{d.description}")
+        item.seller = self._vinted_seller(d)
         log.info("Item %s: shipping %s%s", item.id,
                  "unknown" if d.shipping is None else f"{d.shipping:.2f}", ", pickup only" if pickup else "")
         return assess(item, pool, rules, query, shipping=d.shipping,
                       pickup_only=pickup, city=d.city)
 
+    def _vinted_seller(self, d) -> dict | None:
+        """Trust numbers from the item page, plus items sold from the seller's profile (one more page)."""
+        from .vinted import seen_english
+        if d.reviews is None:
+            return None
+        seller = {"source": "vinted", "reviews": d.reviews, "stars": round(d.reputation * 5, 1) if d.reviews else None,
+                  "business": d.business, "seen": seen_english(d.last_seen), "fast": "SPEEDY_SHIPPING" in d.badges}
+        if d.seller_id:
+            try:
+                prof = self.client.seller_profile(d.seller_id)
+                seller.update(sold=prof.get("sold"), negative=prof.get("negative"))
+            except Exception as e:   # never print the profile: public logs
+                log.warning("Couldn't open a seller profile: %s", type(e).__name__)
+        return seller
+
     def scan(self) -> list[Deal]:
         deals: list[Deal] = []
         self.checked, self.failed_searches, self.near_misses = 0, 0, []
+        self.seller_skipped = 0
         self.pool_rebuilds = 0
         self.seed_candidates = []
         self._group_slot = self._pick_slot()   # which of budget / guitars runs this time

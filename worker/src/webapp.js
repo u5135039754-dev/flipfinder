@@ -46,7 +46,7 @@ export async function snapshot(bot, user) {
     key, n: d.n, title: d.title, url: d.url, photo: d.photo || "", source: d.source || "vinted",
     group: d.group || "", topic: TOPIC_FOR_GROUP[d.group || ""] || "", cost: d.cost ?? null, value: d.value ?? null,
     profit: d.profit ?? null, status: d.status, who: d.who || "", mine: d.who_id === user.id, sent: d.sent || 0,
-    paid: d.paid ?? null, value_now: d.value_now ?? null, sell_days: d.sell_days ?? null, demand: d.demand || "",
+    paid: d.paid ?? null, value_now: d.value_now ?? null, sell_days: d.sell_days ?? null, demand: d.demand || "", seller: d.seller || "",
     up: Object.values(d.votes || {}).filter((v) => v === "up").length,
     down: Object.values(d.votes || {}).filter((v) => v === "down").length,
     voted: (d.votes || {})[String(user.id)] || "",

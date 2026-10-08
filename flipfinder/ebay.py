@@ -59,7 +59,22 @@ def item_from_ebay(raw: dict) -> Item | None:
         source="ebay",
         shipping=cheapest_shipping(raw.get("shippingOptions")),
         location=", ".join(x for x in (loc.get("city"), loc.get("country")) if x),
+        seller=ebay_seller(raw.get("seller")),
     )
+
+
+def ebay_seller(raw) -> dict | None:
+    """eBay's seller feedback: % positive and score (no names kept)."""
+    if not isinstance(raw, dict):
+        return None
+    try:
+        pct = float(raw["feedbackPercentage"]) if raw.get("feedbackPercentage") not in (None, "") else None
+        score = int(raw["feedbackScore"]) if raw.get("feedbackScore") not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+    if pct is None and score is None:
+        return None
+    return {"source": "ebay", "positive_pct": pct, "reviews": score, "sold": score if score == 0 else None}
 
 
 def cheapest_shipping(options) -> float | None:

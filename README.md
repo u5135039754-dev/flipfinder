@@ -126,6 +126,16 @@ means sold, at the last price seen. Listing dates come from Vinted's ids, which 
 - History in `data/sold.json` (public listing data only, 90 days). Vinted only: eBay doesn't show
   sales and Subito ads just disappear. Vinted shows favourites but no view counts.
 
+## Seller trust
+
+Every deal shows who sells it: "👤 4.9★ · 256 reviews · 251 sold · ⚡ fast shipper · seen 2 h ago"
+(Vinted: from the listing page plus the seller's profile, one extra page per deal; eBay: "% positive"
+and feedback score from the search results; Subito shows nothing usable), and "🏪 Business seller"
+for shops. A seller with no reviews and nothing sold, at a suspiciously big discount (ROI 100% or
+more), is skipped as the classic scam profile and counted in the daily summary ("🛡 2 deals skipped").
+Otherwise new sellers and low ratings (under 4.5★ with 5+ reviews, or under 97% positive on eBay with
+10+ feedback) get a ⚠️ line. Vinted doesn't publish when an account was created.
+
 ## Optional: eBay as a second source
 
 flipFinder can also check eBay.it Buy It Now listings through eBay's official Browse API, and

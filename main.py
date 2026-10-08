@@ -157,7 +157,8 @@ def report(stats: RunStats, cloud: Cloud, ok: bool, error: str, scanner: Scanner
         if streak:
             notify.append(f"✅ flipFinder is working again after {streak} failed runs.")
         best = scanner.near_misses[0] if scanner.near_misses else None
-        stats.record_run(scanner.checked, sent, miss_record(*best) if best else None)
+        stats.record_run(scanner.checked, sent, miss_record(*best) if best else None,
+                         getattr(scanner, "seller_skipped", 0))
     elif stats.record_failure():
         notify.append(f"⚠️ <b>flipFinder: the last {FAIL_ALERT_AFTER} runs failed.</b>\n"
                       f"Latest: {html.escape(error)}\nYou'll get a message when it works again.")

@@ -51,6 +51,7 @@ def format_deal(deal: Deal) -> str:
         "",
         f"💶 Item price: <b>{money(it.total_price, c)}</b> (listed {money(it.price, c)})",
         delivery,
+        *seller_lines(deal),
         value_line(deal),
         *([demand_line(deal)] if deal.demand else []),
         *platform_lines(deal),
@@ -66,6 +67,29 @@ def format_deal(deal: Deal) -> str:
         f'<a href="{html.escape(it.url)}">Open on {platform}</a>',
     ]
     return "\n".join(lines)
+
+
+def seller_line(seller: dict | None) -> str:
+    """'👤 4.9★ · 256 reviews · 256 sold · ⚡ fast shipper · seen 2 h ago' (eBay: % positive)."""
+    if not seller:
+        return ""
+    n = seller.get("reviews")
+    if seller.get("source") == "ebay":
+        parts = [f"{seller['positive_pct']:g}% positive" if seller.get("positive_pct") is not None else "",
+                 f"{n:,} feedback" if n is not None else ""]
+    else:
+        parts = [f"{seller['stars']:g}★" if seller.get("stars") is not None else "",
+                 f"{n:,} review{'' if n == 1 else 's'}" if n is not None else "",
+                 f"{seller['sold']:,} sold" if seller.get("sold") is not None else "",
+                 "⚡ fast shipper" if seller.get("fast") else "", seller.get("seen") or ""]
+    text = " · ".join(p for p in parts if p)
+    return f"👤 {text}" if text else ""
+
+
+def seller_lines(deal: Deal) -> list[str]:
+    s = deal.item.seller or {}
+    out = [x for x in (seller_line(s), "🏪 Business seller" if s.get("business") else "") if x]
+    return out + list(deal.seller_warnings)
 
 
 def value_line(deal: Deal) -> str:
