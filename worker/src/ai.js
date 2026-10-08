@@ -26,6 +26,8 @@ export const DOWN_TEXT = "🧠 The AI isn't available right now. Everything else
 const THREAD_DAYS = 14;
 const MAX_PHOTOS = 4;
 const MAX_TOOL_ROUNDS = 4;
+const REPAIR_TOOLS = 5;        // small tools and adhesive on top of the part (same as the scanner)
+const IPHONE_DROP = 0.15;      // iOS's "unknown part" message: an iPhone with a non-original part sells ~15% lower
 
 // The fixed instructions: cached by Anthropic (identical on every call), so keep them byte-stable.
 export const SYSTEM = `You help a small team in Italy that buys second-hand items (guitars, amps, pedals, phones, tablets, consoles, cameras, calculators, e-readers) on Vinted, eBay and Subito and resells them at a profit. You check listings and answer the team's questions.
@@ -45,17 +47,17 @@ What to look for:
 - Damage: cracks, dents, worn frets, rust, broken jacks, pots or switches, screen burn-in, dead pixels, swollen batteries, water damage, missing keys.
 - Missing parts: power supply, cables, case, controller, charger, strap, box, accessories shown in other listings.
 - Locked or stolen risk (phones, tablets, consoles, laptops): iCloud, Google or account lock, blacklisted IMEI, "for parts", no box or receipt with a very low price, a brand-new seller.
-- Repairs: what might need fixing and a rough euro range for that repair in Italy, or "none visible".
+- Repairs: the team repairs everything itself, so a repair costs only the part. Name the part it needs and estimate a typical price for it in Italy (AliExpress, Amazon or iFixit, aftermarket part), or say "none visible". Difficulty: 🟢 easy (battery, iPad glass, buttons, controller sticks, guitar jacks or pots) / 🟡 medium (iPhone screen, back glass, charging port) / 🔴 hard (camera, Face ID, logic board or anything with soldering). A 🔴 repair is a skip unless the profit after the part is very high.
 
-Quick check format, exactly these five lines, nothing before or after:
+Quick check format, exactly these lines, nothing before or after:
 🔍 Verdict: buy / check first / skip - one short reason
 ⚠️ Risks: the main risks, or "nothing obvious from photos"
-🔧 Repair: what and a rough € range, or "none visible"
+🔧 Repair: the part and its difficulty icon, e.g. "screen 🟡, part ~€35", or "none visible"
 ❓ Ask the seller: 1) ... 2) ... 3) ... (2-3 specific questions)
-💬 Max offer: €X (keeps our min profit)
-Use the max offer number given in <numbers>; only change it if you found a cost the numbers miss, and then say why in a few words.
+PARTS: <part price in euros, a number, 0 if none> | DIFFICULTY: <none, easy, medium or hard> | PART: <the part in one or two words, or none>
+The last line is read by the bot, which works out the max offer from it: always write it, exactly in that form, and don't write a max offer yourself.
 
-Deep check format: the same five headings, but go further. Compare with the comparables, give each risk with what in the photos or text points to it, write the seller questions in Italian too (ready to copy), and finish with "What would change the verdict:". At most 20 lines.
+Deep check format: the same headings and the same PARTS line at the end, but go further. Compare with the comparables, give each risk with what in the photos or text points to it, write the seller questions in Italian too (ready to copy), and finish with "What would change the verdict:". At most 20 lines.
 
 Questions: answer in at most 6 lines using the listing, the thread so far and the tools. If the data doesn't answer it, say so.`;
 
@@ -300,12 +302,43 @@ export class AI {
       `our total cost (price + fees + shipping): €${d.cost}`, `market value (median of similar listings): €${d.value}`,
       d.low ? `quick-sale price: €${d.low}` : "", `expected profit: €${d.profit}${roi !== null ? ` (ROI ${roi}%)` : ""}`,
       d.rating ? `scanner rating: ${d.rating}/10` : "", d.demand ? `demand: ${d.demand}` : "",
-      `min profit we need: €${minProfit}`, `max offer that keeps our min profit: €${this.maxOffer(d, minProfit) ?? "?"}`,
+      `min profit we need: €${minProfit}`,
       "</numbers>",
       comps ? `<comparables>\n${comps}\n</comparables>` : "",
       task,
     ].filter(Boolean).join("\n");
     return [...photos.map((url) => ({ type: "image", source: { type: "url", url } })), { type: "text", text }];
+  }
+
+  /**
+   * The AI's last line ("PARTS: 35 | DIFFICULTY: medium | PART: screen") turned into our max offer:
+   * market value (-15% for an iPhone with a non-original screen/battery/camera) - part - €5 tools
+   * - fees and shipping - our min profit. A 🔴 repair without twice our min profit becomes a skip.
+   */
+  async finish(d, text) {
+    const m = text.match(/^\s*PARTS:\s*€?\s*([\d.,]+)\s*\|\s*DIFFICULTY:\s*(\w+)\s*\|\s*PART:\s*(.+?)\s*$/im);
+    // the bot's own max offer replaces any the AI wrote anyway
+    let body = text.replace(/^\s*PARTS:.*$/im, "").replace(/^💬 Max offer:.*$/gim, "").replace(/\n{2,}/g, "\n").trim();
+    const minProfit = await this.minProfit(d);
+    const parts = m ? Number(m[1].replace(",", ".")) || 0 : 0;
+    const difficulty = m ? m[2].toLowerCase() : "none";
+    const part = m && !/^none$/i.test(m[3]) ? m[3].trim().slice(0, 30) : "";
+    const iphonePart = /iphone/i.test(`${d.title} ${d.query || ""}`) && /screen|display|schermo|batter|camera/i.test(part);
+    const fixed = parts > 0 || part;
+    const partsTotal = fixed ? Math.round(parts + REPAIR_TOOLS) : 0;
+    // what the scanner already counted for a repair deal comes back out, so it isn't counted twice
+    const base = d.repair?.iphone_part ? d.value / (1 - IPHONE_DROP) : d.value;
+    const value = base * (iphonePart ? 1 - IPHONE_DROP : 1);
+    const price = d.item?.price ?? null;
+    const extras = price !== null && d.cost ? Math.max(0, d.cost - (d.repair?.cost || 0) - price) : 0;
+    const offer = d.value ? Math.max(0, Math.floor(value - partsTotal - extras - minProfit)) : null;
+    const profit = d.value && price !== null ? value - partsTotal - extras - price : null;
+    const icon = { easy: "🟢", medium: "🟡", hard: "🔴" }[difficulty] || "";
+    if (difficulty === "hard" && profit !== null && profit < 2 * minProfit) {
+      body = body.replace(/^🔍 Verdict:.*$/m, `🔍 Verdict: skip - ${icon} hard repair (${part || "unknown part"}), not enough profit after the part`);
+    }
+    const why = fixed ? `parts ~€${partsTotal}${icon || part ? `, ${[icon, part].filter(Boolean).join(" ")}` : ""}` : "no repair needed";
+    return `${body}\n💬 Max offer: ${offer !== null ? `€${offer}` : "?"} (${why}${iphonePart ? ", −15% resale: iPhone part" : ""})`;
   }
 
   // --- 🔍 Check with AI / automatic checks / 🧠 Deep analysis
@@ -319,8 +352,9 @@ export class AI {
     const why = await this.blocked(user);
     if (why) return { error: why };
     await this.count(user);
-    const text = await this.run([{ role: "user", content: await this.dealContent(d, "Task: quick check (quick check format).") }]);
-    if (!text) return { error: DOWN_TEXT };
+    const raw = await this.run([{ role: "user", content: await this.dealContent(d, "Task: quick check (quick check format).") }], { maxLines: 8 });
+    if (!raw) return { error: DOWN_TEXT };
+    const text = await this.finish(d, raw);
     const out = { text, cost_usd: this.spent || 0 };
     if (!post) return out;
     const home = AI.home(d);
@@ -338,8 +372,9 @@ export class AI {
     if (why) return { error: why };
     await this.count(user);
     const task = "Task: deep check (deep check format)." + (d.ai?.text ? `\n<thread>\nquick check so far:\n${d.ai.text}\n</thread>` : "");
-    const text = await this.run([{ role: "user", content: await this.dealContent(d, task) }], { deep: true, maxLines: 22 });
-    if (!text) return { error: DOWN_TEXT };
+    const raw = await this.run([{ role: "user", content: await this.dealContent(d, task) }], { deep: true, maxLines: 24 });
+    if (!raw) return { error: DOWN_TEXT };
+    const text = await this.finish(d, raw);
     const home = d.ai?.msgs?.[0] || AI.home(d);
     if (home) await this.bot.tg.sendTo(home.chat, `🧠 <b>Deep analysis${d.n ? ` #${d.n}` : ""}</b>\n${esc(text, false)}`,
       { replyTo: home.id });

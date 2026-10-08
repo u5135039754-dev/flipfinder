@@ -33,6 +33,8 @@ def deal_record(deal: Deal) -> dict:
         "item": asdict(it), "sell_days": deal.sell_days, "sold_count": deal.sold_count,
         "demand": demand_line(deal) if deal.demand else "",
         "seller": " · ".join(x.replace("👤 ", "") for x in seller_lines(deal)),
+        "repair": ({"part": deal.repair.part, "parts": deal.repair.parts, "cost": deal.repair.cost,
+                    "difficulty": deal.repair.difficulty, "iphone_part": deal.repair.iphone_part} if deal.repair else None),
         # what the market value was worked out from, for the AI check
         "comparables": [{"title": c.title[:80], "price": c.price, "condition": c.condition, "source": c.source}
                         for c in (deal.sample or [])[:8]],

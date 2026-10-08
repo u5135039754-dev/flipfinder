@@ -37,3 +37,24 @@ test("the Worker sends the first and refuses the repost", async () => {
   assert.deepEqual((await post("vinted:10290563205", DAYTIME + 240)).body, { status: "repost", of: 1 });
   assert.equal(t.tg.sent().filter((p) => p.text?.includes("Apple Watch")).length, 2);   // one alert: private chat + group
 });
+
+test("repair deals go to the 🔧 Repairs topic once it exists; /repairs on|off is the owner's", async () => {
+  const { MARCO } = await import("./helpers.js");
+  const t = await setup({ settings: { allowed_users: [MARCO], topics: { electronics: 66 } } });
+  const post = (key) => t.api("POST", "/api/deal", { key, text: "🔧 iPhone 13 screen", photo: "", group: "Electronics",
+    record: { title: "iPhone 13", cost: 190, value: 320, repair: { part: "screen", parts: 35, cost: 40, difficulty: "medium", iphone_part: true } } });
+  await post("vinted:31");
+  assert.equal(t.tg.sent().find((p) => String(p.chat_id).startsWith("-")).message_thread_id, 66);   // no Repairs topic yet
+  await t.store.put("settings", { ...(await t.settings()), topics: { electronics: 66, repairs: 77 } });
+  t.tg.clear();
+  await post("vinted:32");
+  assert.equal(t.tg.sent().find((p) => String(p.chat_id).startsWith("-")).message_thread_id, 77);
+  const { msg } = await import("./helpers.js");
+  await t.updates(msg("/repairs off", { user: MARCO }), msg("/repairs off"), msg("/repairs"));
+  const r = t.tg.texts().slice(-3);
+  assert.match(r[0], /Only the owner/);
+  assert.match(r[1], /Repair deals off/);
+  assert.match(r[2], /Repair deals are off/);
+  assert.equal((await t.settings()).repairs, false);
+  assert.equal((await t.api("GET", "/api/state")).body.settings.repairs, false);   // the scanner gets it
+});

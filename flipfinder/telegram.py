@@ -26,8 +26,12 @@ def format_deal(deal: Deal) -> str:
     c = it.currency
     extras = " · ".join(x for x in (it.brand, it.size, it.condition) if x)
     lines = [
-        f"🔥 <b>{html.escape(it.title[:120])}</b>",   # photo captions max out at 1024 chars
+        f"{'🔧' if deal.repair else '🔥'} <b>{html.escape(it.title[:120])}</b>",   # photo captions max out at 1024 chars
     ]
+    if deal.repair:
+        r = deal.repair
+        lines.append(f"🔧 <b>Repair deal</b>: {r.line()}" +
+                     (" · resale −15% (iPhone \"unknown part\")" if r.iphone_part else ""))
     if extras:
         lines.append(f"<i>{html.escape(extras)}</i>")
     platform = PLATFORMS.get(it.source, it.source)
@@ -57,6 +61,7 @@ def format_deal(deal: Deal) -> str:
         *platform_lines(deal),
         *([f"🔋 No battery/charger: +{money(deal.missing_part, c)} to buy one (included)"]
           if deal.missing_part else []),
+        *([f"🔧 Part + tools: {money(deal.repair.cost, c)} (included)"] if deal.repair else []),
         f"💰 Possible profit: <b>{money(deal.profit, c)}</b>",
         f"📈 Percentage: <b>+{deal.roi:.0f}%</b>",
         f"{stars(deal.rating)} Rating: <b>{deal.rating}/10</b>",

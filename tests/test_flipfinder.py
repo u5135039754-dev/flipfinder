@@ -1617,3 +1617,53 @@ searches:
     monkeypatch.setattr(fastlane, "due", lambda fs, now, last: (False, "too soon (every 1 min)"))
     assert main_mod.main() == 0
     assert [c[0] for c in cloud.calls] == ["state", "fast"] and cloud.calls[1][1]["skipped"]   # a skipped pass, counted
+
+
+# --- repair deals
+
+def test_repair_parts_difficulty_and_what_we_cant_price():
+    from flipfinder.repair import repair_need
+    r = repair_need("iPhone 13 128GB schermo rotto", "iphone 13")
+    assert (r.part, r.parts, r.difficulty, r.iphone_part, r.cost) == ("screen", 35.0, "medium", True, 40.0)
+    assert repair_need("iPhone 14 Pro display crepato", "iphone 14 pro").parts == 50.0      # Pro: a bit more
+    assert repair_need("iPhone 12 fotocamera rotta", "iphone 12").difficulty == "hard"
+    assert repair_need("iPad 9 vetro rotto", "ipad").difficulty == "easy"
+    assert repair_need("Dualsense drift levetta sinistra", "dualsense").part == "stick"
+    assert repair_need("Boss DS-1 switch rotto", "boss ds 1").part == "jack"                 # a pedal, not a Nintendo Switch
+    assert repair_need("iPhone 13 non si accende", "iphone 13") is None                       # can't price "doesn't turn on"
+    assert repair_need("iPhone 13 per ricambi", "iphone 13") is None
+    assert repair_need("iPhone 13 Face ID rotto", "iphone 13") is None
+
+
+def test_damaged_listings_become_repair_deals_priced_with_the_part():
+    from flipfinder.telegram import format_deal
+    pool = [titled(10 + i, "iPhone 13 128GB", 380, "Apple") for i in range(12)]
+    rules = Rules(min_profit=25, min_roi=20, max_roi=500, exclude_keywords=("rotto", "icloud"))
+    deal = assess(titled(1, "iPhone 13 128GB schermo rotto", 150, "Apple"), pool, rules, "iphone 13")
+    assert deal and deal.repair.part == "screen" and not deal.blocked
+    assert deal.market_value == round(380 * 0.85, 2)                 # "unknown part": resale -15%
+    assert deal.cost == round(deal.item.total_price + deal.shipping + 40.0, 2)   # part €35 + €5 tools
+    text = format_deal(deal)
+    assert "🔧 <b>Repair deal</b>: parts ~€40, 🟡 screen · resale −15%" in text and "🔧 Part + tools:" in text
+    # still dropped: locked phones, faults we can't price, and everything damaged when /repairs is off
+    assert assess(titled(2, "iPhone 13 bloccato icloud rotto", 150, "Apple"), pool, rules, "iphone 13") is None
+    assert assess(titled(3, "iPhone 13 non funziona", 150, "Apple"), pool, rules, "iphone 13") is None
+    from dataclasses import replace
+    assert assess(titled(4, "iPhone 13 schermo rotto", 150, "Apple"), pool, replace(rules, repairs=False), "iphone 13") is None
+
+
+def test_hard_repairs_need_twice_the_minimum_profit():
+    pool = [titled(10 + i, "iPhone 12 128GB", 300, "Apple") for i in range(12)]
+    rules = Rules(min_profit=25, min_roi=10, max_roi=500, exclude_keywords=("rotta",))
+    thin = assess(titled(1, "iPhone 12 128GB fotocamera rotta", 185, "Apple"), pool, rules, "iphone 12")
+    assert 25 <= thin.profit < 50                                   # enough for a normal deal, not for a 🔴 one
+    assert any(b.startswith("🔴 hard repair (camera)") for b in thin.blocked)
+    fat = assess(titled(2, "iPhone 12 128GB fotocamera rotta", 120, "Apple"), pool, rules, "iphone 12")
+    assert fat.profit >= 50 and not any(b.startswith("🔴") for b in fat.blocked)
+
+
+def test_repairs_switch_reaches_the_scanner():
+    from flipfinder.settings import apply_settings
+    cfg = type("C", (), {"searches": [], "rules": Rules()})()
+    assert apply_settings(cfg, {}).rules.repairs is True
+    assert apply_settings(cfg, {"repairs": False}).rules.repairs is False

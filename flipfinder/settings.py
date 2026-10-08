@@ -72,6 +72,7 @@ def apply_settings(cfg, settings: dict):
     for name, value in settings.get("rules", {}).items():
         if name in RULES:
             setattr(cfg.rules, name, RULES[name][0](value))
+    cfg.rules.repairs = settings.get("repairs", True) is not False   # /repairs on|off (on unless turned off)
     return cfg
 
 

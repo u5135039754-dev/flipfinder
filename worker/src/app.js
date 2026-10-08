@@ -9,7 +9,7 @@ import { Store } from "./store.js";
 import { Telegram } from "./telegram.js";
 import { Bot, COMMANDS, COMMANDS_VERSION } from "./bot.js";
 import { compare, findRepost, keyboard } from "./deals.js";
-import { TOPIC_FOR_GROUP, dueReminders, weeklyDue, weeklyReport } from "./group.js";
+import { TOPIC_FOR_GROUP, dealTopic, dueReminders, weeklyDue, weeklyReport } from "./group.js";
 import { DAY, UserError, inQuietHours, nowSeconds, rome } from "./util.js";
 import { action, snapshot, verifyInitData } from "./webapp.js";
 import { runCrypto } from "./crypto.js";
@@ -183,7 +183,7 @@ const API = {
       group: body.group || "", sent: now, queued: quiet });
     if (!d) return { status: "exists" };
     if (quiet) return { status: "queued", n: d.n };
-    d.messages = await tg.sendAlert(d.text, d.photo, keyboard(body.key, d, bot.ai.config.enabled), TOPIC_FOR_GROUP[d.group],
+    d.messages = await tg.sendAlert(d.text, d.photo, keyboard(body.key, d, bot.ai.config.enabled), dealTopic(d, ctx.settings.topics),
       await bot.team.dealMention(now));
     d.alerted_at = now;
     await store.saveDeal(body.key, d);
@@ -360,7 +360,7 @@ export async function runCron(env, opts = {}) {
     for (const [key, d] of queued.slice(0, MAX_QUEUE_FLUSH)) {
       if (tg.callsLeft < 8) break;   // the rest go out in 5 minutes
       d.messages = [...(d.messages || []), ...(await tg.sendAlert(d.text, d.photo, keyboard(key, d, bot.ai.config.enabled),
-        TOPIC_FOR_GROUP[d.group || ""], await bot.team.dealMention(now)))];
+        dealTopic(d, settings.topics), await bot.team.dealMention(now)))];
       d.queued = false;
       d.alerted_at = now;
       await store.saveDeal(key, d);

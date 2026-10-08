@@ -8,12 +8,12 @@ import { allocate, entryLine, memberKey, potText, reverse, shares, summarize } f
 import { ROLES, Team } from "./team.js";
 import { Handbook } from "./handbook.js";
 import { AI, PRICES } from "./ai.js";
-import { INTROS, TOPIC_FOR_GROUP, TOPIC_NAMES, mention, pricesFor, sellListing } from "./group.js";
+import { INTROS, TOPIC_FOR_GROUP, TOPIC_NAMES, dealTopic, mention, pricesFor, sellListing } from "./group.js";
 import { DEFAULT_WATCH, MAX_WATCH, findCoin, watchlist } from "./crypto.js";
 import { hhmm, rome, romeTs } from "./util.js";
 import { UserError, closeMatches, esc, euro, g, parseNumber, queryAndRange, splitArgs } from "./util.js";
 
-export const COMMANDS_VERSION = 16;   // bump when the list below changes, so it's registered again
+export const COMMANDS_VERSION = 17;   // bump when the list below changes, so it's registered again
 export const COMMANDS = [
   ["help", "List all commands"],
   ["app", "Open the flipFinder app: deals, stock, pot and settings"],
@@ -48,6 +48,7 @@ export const COMMANDS = [
   ["fast", "Fast lane (newest listings every few minutes); owner: /fast 2, /fast off"],
   ["setrole", "Owner only: /setrole Anna seller (manager, buyer, seller, or none to remove it)"],
   ["removerole", "Owner only: /removerole Anna (blocks them right away)"],
+  ["repairs", "Owner only: repair deals (damaged but fixable): /repairs on or /repairs off"],
   ["remind", "Owner only: the \"not claimed yet\" digest: /remind on or /remind off"],
   ["setname", "Owner only: the name the bot uses for someone: /setname 123456789 Anna"],
   ["ledger", "Every money action, newest last: /ledger or /ledger 30"],
@@ -59,7 +60,7 @@ export const COMMANDS = [
   ["allow", "Owner only: first step for a new member: /allow 123456789, then /setrole"],
   ["intro", "Owner only: post or update the pinned intro in every topic"],
 ];
-const OWNER_ONLY = new Set(["allow", "intro", "deposit", "withdraw", "fix", "undo", "split", "setrole", "removerole", "delnote", "setname", "remind"]);
+const OWNER_ONLY = new Set(["allow", "intro", "deposit", "withdraw", "fix", "undo", "split", "setrole", "removerole", "delnote", "setname", "remind", "repairs"]);
 export const LOCKED = "🔒 You're not a member of FLIP MAFIA";
 const IN_GROUP = new Set(["member", "administrator", "creator", "restricted"]);
 // the fast lane's settings (the scanner has the same defaults in flipfinder/fastlane.py)
@@ -344,6 +345,17 @@ Add one with /watch link, remove with /unwatch sol`);
     const role = args.at(-1).toLowerCase();
     if (role === "none") return this.takeRole(chat, name);
     await this.reply(chat, this.team.setRole(name, role));
+  }
+
+  async cmd_repairs(chat, args, user) {
+    if (user !== this.ownerId) throw new UserError("Only the owner can use /repairs");
+    const a = (args[0] || "").toLowerCase();
+    const on = this.settings.repairs !== false;
+    if (a !== "on" && a !== "off") return this.reply(chat, `🔧 Repair deals are ${on ? "on" : "off"}. /repairs on or /repairs off`);
+    this.settings.repairs = a === "on";
+    this.changed = true;
+    await this.reply(chat, a === "on" ? "🔧 Repair deals on: damaged but fixable, still a deal after the part (from the next scan)"
+      : "🔧 Repair deals off: damaged listings are skipped again (from the next scan)");
   }
 
   async cmd_remind(chat, args, user) {
@@ -1339,7 +1351,7 @@ Add one with /watch link, remove with /unwatch sol`);
     const target = msgs.find((x) => Telegram.isGroup(x.chat));
     if (target) {
       const tag = managers.map((m) => `<a href="tg://user?id=${m.id}">${esc(m.name)}</a>`).join(" ");
-      const res = await this.tg.sendTo(target.chat, `${text}\n${tag}`, { buttons, topic: TOPIC_FOR_GROUP[d.group || ""],
+      const res = await this.tg.sendTo(target.chat, `${text}\n${tag}`, { buttons, topic: dealTopic(d, this.settings.topics),
         replyTo: target.id });
       if (res) d.request.msgs.push({ chat: String(res.chat.id), id: res.message_id });
     }
@@ -1417,7 +1429,7 @@ Add one with /watch link, remove with /unwatch sol`);
     const target = msgs.find((m) => Telegram.isGroup(m.chat)) || msgs[0] || null;
     const chat = target ? target.chat : this.tg.chatIds[0];
     if (!chat) return;
-    await this.tg.sendTo(chat, text, { buttons, topic: TOPIC_FOR_GROUP[d.group || ""], replyTo: target?.id });
+    await this.tg.sendTo(chat, text, { buttons, topic: dealTopic(d, this.settings.topics), replyTo: target?.id });
   }
 
   /** Reminders due now (called by the 5-minute cron); stops when the request budget runs low. */

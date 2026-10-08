@@ -8,7 +8,12 @@ export const TOPIC_FOR_GROUP = {
   Audio: "electronics", Electronics: "electronics", Budget: "budget",
 };
 export const TOPIC_NAMES = { guitars: "Guitars", electronics: "Electronics", budget: "Budget", summary: "Summary",
-  crypto: "Crypto", rules: "Rules" };
+  crypto: "Crypto", rules: "Rules", repairs: "Repairs" };
+
+/** Which topic a deal goes to: repair deals to 🔧 Repairs once that topic is set up, else by category. */
+export function dealTopic(d, topics = {}) {
+  return d.repair && topics.repairs ? "repairs" : TOPIC_FOR_GROUP[d.group || ""];
+}
 
 // Pinned intro per topic ("general" = the main chat), posted when a topic is set with /topic
 // and again with /intro; an intro that's already there is edited, not posted twice
@@ -35,6 +40,12 @@ export const INTROS = {
     "📊 <b>Summary</b>",
     "Daily summary, weekly report (Sunday 20:00), pot updates and failure alerts land here.",
     "/status is the bot running · /stock what we own · /profit how we're doing · /pot our money",
+  ].join("\n"),
+  repairs: [
+    "🔧 <b>Repairs</b>",
+    "Damaged things we can fix ourselves that are still a deal after the part: price + part (+€5 tools) vs what it sells for working.",
+    "🟢 easy · 🟡 medium · 🔴 hard (only when the profit is big). iPhones with a new screen/battery/camera sell ~15% lower (\"unknown part\").",
+    "/repairs off stops them, /repairs on brings them back.",
   ].join("\n"),
   crypto: [
     "🪙 <b>Crypto</b>",

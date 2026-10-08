@@ -9,6 +9,7 @@ from functools import lru_cache
 from statistics import median
 
 from .vinted import Item
+from .repair import HARD_PROFIT_FACTOR, Repair, damaged, is_damage_word, repair_need
 
 
 @dataclass
@@ -47,6 +48,7 @@ class Deal:
     sell_days: float | None = None   # comparables usually sell in this many days
     demand: dict = field(default_factory=dict)   # label, sold per week, listed now, sell-through, favourites
     seller_warnings: list = field(default_factory=list)   # "⚠️ New seller..." lines for the alert
+    repair: Repair | None = None   # a damaged listing we can fix: the part and its price
 
 
 @dataclass
@@ -63,6 +65,7 @@ class Rules:
     match_brand: bool = True        # off for e.g. graphics cards, where MSI/ASUS/Zotac sell the same chip
     max_cost: float | None = None   # budget: price + fee + shipping/pickup (+ missing parts) must fit
     missing_part_cost: float = 0.0  # cameras: added when the listing says no battery/charger
+    repairs: bool = True            # damaged listings we can fix become repair deals (/repairs on|off)
     budget: bool = False            # a budget-mode search (ranked by profit per euro spent)
     check: str = ""                 # "what to check before buying", shown in the alert
     sold: list = field(default_factory=list)   # [(Item, days to sell or None, sold at)] likely sold lately (sold.py)
@@ -524,10 +527,18 @@ def assess(item: Item, pool: list[Item], rules: Rules, query: str = "",
     `shipping` is the real delivery price from the item page; without it the
     config estimate is used.
     """
-    if is_excluded(item, rules.exclude_keywords):
+    # damage words ("rotto", "broken"...) no longer drop a listing: we repair, so it's priced with the part
+    hard = [k for k in rules.exclude_keywords if not is_damage_word(k)]
+    if is_excluded(item, hard):
         return None
     if query and not is_relevant(item.title, query):
         return None
+    fix = None
+    text = f"{item.title}\n{item.description}"
+    if damaged(text) or is_excluded(item, [k for k in rules.exclude_keywords if is_damage_word(k)]):
+        fix = repair_need(text, query) if rules.repairs else None
+        if fix is None:
+            return None          # repairs off, or a fault we can't name and price
     asking, comps, basis = _comparables(item, pool, rules.min_comparables, query, rules.match_brand)
     if asking is None:
         return None
@@ -539,11 +550,17 @@ def assess(item: Item, pool: list[Item], rules: Rules, query: str = "",
         shipping = item.shipping
     ship = 0.0 if pickup_only else (shipping if shipping is not None else rules.shipping_cost)
     missing = rules.missing_part_cost if rules.missing_part_cost and MISSING_PART.search(item.title) else 0.0
-    cost = item.total_price + ship + missing
+    cost = item.total_price + ship + missing + (fix.cost if fix else 0.0)
+    if fix and fix.iphone_part:
+        # iOS shows "unknown part" after a non-original screen/battery/camera: it sells for less
+        value = round(value * fix.resale_factor, 2)
+        resell_on, sell_fee = best_resale(value, by_platform, rules.sell_fees, item.source)   # same platform, fee on the lower price
     profit = round(value - sell_fee - cost - rules.resell_costs, 2)
     roi = round(profit / cost * 100, 1) if cost > 0 else 0.0
     rating = max(1, min(10, rate(profit, roi, n, rules) + speed_points(sell_days)))
     blocked = blocked_reasons(profit, roi, rating, rules, cost)
+    if fix and fix.difficulty == "hard" and profit < HARD_PROFIT_FACTOR * rules.min_profit:
+        blocked.append(f"🔴 hard repair ({fix.part}): profit under {HARD_PROFIT_FACTOR:g}× the minimum")
     seller_block, seller_warn = seller_check(item.seller, roi)
     if seller_block:
         blocked.append(seller_block)
@@ -555,7 +572,7 @@ def assess(item: Item, pool: list[Item], rules: Rules, query: str = "",
                 by_platform=by_platform, resell_on=resell_on, sell_fee=round(sell_fee, 2),
                 cost=round(cost, 2), missing_part=missing, budget=rules.budget, check=rules.check,
                 asking_value=asking, sold_count=sold_n, sell_days=sell_days,
-                demand=demand(item, comps, rules, query, sell_days), seller_warnings=seller_warn)
+                demand=demand(item, comps, rules, query, sell_days), seller_warnings=seller_warn, repair=fix)
     # How close it came: the weakest of profit/ROI/rating as a share of what the rule needs
     deal.closeness = round(min(
         1.0,
