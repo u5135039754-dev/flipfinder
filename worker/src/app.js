@@ -228,9 +228,10 @@ const API = {
     const results = [];
     for (const [key, d] of recent) {
       const before = bot.ai.spent || 0;
+      const calls = (bot.ai.calls || []).length;
       const r = await bot.ai.check(key, d, { user: "auto", post: false });
       results.push({ n: d.n, title: d.title, rating: d.rating, text: r.text || r.error,
-        cost_usd: Math.round(((bot.ai.spent || 0) - before) * 1e6) / 1e6 });
+        cost_usd: Math.round(((bot.ai.spent || 0) - before) * 1e6) / 1e6, calls: (bot.ai.calls || []).slice(calls) });
     }
     return { results, total_usd: Math.round((bot.ai.spent || 0) * 1e6) / 1e6, usd_to_eur: bot.ai.config.usd_to_eur };
   },

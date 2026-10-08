@@ -141,6 +141,18 @@ export class AI {
       (u.cache_read_input_tokens || 0) * pin * 0.1 + (u.output_tokens || 0) * pout) / 1e6;
   }
 
+  /** Every call's tokens and photos (the last 40), to see what a check really costs. */
+  async logCall(res, messages, usd) {
+    const u = res.usage || {};
+    const images = messages.reduce((n, m) => n + (Array.isArray(m.content) ? m.content.filter((b) => b.type === "image").length : 0), 0);
+    const call = { at: this.bot.now, model: res.model, input: u.input_tokens || 0, output: u.output_tokens || 0,
+      cache_read: u.cache_read_input_tokens || 0, cache_write: u.cache_creation_input_tokens || 0, images, usd };
+    (this.calls ??= []).push(call);
+    const log = await this.bot.store.get("ai_calls", []);
+    log.push(call);
+    await this.bot.store.put("ai_calls", log.slice(-40));
+  }
+
   async track(model, usage) {
     const usd = AI.cost(model, usage);
     const u = await this.usage();
@@ -196,7 +208,8 @@ export class AI {
         await this.failed(e);
         return null;
       }
-      await this.track(res.model in PRICES ? res.model : model, res.usage);
+      const usd = await this.track(res.model in PRICES ? res.model : model, res.usage);
+      await this.logCall(res, messages, usd);
       if (res.stop_reason === "refusal") {
         await this.failed({ status: "refusal", message: res.stop_details?.category || "declined" });
         return null;

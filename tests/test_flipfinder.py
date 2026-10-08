@@ -1667,3 +1667,21 @@ def test_repairs_switch_reaches_the_scanner():
     cfg = type("C", (), {"searches": [], "rules": Rules()})()
     assert apply_settings(cfg, {}).rules.repairs is True
     assert apply_settings(cfg, {"repairs": False}).rules.repairs is False
+
+
+def test_item_page_photos_main_first_then_the_rest():
+    photos = [{"id": "b", "is_main": False, "url": "https://img/b/f800/2.webp", "thumbnails": []},
+              {"id": "a", "is_main": True, "url": "https://img/a/f800/1.webp", "thumbnails": []},
+              {"id": "c", "is_main": False, "url": "https://img/c/f800/3.webp"}]
+    other = [{"id": "x", "is_main": True, "url": "https://img/someone-else.webp"}]   # a similar item further down
+    d = parse_item_page(_rsc('{"photos":' + json.dumps(photos) + '},{"photos":' + json.dumps(other) + '}'))
+    assert d.photos == ["https://img/a/f800/1.webp", "https://img/b/f800/2.webp", "https://img/c/f800/3.webp"]
+
+
+def test_ebay_photos_at_1000px_not_thumbnails():
+    from flipfinder.ebay import item_from_ebay
+    raw = {"itemId": "v1|123|0", "title": "iPhone 13", "price": {"value": "200", "currency": "EUR"},
+           "itemWebUrl": "https://www.ebay.it/itm/123", "image": {"imageUrl": "https://i.ebayimg.com/images/g/AAA/s-l225.jpg"},
+           "additionalImages": [{"imageUrl": "https://i.ebayimg.com/images/g/BBB/s-l225.jpg"}]}
+    assert item_from_ebay(raw).photos == ["https://i.ebayimg.com/images/g/AAA/s-l1000.jpg",
+                                          "https://i.ebayimg.com/images/g/BBB/s-l1000.jpg"]

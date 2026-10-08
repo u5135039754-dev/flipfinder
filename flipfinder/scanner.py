@@ -508,6 +508,8 @@ class Scanner:
         pickup = not d.shipping_available or is_pickup_only(f"{item.title}\n{d.description}")
         item.seller = self._vinted_seller(d)
         item.description = (d.description or "")[:1500]
+        if d.photos:
+            item.photos = d.photos[:4]   # the search page only has the first photo
         log.info("Item %s: shipping %s%s", item.id,
                  "unknown" if d.shipping is None else f"{d.shipping:.2f}", ", pickup only" if pickup else "")
         return assess(item, pool, rules, query, shipping=d.shipping,

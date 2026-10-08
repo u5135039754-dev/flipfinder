@@ -313,3 +313,14 @@ test("a 🔴 hard repair without twice our min profit becomes a skip", async () 
   // 300 x 0.85 = 255 - 35 - 10 - 200 = 10 profit, under 2 x 25
   assert.match(post.text, /🔍 Verdict: skip - 🔴 hard repair \(rear camera\), not enough profit after the part/);
 });
+
+test("every call's tokens and photos are logged, and the test endpoint shows them", async () => {
+  const { t } = await withAI({ on: false });
+  t.tg.answerClaude = () => ({ ...text(CHECK), usage: { input_tokens: 3600, output_tokens: 420, cache_read_input_tokens: 1300,
+    cache_creation_input_tokens: 0 } });
+  const r = await t.api("POST", "/api/ai/test", { count: 1 });
+  const [call] = r.body.results[0].calls;
+  assert.deepEqual({ ...call, at: 0, usd: 0 }, { at: 0, model: "claude-haiku-5-5", input: 3600, output: 420, cache_read: 1300,
+    cache_write: 0, images: 4, usd: 0 });
+  assert.equal((await t.store.get("ai_calls")).length, 1);
+});

@@ -278,6 +278,7 @@ class ItemDetails:
     business: bool = False
     last_seen: str = ""                # "Ultima visita 2 ore fa"
     badges: list = field(default_factory=list)   # e.g. SPEEDY_SHIPPING, ACTIVE_LISTER
+    photos: list = field(default_factory=list)   # every photo of the listing, 800 px (the most Vinted serves), main first
 
 
 def parse_item_page(html: str) -> ItemDetails:
@@ -290,6 +291,16 @@ def parse_item_page(html: str) -> ItemDetails:
         details.shipping, _ = _money(shipping.get("finalPrice") or shipping.get("originalPrice"))
     if '"isShippingAvailable":false' in data:
         details.shipping_available = False
+
+    # the listing's own photos come first on the page (similar items' photos follow)
+    i = data.find('"photos":[')
+    if i >= 0:
+        try:
+            photos, _ = json.JSONDecoder().raw_decode(data, i + len('"photos":'))
+            photos = sorted((p for p in photos if isinstance(p, dict) and p.get("url")), key=lambda p: not p.get("is_main"))
+            details.photos = [p["url"] for p in photos]
+        except ValueError:
+            pass
 
     for name, key in (("description", "description"), ("user_info_header", "user_info"),
                       ("seller_badges_info", "badges")):

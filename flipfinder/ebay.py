@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -56,7 +57,9 @@ def item_from_ebay(raw: dict) -> Item | None:
         url=raw.get("itemWebUrl", f"https://www.ebay.it/itm/{item_id}"),
         condition=str(raw.get("condition") or ""),
         photo=image.get("imageUrl", ""),
-        photos=[u for u in [image.get("imageUrl")] + [x.get("imageUrl") for x in (raw.get("additionalImages") or [])[:3]] if u],
+        # eBay's search gives 225 px thumbnails: the same photo at 1000 px is enough to see cracks
+        photos=[re.sub(r"/s-l\d+\.", "/s-l1000.", u) for u in [image.get("imageUrl")] +
+                [x.get("imageUrl") for x in (raw.get("additionalImages") or [])[:3]] if u],
         source="ebay",
         shipping=cheapest_shipping(raw.get("shippingOptions")),
         location=", ".join(x for x in (loc.get("city"), loc.get("country")) if x),
