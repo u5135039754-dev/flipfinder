@@ -1494,7 +1494,8 @@ def test_a_scan_skips_brand_new_sellers_and_counts_them(tmp_path: Path, caplog):
     s2.client.seller_profile = lambda sid: {"sold": 38, "negative": 0}
     deals = s2.scan()
     assert deals and deals[0].item.seller == {"source": "vinted", "reviews": 40, "stars": 5.0, "business": False,
-                                              "seen": "seen 5 min ago", "fast": False, "sold": 38, "negative": 0}
+                                              "seen": "seen 5 min ago", "fast": False, "sold": 38, "negative": 0,
+                                              "id": 9}   # the account, only for spotting reposts (never shown)
     assert "👤 5★ · 40 reviews · 38 sold · seen 5 min ago" in format_deal(deals[0])
 
 

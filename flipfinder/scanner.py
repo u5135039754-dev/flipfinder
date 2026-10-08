@@ -521,6 +521,7 @@ class Scanner:
         seller = {"source": "vinted", "reviews": d.reviews, "stars": round(d.reputation * 5, 1) if d.reviews else None,
                   "business": d.business, "seen": seen_english(d.last_seen), "fast": "SPEEDY_SHIPPING" in d.badges}
         if d.seller_id:
+            seller["id"] = d.seller_id   # only for spotting reposts (kept in the Worker's private storage, never logged)
             try:
                 prof = self.client.seller_profile(d.seller_id)
                 seller.update(sold=prof.get("sold"), negative=prof.get("negative"))

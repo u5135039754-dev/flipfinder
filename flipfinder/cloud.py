@@ -90,7 +90,7 @@ class Cloud:
         self._call("PUT", "/api/catalog", catalog(cfg))
 
     def send_deal(self, deal: Deal, text: str) -> str:
-        """'sent', 'queued' (quiet hours), 'exists' or 'failed'."""
+        """'sent', 'queued' (quiet hours), 'exists', 'repost' (same seller, same item within a week) or 'failed'."""
         res = self._call("POST", "/api/deal", {
             "key": deal.item.key, "text": text, "photo": deal.item.photo, "group": getattr(deal, "group", ""),
             "record": deal_record(deal)})

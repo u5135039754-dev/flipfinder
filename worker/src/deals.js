@@ -33,6 +33,44 @@ export function keyboard(key, d, ai = false) {
   return { inline_keyboard: rows };
 }
 
+// --- reposts: the same seller putting the same thing up again (or twice) within a week
+export const REPOST_DAYS = 7;
+
+function titleWords(t) {
+  return new Set(String(t || "").toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, " ").split(" ").filter(Boolean));
+}
+
+/** How alike two titles are: shared words over all words (1 = the same words). */
+export function titleSimilarity(a, b) {
+  const x = titleWords(a);
+  const y = titleWords(b);
+  if (!x.size || !y.size) return 0;
+  let both = 0;
+  for (const w of x) if (y.has(w)) both++;
+  return both / (x.size + y.size - both);
+}
+
+/** Same seller: the same account (Vinted), else the same trust numbers for an established seller. */
+export function sameSeller(a, b) {
+  if (!a || !b || a.source !== b.source) return false;
+  if (a.id || b.id) return Boolean(a.id && b.id && String(a.id) === String(b.id));
+  return (a.reviews || 0) > 0 && a.reviews === b.reviews && a.stars === b.stars && (a.sold ?? null) === (b.sold ?? null);
+}
+
+/** The earlier deal this one repeats (same seller, very similar title, price within ~10%), or null. */
+export function findRepost(record, recent, now) {
+  const price = Number(record.item?.price ?? record.cost) || 0;
+  for (const [key, d] of recent) {
+    if (now - (d.sent || 0) > REPOST_DAYS * 86400) continue;
+    if (!sameSeller(record.item?.seller, d.item?.seller)) continue;
+    if (titleSimilarity(record.title, d.title) < 0.8) continue;
+    const other = Number(d.item?.price ?? d.cost) || 0;
+    if (Math.abs(price - other) > Math.max(5, 0.1 * Math.max(price, other))) continue;
+    return [key, d];
+  }
+  return null;
+}
+
 export function statusLine(d) {
   if (d.status === "new") return "";
   let line = (d.n ? `#${d.n} · ` : "") + `${STATUS[d.status]} by ${esc(d.who)}`;

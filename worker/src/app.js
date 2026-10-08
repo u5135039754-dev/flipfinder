@@ -8,7 +8,7 @@
 import { Store } from "./store.js";
 import { Telegram } from "./telegram.js";
 import { Bot, COMMANDS, COMMANDS_VERSION } from "./bot.js";
-import { compare, keyboard } from "./deals.js";
+import { compare, findRepost, keyboard } from "./deals.js";
 import { TOPIC_FOR_GROUP, dueReminders, weeklyDue, weeklyReport } from "./group.js";
 import { DAY, UserError, inQuietHours, nowSeconds, rome } from "./util.js";
 import { action, snapshot, verifyInitData } from "./webapp.js";
@@ -175,6 +175,10 @@ const API = {
   async "POST /api/deal"(ctx, body) {
     const { store, tg, now, bot } = ctx;
     const quiet = inQuietHours(now);
+    // the same seller reposting the same thing within a week: one alert, not two
+    const record = { ...(body.record || {}) };
+    const repost = record.item?.seller ? findRepost(record, await store.deals("WHERE sent >= ?", now - 7 * DAY), now) : null;
+    if (repost && repost[0] !== body.key) return { status: "repost", of: repost[1].n ?? null };
     const d = await store.addDeal(body.key, { ...body.record, text: body.text, photo: body.photo || "",
       group: body.group || "", sent: now, queued: quiet });
     if (!d) return { status: "exists" };
