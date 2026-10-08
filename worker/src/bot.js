@@ -13,7 +13,7 @@ import { DEFAULT_WATCH, MAX_WATCH, findCoin, watchlist } from "./crypto.js";
 import { hhmm, rome, romeTs } from "./util.js";
 import { UserError, closeMatches, esc, euro, g, parseNumber, queryAndRange, splitArgs } from "./util.js";
 
-export const COMMANDS_VERSION = 15;   // bump when the list below changes, so it's registered again
+export const COMMANDS_VERSION = 16;   // bump when the list below changes, so it's registered again
 export const COMMANDS = [
   ["help", "List all commands"],
   ["app", "Open the flipFinder app: deals, stock, pot and settings"],
@@ -48,6 +48,7 @@ export const COMMANDS = [
   ["fast", "Fast lane (newest listings every few minutes); owner: /fast 2, /fast off"],
   ["setrole", "Owner only: /setrole Anna seller (manager, buyer, seller, or none to remove it)"],
   ["removerole", "Owner only: /removerole Anna (blocks them right away)"],
+  ["remind", "Owner only: the \"not claimed yet\" digest: /remind on or /remind off"],
   ["setname", "Owner only: the name the bot uses for someone: /setname 123456789 Anna"],
   ["ledger", "Every money action, newest last: /ledger or /ledger 30"],
   ["deposit", "Owner only: money put in: /deposit Marco 100"],
@@ -58,7 +59,7 @@ export const COMMANDS = [
   ["allow", "Owner only: first step for a new member: /allow 123456789, then /setrole"],
   ["intro", "Owner only: post or update the pinned intro in every topic"],
 ];
-const OWNER_ONLY = new Set(["allow", "intro", "deposit", "withdraw", "fix", "undo", "split", "setrole", "removerole", "delnote", "setname"]);
+const OWNER_ONLY = new Set(["allow", "intro", "deposit", "withdraw", "fix", "undo", "split", "setrole", "removerole", "delnote", "setname", "remind"]);
 export const LOCKED = "🔒 You're not a member of FLIP MAFIA";
 const IN_GROUP = new Set(["member", "administrator", "creator", "restricted"]);
 // the fast lane's settings (the scanner has the same defaults in flipfinder/fastlane.py)
@@ -343,6 +344,18 @@ Add one with /watch link, remove with /unwatch sol`);
     const role = args.at(-1).toLowerCase();
     if (role === "none") return this.takeRole(chat, name);
     await this.reply(chat, this.team.setRole(name, role));
+  }
+
+  async cmd_remind(chat, args, user) {
+    if (user !== this.ownerId) throw new UserError("Only the owner can use /remind");
+    const a = (args[0] || "").toLowerCase();
+    if (a !== "on" && a !== "off") {
+      return this.reply(chat, `⏰ The "not claimed yet" digest is ${this.settings.remind ? "on" : "off"}. /remind on or /remind off`);
+    }
+    this.settings.remind = a === "on";
+    this.changed = true;
+    await this.reply(chat, a === "on" ? "⏰ Digest on: deals rated 7+ nobody claimed, at most every 30 min, 08:30-22:00"
+      : "⏰ Digest off: no more \"not claimed yet\" messages");
   }
 
   async cmd_setname(chat, args, user) {

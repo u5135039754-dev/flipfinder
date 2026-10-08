@@ -116,7 +116,7 @@ const postDeal = (t, n, rating, when, group = "Guitars") => t.api("POST", "/api/
 const digests = (t) => t.tg.sent().filter((p) => p.text?.startsWith("⏰"));
 
 test("not claimed: one digest for the good deals, pinging only whoever is on duty, each deal once", async () => {
-  const t = await setup({ settings: team });
+  const t = await setup({ settings: { ...team, remind: true } });
   await tapAt(t, "duty:on", MARCO, at(10));
   await postDeal(t, 1, 7, at(10, 1));
   await postDeal(t, 2, 8, at(10, 2));
@@ -142,7 +142,7 @@ test("not claimed: one digest for the good deals, pinging only whoever is on dut
 });
 
 test("nobody on duty: the digest pings nobody; nothing before 08:30 or after 22:00, nothing stale", async () => {
-  const t = await setup({ settings: team });
+  const t = await setup({ settings: { ...team, remind: true } });
   await postDeal(t, 1, 9, at(8, 0));                                   // the night queue goes out at 08:00
   await postDeal(t, 2, 9, at(8, 0));
   t.tg.clear();
@@ -339,4 +339,19 @@ test("names: Telegram's first name and username, /setname wins, refreshed from t
   const { bot } = await open(t.env, { fetchFn: t.tg.fetch, now: at(12) });
   const sc = (await snapshot(bot, { id: MARCO, first_name: "Marco" })).schedule;
   assert.deepEqual(sc.members.filter((m) => m.role).map((m) => m.name).sort(), ["Lucky", "Marco", "Owner"].sort());
+});
+
+test("the digest is off unless the owner turns it on with /remind on", async () => {
+  const t = await setup({ settings: team });
+  await postDeal(t, 1, 9, at(10, 0));
+  await t.cron(at(10, 30));
+  assert.equal(digests(t).length, 0);
+  await t.updates(msg("/remind on", { user: MARCO }), msg("/remind on"));
+  assert.match(t.tg.texts().at(-2), /Only the owner/);
+  assert.match(t.tg.texts().at(-1), /Digest on/);
+  t.tg.clear();
+  await t.cron(at(10, 35));
+  assert.equal(digests(t).length, 1);
+  await t.update(msg("/remind off"));
+  assert.equal((await t.settings()).remind, false);
 });

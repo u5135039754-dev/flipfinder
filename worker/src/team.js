@@ -595,7 +595,7 @@ export class Team {
    * whoever is on duty (nobody on duty: no ping). Lower-rated deals expire quietly.
    */
   async unclaimed(deals) {
-    if (!this.active) return null;
+    if (!this.active || !this.bot.settings.remind) return null;   // off unless the owner turns it on (/remind on)
     const t = rome(this.now);
     const minute = t.hour * 60 + t.minute;
     if (minute < DIGEST_FROM || minute >= DIGEST_TO) return null;
