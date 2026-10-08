@@ -111,20 +111,53 @@ test("deal alerts @mention whoever is on duty (group only), or everyone when nob
   assert.ok(group.text.endsWith('👮 <a href="tg://user?id=555">Marco</a>'));
 });
 
-test("not claimed within 10 minutes: the two who aren't on duty get pinged, once", async () => {
+const postDeal = (t, n, rating, when, group = "Guitars") => t.api("POST", "/api/deal", { key: `vinted:${n}`, text: `🔥 Deal ${n}`,
+  photo: "", group, record: { title: `Deal ${n}`, url: "u", cost: 20, value: 60, profit: 30, rating, query: "q" } }, { at: when });
+const digests = (t) => t.tg.sent().filter((p) => p.text?.startsWith("⏰"));
+
+test("not claimed: one digest for the good deals, pinging only whoever is on duty, each deal once", async () => {
   const t = await setup({ settings: team });
   await tapAt(t, "duty:on", MARCO, at(10));
-  await t.api("POST", "/api/deal", { key: "vinted:1", text: "🔥 Deal", photo: "", group: "Guitars",
-    record: { title: "Deal one", url: "u", cost: 20, value: 60, profit: 30, query: "q" } }, { at: at(10, 1) });
+  await postDeal(t, 1, 7, at(10, 1));
+  await postDeal(t, 2, 8, at(10, 2));
+  await postDeal(t, 3, 5, at(10, 3));                                   // rated 5: expires quietly
   t.tg.clear();
   await t.cron(at(10, 6));
-  assert.ok(!inGroup(t).some((x) => x.includes("isn't claimed")));
-  await t.cron(at(10, 12));
-  const ping = inGroup(t).find((x) => x.includes("#1 isn't claimed after 10 min"));
-  assert.ok(ping && ping.includes("Boss") && ping.includes("Luca") && !ping.includes(">Marco<"));
+  assert.equal(digests(t).length, 0);                                    // not 10 minutes yet
+  await t.cron(at(10, 13));
+  const [digest] = digests(t);
+  assert.equal(digests(t).length, 1);
+  assert.equal(String(digest.chat_id), GROUP);
+  assert.equal(digest.message_thread_id, undefined);                     // the group's main chat
+  assert.match(digest.text, /^⏰ 2 deals not claimed yet: <a href="https:\/\/t\.me\/c\/444\/\d+">#1<\/a>, <a href="https:\/\/t\.me\/c\/444\/\d+">#2<\/a>\n<a href="tg:\/\/user\?id=555">Marco<\/a>, you're on duty$/);
+  assert.ok(!digest.text.includes("#3") && !digest.text.includes("Luca") && !digest.text.includes("Boss"));
+  // a new deal: its digest waits until 30 min after the last one; #1 and #2 are never repeated
+  await postDeal(t, 4, 7, at(10, 15));
   t.tg.clear();
-  await t.cron(at(10, 20));
-  assert.ok(!inGroup(t).some((x) => x.includes("isn't claimed")));
+  await t.cron(at(10, 30));
+  assert.equal(digests(t).length, 0);
+  await t.cron(at(10, 44));
+  assert.equal(digests(t).length, 1);
+  assert.match(digests(t)[0].text, /^⏰ 1 deal not claimed yet: <a [^>]+>#4<\/a>\n/);
+});
+
+test("nobody on duty: the digest pings nobody; nothing before 08:30 or after 22:00, nothing stale", async () => {
+  const t = await setup({ settings: team });
+  await postDeal(t, 1, 9, at(8, 0));                                   // the night queue goes out at 08:00
+  await postDeal(t, 2, 9, at(8, 0));
+  t.tg.clear();
+  await t.cron(at(8, 15));
+  assert.equal(digests(t).length, 0);                                    // first digest at 08:30 at most
+  await t.cron(at(8, 30));
+  assert.equal(digests(t).length, 1);
+  assert.ok(!digests(t)[0].text.includes("tg://user"));                  // nobody on duty: no ping
+  await postDeal(t, 5, 9, at(21, 50));
+  t.tg.clear();
+  await t.cron(at(22, 5));
+  assert.equal(digests(t).length, 0);                                    // after 22:00: none
+  await postDeal(t, 6, 9, at(13, 0));
+  await t.cron(at(16, 30));                                              // 3.5 h old: too stale to nag about
+  assert.ok(!digests(t).some((p) => p.text.includes("#6")));
 });
 
 test("swaps: pick how long, first ✅ takes it, schedule and duty move, a warning over 20%", async () => {

@@ -17,6 +17,14 @@ export const DUTY_TO = 22;
 export const PING_FROM_MIN = 7 * 60 + 30;   // "nobody on duty" pings from 07:30
 export const NOBODY_EVERY = 30 * 60;
 export const UNCLAIMED_AFTER = 10 * 60;
+// "not claimed yet" digest: one message, at most every 30 min, 08:30-22:00 Italy time (the night queue
+// goes out at 08:00, so its first digest is at 08:30), only deals rated 7+, each deal once, only fresh ones
+export const DIGEST_EVERY = 30 * 60;
+export const DIGEST_FROM = 8 * 60 + 30;
+export const DIGEST_TO = 22 * 60;
+export const DIGEST_MIN_RATING = 7;
+export const DIGEST_MAX_AGE = 3 * 3600;
+const DIGEST_LIST = 12;
 export const BUYER_TARGET = 8;              // hours a day for the main watcher
 export const OTHERS_CAP = Math.round((DUTY_TO - DUTY_FROM) * 0.2 * 10) / 10;   // 2.8 h: 20% of the 14 h
 export const TASK_LATE_DAYS = 3;
@@ -533,20 +541,40 @@ export class Team {
   }
 
   /** New deals nobody claimed within 10 minutes: ping the people who aren't on duty. */
+  /**
+   * Good deals nobody claimed: one "⏰ not claimed yet" digest in the group's main chat, pinging only
+   * whoever is on duty (nobody on duty: no ping). Lower-rated deals expire quietly.
+   */
   async unclaimed(deals) {
-    if (!this.active) return;
+    if (!this.active) return null;
+    const t = rome(this.now);
+    const minute = t.hour * 60 + t.minute;
+    if (minute < DIGEST_FROM || minute >= DIGEST_TO) return null;
     const d = await this.duty();
-    const others = this.members().filter((m) => m.role && m.id !== d.on?.id);
-    if (!others.length) return;
-    for (const [key, deal] of deals) {
-      if (this.bot.tg.callsLeft < 6) break;
-      const at = deal.alerted_at;
-      if (deal.status !== "new" || !at || deal.escalated || this.now - at < UNCLAIMED_AFTER || this.now - at > 6 * 3600) continue;
-      if (!this.inDutyHours(at)) continue;
-      deal.escalated = this.now;
-      await this.bot.store.saveDeal(key, deal);
-      await this.bot.postAbout(deal, `⏰ #${deal.n ?? "?"} isn't claimed after 10 min: ${others.map(mention).join(" ")}`);
+    if (this.now - (d.last_digest || 0) < DIGEST_EVERY) return null;
+    const due = deals.filter(([, x]) => x.status === "new" && x.alerted_at && !x.escalated &&
+      (x.rating ?? 0) >= DIGEST_MIN_RATING && this.now - x.alerted_at >= UNCLAIMED_AFTER && this.now - x.alerted_at <= DIGEST_MAX_AGE)
+      .sort((a, b) => (a[1].n ?? 0) - (b[1].n ?? 0));
+    const group = this.bot.tg.groups[0];
+    if (!due.length || !group || this.bot.tg.callsLeft < 4) return null;
+    for (const [key, x] of due) {
+      x.escalated = this.now;   // one reminder per deal, ever
+      await this.bot.store.saveDeal(key, x);
     }
+    d.last_digest = this.now;
+    await this.saveDuty();
+    const link = (x) => {
+      const m = (x.messages || []).find((y) => Telegram.isGroup(y.chat));
+      const label = `#${x.n ?? "?"}`;
+      return m && String(m.chat).startsWith("-100") ? `<a href="https://t.me/c/${String(m.chat).slice(4)}/${m.id}">${label}</a>` : label;
+    };
+    const shown = due.slice(0, DIGEST_LIST).map(([, x]) => link(x)).join(", ");
+    const more = due.length > DIGEST_LIST ? ` and ${due.length - DIGEST_LIST} more` : "";
+    const on = d.on ? this.member(d.on.id) : null;
+    const text = `⏰ ${due.length} deal${due.length === 1 ? "" : "s"} not claimed yet: ${shown}${more}` +
+      (on ? `\n${mention(on)}, you're on duty` : "");
+    await this.bot.tg.sendTo(group, text);
+    return text;
   }
 
   // --- the Sunday report
