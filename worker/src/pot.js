@@ -7,7 +7,6 @@
 
 import { esc, euro } from "./util.js";
 
-export const APPROVAL_OVER = 50;   // buys above this need a 👍 from another member
 
 const round2 = (x) => Math.round(x * 100) / 100;
 
@@ -67,12 +66,6 @@ export function allocate(amount, shareMap) {
 export function reverse(e) {
   const neg = (m) => (m ? Object.fromEntries(Object.entries(m).map(([k, v]) => [k, -v])) : undefined);
   return { amount: -e.amount, deposited: neg(e.deposited), withdrawn: neg(e.withdrawn), profit: neg(e.profit) };
-}
-
-/** The deal has a 👍 from someone other than whoever is buying it. */
-export function approved(d, buyers) {
-  const not = new Set(buyers.filter(Boolean).map(Number));
-  return Object.entries(d.votes || {}).some(([uid, v]) => v === "up" && !not.has(Number(uid)));
 }
 
 export function potText(summary, mode, budget) {

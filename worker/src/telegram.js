@@ -90,12 +90,14 @@ export class Telegram {
   }
 
   /** A deal alert to every chat, with its photo when Telegram can load it; where it landed. */
-  async sendAlert(text, photo, buttons, topic) {
+  async sendAlert(text, photo, buttons, topic, groupLine = "") {
     const out = [];
     for (const chat of [...this.chatIds]) {
+      // in the group, a line @mentioning whoever is on duty
+      const body = groupLine && Telegram.isGroup(chat) ? `${text}\n${groupLine}` : text;
       let res = null;
-      if (photo && text.length <= 1024) res = await this.sendTo(chat, text, { buttons, topic, photo });
-      if (res === null) res = await this.sendTo(chat, text, { buttons, topic });
+      if (photo && body.length <= 1024) res = await this.sendTo(chat, body, { buttons, topic, photo });
+      if (res === null) res = await this.sendTo(chat, body, { buttons, topic });
       if (res !== null) {
         out.push({ chat: String(res.chat.id), id: res.message_id, photo: "photo" in res,
           thread: res.message_thread_id ?? null });

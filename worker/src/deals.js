@@ -4,7 +4,7 @@
 import { esc, euro, rome } from "./util.js";
 
 export const STATUS = { new: "", claimed: "✋ Claimed", bought: "💸 Bought", listed: "🏷 Listed", sold: "✅ Sold" };
-export const NEXT = { claimed: ["b", "💸 Bought"], bought: ["l", "🏷 Listed"], listed: ["s", "✅ Sold"] };
+export const NEXT = { claimed: ["b", "🙋 Request buy"], bought: ["l", "🏷 Listed"], listed: ["s", "✅ Sold"] };
 export const SELLER_MESSAGE = (title) =>
   `Ciao! L'articolo "${title}" è ancora disponibile? Se sì, potresti mandarmi un breve video ` +
   "in cui si vede che funziona? Grazie mille!";
@@ -15,7 +15,9 @@ export function keyboard(key, d) {
   const down = votes.filter((v) => v === "down").length;
   const rows = [];
   if (d.status === "new") rows.push([{ text: "✋ Claim", callback_data: `c:${key}` }]);
-  else if (NEXT[d.status]) {
+  else if (d.status === "claimed" && d.request) {
+    rows.push([{ text: `⏳ Waiting for OK: ${euro(d.request.amount)} (${d.request.by})`, callback_data: `wait:${key}` }]);
+  } else if (NEXT[d.status]) {
     const [code, label] = NEXT[d.status];
     rows.push([{ text: `${label} (${d.who})`, callback_data: `${code}:${key}` }]);
   }

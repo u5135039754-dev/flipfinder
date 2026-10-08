@@ -209,6 +209,29 @@ by the same Worker (`worker/public/app/`), every request is checked against Tele
 data, and only allowed users get in. Everything it does goes through the same code as the chat
 buttons, so deal messages update and money moves are posted in Summary the same way.
 
+### The team: roles, buying, duty, tasks
+
+Kept in the Worker's private storage (names and roles too, never in the repo).
+
+- **Roles:** /roles shows who does what (manager: bot + money, approves and pays every buy; buyer:
+  buying + main deal watcher; seller: selling, listings, buyer messages, shipping). The owner sets
+  them with /setrole <name> manager|buyer|seller; people must have messaged the bot once.
+- **Buying:** whoever claimed a deal taps 🙋 Request buy with the agreed price; the manager gets
+  ✅ Approve / ❌ Reject (privately and in the deal's topic). On approve it's 💸 Bought, paid from
+  the pot (Vinted/eBay: the manager pays online; Subito: sends the buyer the money for the pickup),
+  and the seller is pinged to list it. A manager's own buys need no approval.
+- **Duty, 08:00-22:00 Italy time:** a pinned "👮 On duty now" message with 🟢 Start / 🔴 End /
+  🙋 Need a swap (first ✅ I'll take it gets it, with a warning past someone's 20%). The buyer's
+  target is 8 h a day, the others up to 2.8 h (20% of the 14 h). New deals @mention whoever is on
+  duty; unclaimed after 10 min, the other two are pinged; nobody on duty, everyone is pinged from
+  07:30 and every 30 min. Shifts end at 22:00. All of this starts once a role is set.
+- **Schedule** (📅 tab in the app): a Mon-Sun grid of 1-hour blocks, tap to claim or free, swap your
+  own; a reminder 10 min before your block, the group is told if you're 15 min late.
+- **Tasks:** /task add Photos for #12 @Anna by fri, /task done 3, /tasks; a reminder 3 days after
+  the due date (or 3 days after it was added).
+- **Sunday report** adds duty hours vs target, deals caught per shift, average reaction time, open
+  tasks, stock waiting to be listed or sold, and bot health.
+
 ### Crypto topic (news only)
 
 A separate, read-only Crypto topic (create it, then send /topic crypto there). It never touches the

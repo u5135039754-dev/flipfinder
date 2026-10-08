@@ -52,7 +52,7 @@ test("only allowed users get the app's data", async () => {
   assert.equal((await app(t, "stranger", "state")).status, 403);
   const r = await app(t, "marco", "state");
   assert.equal(r.status, 200);
-  assert.deepEqual(r.body.me, { id: MARCO, name: "Marco", owner: false });
+  assert.deepEqual(r.body.me, { id: MARCO, name: "Marco", owner: false, manager: false, team: false });
   assert.equal(r.body.deals[0].title, "Boss DS-1 distortion");
   assert.equal(r.body.deals[0].source, "vinted");
   assert.equal(r.body.deals[0].sell_days, null);
@@ -93,29 +93,28 @@ test("claiming in the app updates the deal in Telegram too", async () => {
   assert.equal(again.body.notice, "Marco already has this one");
 });
 
-test("buying in the app: the €50 rule, the pot entry and the Summary post", async () => {
+test("buying in the app: a request, the manager approves in the app, the pot and the Summary post", async () => {
   const t = await setup({ settings: members });
   await t.update(msg("/deposit Owner 300"));
   const key = await addDeal(t.store, { cost: 60 });
   await app(t, "marco", "action", { action: "claim", key });
-  let r = await app(t, "marco", "action", { action: "bought", key, amount: "60" });
-  assert.equal(r.status, 400);
-  assert.match(r.body.error, /needs a 👍 from another member/);
-  r = await app(t, "luca", "action", { action: "bought", key, amount: "60" });
+  let r = await app(t, "luca", "action", { action: "bought", key, amount: "60" });
   assert.equal(r.status, 400);
   assert.match(r.body.error, /Marco has this one/);
-  await app(t, "luca", "action", { action: "up", key });
-  assert.ok(t.tg.texts().some((x) => x.includes("#1 approved by Luca")));
   t.tg.clear();
   r = await app(t, "marco", "action", { action: "bought", key, amount: "61,50" });
   assert.equal(r.status, 200);
-  assert.match(r.body.notice, /💸 Bought for €61\.50/);
+  assert.match(r.body.notice, /Sent for approval/);
+  assert.deepEqual(r.body.state.deals[0].request, { amount: 61.5, by: "Marco" });
+  assert.equal((await app(t, "marco", "action", { action: "bought", key, amount: "61" })).status, 400);   // already waiting
+  assert.equal((await app(t, "luca", "action", { action: "approve", key })).status, 400);              // not a manager
+  r = await app(t, "owner", "action", { action: "approve", key });
+  assert.equal(r.status, 200);
+  assert.match(r.body.notice, /Approved #1 at €61\.50/);
   assert.equal(r.body.state.stock[0].paid, 61.5);
   assert.equal(r.body.state.pot.cash, 238.5);
-  const posts = t.tg.sent().filter((p) => String(p.chat_id) === GROUP);
-  assert.equal(posts.length, 1);
-  assert.ok(posts[0].message_thread_id === 44 && posts[0].text.includes("−€61.50 bought #1"));
-  assert.ok(!t.tg.sent().some((p) => String(p.chat_id) === String(MARCO)));      // nothing to Marco's chat: the app shows it
+  const posts = t.tg.sent().filter((p) => String(p.chat_id) === GROUP && p.message_thread_id === 44);
+  assert.ok(posts.some((p) => p.text.includes("−€61.50 bought #1")));
   r = await app(t, "marco", "action", { action: "listed", key });
   r = await app(t, "marco", "action", { action: "sold", key, amount: "abc" });
   assert.equal(r.status, 400);

@@ -4,7 +4,8 @@
 // and the €50 approval rule behave exactly the same.
 
 import { UserError, nowSeconds, parseNumber } from "./util.js";
-import { APPROVAL_OVER, approved, shares, summarize } from "./pot.js";
+import { shares } from "./pot.js";
+import { romeTs } from "./util.js";
 import { TOPIC_FOR_GROUP } from "./group.js";
 
 const enc = new TextEncoder();
@@ -49,7 +50,7 @@ export async function snapshot(bot, user) {
     up: Object.values(d.votes || {}).filter((v) => v === "up").length,
     down: Object.values(d.votes || {}).filter((v) => v === "down").length,
     voted: (d.votes || {})[String(user.id)] || "",
-    needs_ok: d.status === "claimed" && (d.cost || 0) > APPROVAL_OVER && !approved(d, [d.who_id]),
+    request: d.request ? { amount: d.request.amount, by: d.request.by } : null,
   });
   const open = deals.filter(([, d]) => (d.status === "new" && (d.sent || 0) >= now - 7 * 86400) || d.status === "claimed");
   const stockList = deals.filter(([, d]) => ["bought", "listed"].includes(d.status));
@@ -57,10 +58,12 @@ export async function snapshot(bot, user) {
   const ledger = await bot.store.ledger();
   const view = await bot.view();
   return {
-    me: { id: user.id, name: [user.first_name, user.last_name].filter(Boolean).join(" "), owner: user.id === bot.ownerId },
+    me: { id: user.id, name: [user.first_name, user.last_name].filter(Boolean).join(" "), owner: user.id === bot.ownerId,
+      manager: bot.team.isManager(user.id), team: bot.team.active },
+    schedule: await bot.team.grid(),
     deals: open.map(card).sort((a, b) => b.sent - a.sent),
     stock: stockList.map(card),
-    pot: { ...pot, shares: shares(pot, bot.splitMode()), split: bot.splitMode(), approval_over: APPROVAL_OVER,
+    pot: { ...pot, shares: shares(pot, bot.splitMode()), split: bot.splitMode(),
       ledger: ledger.slice(-60).reverse().map((e) => ({ id: e.id, at: e.at, kind: e.kind, amount: e.amount,
         member: e.member || "", n: e.n || null, note: e.note || "", ref: e.ref || null })) },
     settings: {
@@ -102,13 +105,32 @@ export async function action(bot, user, body) {
       if (uid !== d.who_id && uid !== bot.ownerId) throw new UserError(`${d.who || "Someone else"} has this one`);
       if (d.status !== want) throw new UserError(body.action === "bought" ? "Claim it first" : "List it first");
       const a = amount();
-      if (body.action === "bought" && a > APPROVAL_OVER && !approved(d, [d.who_id, uid])) {
-        throw new UserError(`Over €${APPROVAL_OVER}: it needs a 👍 from another member first`);
-      }
+      if (body.action === "bought" && d.request) throw new UserError("Already waiting for the manager's OK");
       const pending = await bot.store.get("pending", {});
       pending[String(uid)] = { key: body.key, ask: body.action === "bought" ? "paid" : "sold_for", chat, ask_msg: null };
       await bot.store.put("pending", pending);
       await bot.applyPrice(chat, uid, a);
+      break;
+    }
+    case "approve": case "reject":
+      await deal();
+      if (!bot.team.isManager(uid)) throw new UserError("Only a manager approves buys");
+      await bot.decideBuy(cq, uid, body.key, body.action === "approve");
+      break;
+    case "duty_start":
+      bot.capture.push(await bot.team.start(uid));
+      break;
+    case "duty_end":
+      bot.capture.push(await bot.team.end(uid));
+      break;
+    case "block":
+      bot.capture.push(await bot.team.toggleBlock(uid, String(body.date || ""), Number(body.hour)));
+      break;
+    case "swap_block": {
+      const start = romeTs(String(body.date || ""), Number(body.hour));
+      const owner = (await bot.team.schedule())[body.date]?.[Number(body.hour)];
+      if (owner !== uid) throw new UserError("You can only ask for a swap on your own block");
+      bot.capture.push(await bot.team.requestSwap(uid, Math.max(start, bot.now), start + 3600));
       break;
     }
     case "sell": {

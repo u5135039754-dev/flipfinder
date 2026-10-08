@@ -64,7 +64,7 @@
   .switch input:checked + span::before { transform: translateX(18px); }
   .q { flex: 1; min-width: 0; }
   .q div:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  nav { position: fixed; bottom: 0; left: 0; right: 0; display: grid; grid-template-columns: repeat(4, 1fr);
+  nav { position: fixed; bottom: 0; left: 0; right: 0; display: grid; grid-template-columns: repeat(5, 1fr);
     background: var(--card); border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); z-index: 6; }
   nav button { border: 0; background: none; color: var(--muted); padding: 8px 0 10px; font-size: 11.5px; }
   nav button div { font-size: 20px; }
@@ -88,7 +88,8 @@
 <script>
 "use strict";
 const tg = window.Telegram?.WebApp;
-const TABS = [["deals", "🔥", "Deals"], ["stock", "📦", "Stock"], ["pot", "💰", "Pot"], ["settings", "⚙️", "Settings"]];
+const TABS = [["deals", "🔥", "Deals"], ["stock", "📦", "Stock"], ["pot", "💰", "Pot"], ["schedule", "📅", "Schedule"],
+  ["settings", "⚙️", "Settings"]];
 const PLATFORMS = { vinted: "Vinted", ebay: "eBay", subito: "Subito" };
 const state = { tab: "deals", data: null, cat: "All", platform: "All", max: null, busy: false };
 try { Object.assign(state, JSON.parse(localStorage.getItem("ff-filters") || "{}"), { busy: false, data: null }); } catch {}
@@ -181,7 +182,7 @@ function render() {
   document.getElementById("filters").replaceChildren(state.tab === "deals" && d ? filters(d) : "");
   const main = document.getElementById("main");
   if (!d) return;
-  main.replaceChildren(...({ deals: dealsTab, stock: stockTab, pot: potTab, settings: settingsTab })[state.tab](d));
+  main.replaceChildren(...({ deals: dealsTab, stock: stockTab, pot: potTab, schedule: scheduleTab, settings: settingsTab })[state.tab](d));
 }
 
 function filters(d) {
@@ -200,9 +201,15 @@ function dealCard(x, d) {
   const mineOrOwner = x.mine || me.owner;
   const btns = [];
   if (x.status === "new") btns.push(h("button", { class: "btn primary", onclick: () => act({ action: "claim", key: x.key }) }, "✋ Claim"));
-  if (x.status === "claimed" && mineOrOwner) {
-    btns.push(h("button", { class: "btn primary", onclick: () => sheet(`💸 What did you pay for #${x.n}?`,
-      [{ label: "Total paid (€)", value: x.cost }], ([v]) => act({ action: "bought", key: x.key, amount: v }).then((r) => !!r)) }, "💸 Bought"));
+  if (x.status === "claimed" && x.request && me.manager) {
+    btns.push(h("button", { class: "btn primary", onclick: () => act({ action: "approve", key: x.key }) }, `✅ Approve ${euro(x.request.amount)}`));
+    btns.push(h("button", { class: "btn", onclick: () => act({ action: "reject", key: x.key }) }, "❌ Reject"));
+  } else if (x.status === "claimed" && mineOrOwner && !x.request) {
+    const label = me.manager ? "💸 Bought" : "🙋 Request buy";
+    btns.push(h("button", { class: "btn primary", onclick: () => sheet(me.manager ? `💸 What did you pay for #${x.n}?`
+      : `🙋 What price did you agree for #${x.n}? It goes to the manager for approval.`,
+      [{ label: me.manager ? "Total paid (€)" : "Agreed price (€)", value: x.cost }],
+      ([v]) => act({ action: "bought", key: x.key, amount: v }).then((r) => !!r)) }, label));
   }
   if (x.status === "bought" && mineOrOwner) btns.push(h("button", { class: "btn primary", onclick: () => act({ action: "listed", key: x.key }) }, "🏷 Listed"));
   if (x.status === "listed" && mineOrOwner) {
@@ -221,7 +228,7 @@ function dealCard(x, d) {
   }
   btns.push(h("button", { class: "btn", onclick: () => tg?.openLink ? tg.openLink(x.url) : window.open(x.url) }, "Open ↗"));
   const status = x.status === "new" ? null : x.status === "claimed"
-    ? `✋ ${x.mine ? "You have it" : x.who + " has it"}${x.needs_ok ? ` · needs a 👍 from someone else (over €${d.pot.approval_over})` : ""}`
+    ? `✋ ${x.mine ? "You have it" : x.who + " has it"}${x.request ? ` · ⏳ waiting for OK: ${euro(x.request.amount)} (${x.request.by})` : ""}`
     : x.status === "bought" ? `💸 Bought by ${x.mine ? "you" : x.who} for ${euro(x.paid)}` : `🏷 Listed by ${x.mine ? "you" : x.who} · paid ${euro(x.paid)}`;
   return h("div", { class: "card deal" },
     x.photo ? h("img", { class: "thumb", src: x.photo, alt: "", loading: "lazy", referrerpolicy: "no-referrer" }) : h("div", { class: "thumb" }),
@@ -269,6 +276,58 @@ function potTab(d) {
     h("div", {}, h("div", {}, `${e.id}. ${what(e)}`), h("div", { class: "label" }, new Date(e.at * 1000).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }))),
     h("b", { class: e.amount >= 0 ? "profit" : "" }, `${e.amount >= 0 ? "+" : "−"}${euro(Math.abs(e.amount))}`)))) :
     h("div", { class: "empty" }, "Nothing yet"));
+  return out;
+}
+
+// --- 📅 Schedule: duty now, today's hours, the weekly grid
+function scheduleTab(d) {
+  const sc = d.schedule;
+  if (!d.me.team) return [h("div", { class: "empty" }, "The schedule starts once the owner sets roles (/setrole name role)")];
+  const byId = Object.fromEntries(sc.members.map((m) => [m.id, m]));
+  const onMe = sc.on && sc.on.id === d.me.id;
+  const hh = (ts) => new Date(ts * 1000).toLocaleTimeString("en-GB", { timeZone: "Europe/Rome", hour: "2-digit", minute: "2-digit" });
+  const out = [h("button", { class: "btn primary", style: `width:100%;padding:16px;font-size:17px;margin-bottom:10px;${onMe ? "background:var(--bad)" : ""}`,
+    onclick: () => act({ action: onMe ? "duty_end" : "duty_start" }) }, onMe ? "🔴 End duty" : "🟢 Start duty"),
+  h("div", { class: "card" }, sc.on ? `👮 On duty: ${sc.on.name} (since ${hh(sc.on.since)}, until ${hh(sc.on.until)})` : "👮 Nobody is on duty")];
+  out.push(h("h2", {}, "Today"), h("div", { class: "card" }, sc.members.filter((m) => m.role).map((m) => {
+    const goal = m.target ?? m.cap;
+    const over = m.cap && m.today > m.cap;
+    return h("div", { class: "row" },
+      h("div", {}, h("span", { style: `display:inline-block;width:10px;height:10px;border-radius:50%;background:${m.color};margin-right:8px` }), m.name),
+      h("b", { style: over ? "color:var(--bad)" : "" }, `${m.today} / ${goal} h${m.cap ? " max" : ""}`));
+  })));
+  state.week ??= 0;
+  out.push(h("div", { class: "chips" }, ["This week", "Next week"].map((label, i) =>
+    h("button", { class: "chip" + (state.week === i ? " on" : ""), onclick: () => { state.week = i; render(); } }, label))));
+  const week = sc.weeks[state.week];
+  const cell = (day, hour) => {
+    const id = day.blocks[hour];
+    const m = id ? byId[id] : null;
+    const past = day.date < sc.today || (day.date === sc.today && hour < new Date().toLocaleString("en-GB", { timeZone: "Europe/Rome", hour: "2-digit", hourCycle: "h23" }) * 1);
+    const mine = id === d.me.id;
+    const style = `background:${m ? m.color : "rgba(229,83,75,.28)"};opacity:${past ? 0.35 : 1};border-radius:6px;height:26px;` +
+      `font-size:11px;display:flex;align-items:center;justify-content:center;color:#fff;${mine ? "outline:2px solid #fff;" : ""}`;
+    return h("div", { style, onclick: () => {
+      if (past) return toast("That hour is over", true);
+      if (!id) return act({ action: "block", date: day.date, hour });
+      if (!mine) return toast(`That's ${m ? m.name : "someone"}'s block: ask them to swap`, true);
+      sheet(`${day.label} ${hour}:00–${hour + 1}:00 is yours`, [], null, h("div", { class: "actions", style: "margin-bottom:10px" },
+        h("button", { class: "btn", onclick: () => { document.querySelector(".sheet-bg")?.remove(); act({ action: "block", date: day.date, hour }); } }, "Free this hour"),
+        h("button", { class: "btn primary", onclick: () => { document.querySelector(".sheet-bg")?.remove(); act({ action: "swap_block", date: day.date, hour }); } }, "🙋 Need a swap")));
+    } }, m ? m.name.slice(0, 1) : "");
+  };
+  const cols = `34px repeat(7, 1fr)`;
+  const grid = [h("div", { style: `display:grid;grid-template-columns:${cols};gap:3px;font-size:11px;color:var(--muted);text-align:center` },
+    h("div"), week.map((day) => h("div", { style: day.date === sc.today ? "color:var(--accent);font-weight:700" : "" }, day.label)))];
+  for (let hour = sc.from; hour < sc.to; hour++) {
+    grid.push(h("div", { style: `display:grid;grid-template-columns:${cols};gap:3px;margin-top:3px` },
+      h("div", { style: "font-size:11px;color:var(--muted);display:flex;align-items:center" }, `${hour}:00`),
+      week.map((day) => cell(day, hour))));
+  }
+  out.push(h("div", { class: "card" }, grid,
+    h("div", { class: "label", style: "margin-top:10px" }, "Tap an empty (red) hour to take it, your own to free it or ask for a swap."),
+    h("div", { class: "chips" }, sc.members.filter((m) => m.role).map((m) =>
+      h("span", { class: "chip", style: `border-color:${m.color}` }, h("span", { style: `color:${m.color}` }, "● "), m.name)))));
   return out;
 }
 

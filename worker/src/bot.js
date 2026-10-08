@@ -4,12 +4,14 @@
 import { Telegram } from "./telegram.js";
 import { RULES, applySettings, effectiveBudget, searchId } from "./searches.js";
 import { SELLER_MESSAGE, fullText, keyboard, stock, profit, findDeal } from "./deals.js";
-import { APPROVAL_OVER, allocate, approved, entryLine, memberKey, potText, reverse, shares, summarize } from "./pot.js";
+import { allocate, entryLine, memberKey, potText, reverse, shares, summarize } from "./pot.js";
+import { ROLES, Team } from "./team.js";
 import { INTROS, TOPIC_FOR_GROUP, TOPIC_NAMES, mention, pricesFor, sellListing } from "./group.js";
 import { DEFAULT_WATCH, MAX_WATCH, findCoin, watchlist } from "./crypto.js";
+import { rome, romeTs } from "./util.js";
 import { UserError, closeMatches, esc, euro, g, parseNumber, queryAndRange, splitArgs } from "./util.js";
 
-export const COMMANDS_VERSION = 9;   // bump when the list below changes, so it's registered again
+export const COMMANDS_VERSION = 10;   // bump when the list below changes, so it's registered again
 export const COMMANDS = [
   ["help", "List all commands"],
   ["app", "Open the flipFinder app: deals, stock, pot and settings"],
@@ -30,6 +32,11 @@ export const COMMANDS = [
   ["watch", "Crypto watchlist: /watch shows it, /watch link adds a coin"],
   ["unwatch", "Remove a coin from the crypto watchlist: /unwatch sol"],
   ["pot", "The shared pot: cash, stock, profit and what each member would get back"],
+  ["roles", "Who does what in the team"],
+  ["duty", "Who's on duty, with Start / End / Swap buttons"],
+  ["task", "Tasks: /task add Photos for #12 @Anna by fri · /task done 3"],
+  ["tasks", "Open tasks"],
+  ["setrole", "Owner only: /setrole Anna seller (manager, buyer or seller)"],
   ["ledger", "Every money action, newest last: /ledger or /ledger 30"],
   ["deposit", "Owner only: money put in: /deposit Marco 100"],
   ["withdraw", "Owner only: money taken out: /withdraw Marco 50"],
@@ -39,7 +46,7 @@ export const COMMANDS = [
   ["allow", "Owner only: let another user use commands: /allow 123456789"],
   ["intro", "Owner only: post or update the pinned intro in every topic"],
 ];
-const OWNER_ONLY = new Set(["allow", "intro", "deposit", "withdraw", "fix", "undo", "split"]);
+const OWNER_ONLY = new Set(["allow", "intro", "deposit", "withdraw", "fix", "undo", "split", "setrole"]);
 
 export function claimerName(user) {
   const name = [user.first_name, user.last_name].filter(Boolean).join(" ");
@@ -55,6 +62,7 @@ export class Bot {
     this.ownerId = Number(ownerId);
     this.changed = false;          // settings changed: saved at the end
     this.capture = null;           // the Mini App: replies and pop-ups collected here instead of sent
+    this.team = new Team(this);
     this._deals = null;
   }
 
@@ -161,6 +169,7 @@ export class Bot {
     const user = msg.from?.id;
     const chat = msg.chat.id;
     if (!this.allowed(user)) return;   // not someone we take commands from: ignore quietly
+    this.team.learn(msg.from);
     this.learnTopic(msg);
     if (!text.startsWith("/")) return this.onPriceReply(chat, user, text);
     const space = text.indexOf(" ");
@@ -250,6 +259,44 @@ Add one with /watch link, remove with /unwatch sol`);
     this.changed = true;
     const rest = this.settings.crypto_watch.map((c) => c.symbol).join(", ") || "empty";
     await this.reply(chat, `✅ Stopped watching ${esc(coin.symbol)}. Watchlist: ${esc(rest)}`);
+  }
+
+  // --- the team: roles, duty, tasks
+  async cmd_roles(chat) {
+    await this.reply(chat, this.team.rolesText());
+  }
+
+  async cmd_setrole(chat, args, user) {
+    if (user !== this.ownerId) throw new UserError("Only the owner can use /setrole");
+    if (args.length < 2) throw new UserError(`Use /setrole <name> <role>. Roles: ${Object.keys(ROLES).join(", ")}`);
+    await this.reply(chat, this.team.setRole(args.slice(0, -1).join(" "), args.at(-1).toLowerCase()));
+  }
+
+  async cmd_duty(chat) {
+    await this.reply(chat, await this.team.pinText(), this.team.pinButtons().inline_keyboard);
+  }
+
+  async cmd_task(chat, args, user, msg) {
+    const sub = (args[0] || "").toLowerCase();
+    if (sub === "done") {
+      if (!/^\d+$/.test(args[1] || "")) throw new UserError("Which task? e.g. /task done 3");
+      const text = await this.team.doneTask(args[1], user);
+      await this.reply(chat, text);
+      return;
+    }
+    if (sub !== "add") throw new UserError("Use /task add <text> @name [by fri] or /task done <n>. /tasks lists them");
+    const raw = (msg?.text || "").replace(/^\/task(@\w+)?\s+add\s*/i, "");
+    // entities point into the whole message: shift them to the part after "/task add "
+    const shift = (msg?.text || "").length - raw.length;
+    const entities = (msg?.entities || []).map((e) => ({ ...e, offset: e.offset - shift }));
+    const t = await this.team.addTask(user, raw, entities);
+    const who = this.team.member(t.who);
+    await this.reply(chat, `📝 Task ${t.n} for ${who ? `<a href="tg://user?id=${who.id}">${esc(who.name)}</a>` : "?"}: ` +
+      `${esc(t.text)}${t.due ? ` · due ${this.team.taskLine(t).split(" · due ")[1]}` : ""}`);
+  }
+
+  async cmd_tasks(chat) {
+    await this.reply(chat, await this.team.tasksText());
   }
 
   async cmd_status(chat) {
@@ -634,7 +681,6 @@ Add one with /watch link, remove with /unwatch sol`);
     const who = claimerName(cq.from || {});
     if (kind === "up" || kind === "dn") {
       const vote = kind === "up" ? "up" : "down";
-      const wasApproved = approved(d, [d.who_id]);
       d.votes[String(user)] = vote;
       if (vote === "down") {
         await this.store.addFeedback({ key, title: d.title, url: d.url, by: who, at: this.now, value: d.value ?? null,
@@ -642,9 +688,6 @@ Add one with /watch link, remove with /unwatch sol`);
       }
       await this.store.saveDeal(key, d);
       await this.refreshDeal(key, d);
-      if (d.status === "claimed" && (d.cost || 0) > APPROVAL_OVER && !wasApproved && approved(d, [d.who_id])) {
-        await this.postAbout(d, `✅ #${d.n ?? "?"} approved by ${esc(who)}: ${mention(d.who || "", d.who_id)} can tap 💸 Bought.`);
-      }
       return this.answer(cq, vote === "up" ? "👍 Noted" : "👎 Noted, it's logged to tune the filters");
     }
     if (kind === "m") {
@@ -669,23 +712,23 @@ Add one with /watch link, remove with /unwatch sol`);
       await this.refreshDeal(key, d);
       return this.answer(cq, "🏷 Listed");
     }
-    if (kind === "b" && (d.cost || 0) > APPROVAL_OVER && !approved(d, [d.who_id, user])) {
-      await this.postAbout(d, `✋ #${d.n ?? "?"} costs ${euro(d.cost)}: buys over €${APPROVAL_OVER} need a 👍 on the deal ` +
-        "from another member first.");
-      return this.answer(cq, `Over €${APPROVAL_OVER}: needs a 👍 from another member first`);
-    }
+    if (kind === "b" && d.request) return this.answer(cq, `Waiting for the OK on ${euro(d.request.amount)}`);
     const ask = kind === "b" ? "paid" : "sold_for";
     const title = esc(d.title.slice(0, 60));
     const cost = ask === "paid" ? d.cost : null;
+    const manager = this.team.isManager(user);
     let q;
     let markup;
     if (cost) {
       // suggest what we know it costs; a different amount can still be typed as a reply
-      q = `💸 How much did you pay for <b>${title}</b>?\nKnown total (price + buyer fee + shipping/pickup): ` +
-        `<b>${euro(cost)}</b>.\nTap ✅ to use it, or reply to this message with a different amount.`;
+      q = (manager ? `💸 How much did you pay for <b>${title}</b>?` : `🙋 What price did you agree for <b>${title}</b>?`) +
+        `\nKnown total (price + buyer fee + shipping/pickup): <b>${euro(cost)}</b>.\n` +
+        "Tap ✅ to use it, or reply to this message with a different amount." +
+        (manager ? "" : "\nIt goes to the manager for approval.");
       markup = { inline_keyboard: [[{ text: `✅ Use ${euro(cost)}`, callback_data: `pay:${key}` }]] };
     } else if (ask === "paid") {
-      q = `💸 How much did you pay for <b>${title}</b>? Reply with the amount, e.g. 45`;
+      q = (manager ? `💸 How much did you pay for <b>${title}</b>?` : `🙋 What price did you agree for <b>${title}</b>?`) +
+        " Reply with the amount, e.g. 45";
       markup = { force_reply: true, input_field_placeholder: "amount in €" };
     } else {
       q = `✅ How much did <b>${title}</b> sell for? Reply with the amount, e.g. 80`;
@@ -730,10 +773,7 @@ Add one with /watch link, remove with /unwatch sol`);
     }
     const d = await this.store.deal(pending.key);
     if (!d) return;
-    if (pending.ask === "paid" && amount > APPROVAL_OVER && !approved(d, [d.who_id, user])) {
-      return this.reply(chat, `⚠️ ${euro(amount)} is over €${APPROVAL_OVER}: it needs a 👍 on the deal from another ` +
-        "member first. Then tap 💸 Bought again.");
-    }
+    if (pending.ask === "paid" && !this.team.isManager(user)) return this.requestBuy(chat, user, pending.key, d, amount);
     let done;
     let entry;
     if (pending.ask === "paid") {
@@ -751,6 +791,77 @@ Add one with /watch link, remove with /unwatch sol`);
     await this.refreshDeal(pending.key, d);
     await this.reply(chat, done);
     await this.money(entry, chat);
+    if (entry.kind === "buy") await this.pingSellers(d);
+  }
+
+  // --- 🙋 Request buy -> ✅ Approve / ❌ Reject (a manager pays every buy)
+  payNote(d, amount, who) {
+    return d.source === "subito" ? `Subito pickup: send ${esc(who)} ${euro(amount)} for it`
+      : `${d.source === "ebay" ? "eBay" : "Vinted"}: pay ${euro(amount)} online`;
+  }
+
+  async requestBuy(chat, user, key, d, amount) {
+    const who = this.team.member(user)?.name || d.who || "Someone";
+    d.request = { amount, by_id: user, by: who, at: this.now, msgs: [] };
+    const buttons = { inline_keyboard: [[{ text: "✅ Approve", callback_data: `ap:${key}` },
+      { text: "❌ Reject", callback_data: `rj:${key}` }]] };
+    const managers = this.team.withRole("manager");
+    const text = `🙋 ${esc(who)} asks to buy #${d.n ?? "?"} ${esc(d.title.slice(0, 50))} for <b>${euro(amount)}</b>` +
+      ` (known total ${euro(d.cost || amount)})\n${this.payNote(d, amount, who)}`;
+    for (const m of managers) {
+      const res = await this.tg.sendTo(String(m.id), text, { buttons });
+      if (res) d.request.msgs.push({ chat: String(res.chat.id), id: res.message_id });
+    }
+    const msgs = d.messages || [];
+    const target = msgs.find((x) => Telegram.isGroup(x.chat));
+    if (target) {
+      const tag = managers.map((m) => `<a href="tg://user?id=${m.id}">${esc(m.name)}</a>`).join(" ");
+      const res = await this.tg.sendTo(target.chat, `${text}\n${tag}`, { buttons, topic: TOPIC_FOR_GROUP[d.group || ""],
+        replyTo: target.id });
+      if (res) d.request.msgs.push({ chat: String(res.chat.id), id: res.message_id });
+    }
+    await this.store.saveDeal(key, d);
+    await this.refreshDeal(key, d);
+    await this.reply(chat, `🙋 Sent for approval: #${d.n ?? "?"} at ${euro(amount)}. You'll get a message when it's decided.`);
+  }
+
+  async decideBuy(cq, user, key, approve) {
+    if (!this.team.isManager(user)) return this.answer(cq, "Only a manager approves buys");
+    const d = await this.store.deal(key);
+    if (!d?.request) return this.answer(cq, "That's already decided");
+    const req = d.request;
+    delete d.request;
+    for (const m of req.msgs || []) {
+      await this.tg.call("editMessageReplyMarkup", { chat_id: m.chat, message_id: m.id, reply_markup: { inline_keyboard: [] } });
+    }
+    const boss = this.team.member(user)?.name || "The manager";
+    const n = d.n ?? "?";
+    if (!approve) {
+      await this.store.saveDeal(key, d);
+      await this.refreshDeal(key, d);
+      await this.postAbout(d, `❌ ${esc(boss)} didn't approve buying #${n} at ${euro(req.amount)}`);
+      await this.team.dm(req.by_id, `❌ ${esc(boss)} didn't approve buying #${n} at ${euro(req.amount)}. The claim is still yours.`);
+      return this.answer(cq, "Rejected");
+    }
+    Object.assign(d, { status: "bought", paid: req.amount, bought_at: this.now, approved_by: user });
+    await this.store.saveDeal(key, d);
+    await this.refreshDeal(key, d);
+    await this.postAbout(d, `✅ ${esc(boss)} approved #${n} at ${euro(req.amount)}. ${this.payNote(d, req.amount, req.by)}`);
+    await this.team.dm(req.by_id, `✅ Approved: #${n} at ${euro(req.amount)}. ${this.payNote(d, req.amount, req.by)}`);
+    this.capture?.push(`✅ Approved #${n} at ${euro(req.amount)}`);
+    await this.money({ kind: "buy", amount: -req.amount, n: d.n, deal: key }, undefined);
+    await this.pingSellers(d);
+    return this.answer(cq, "Approved");
+  }
+
+  /** Something was bought: the sellers list it. */
+  async pingSellers(d) {
+    const sellers = this.team.withRole("seller");
+    if (!sellers.length) return;
+    const n = d.n ?? "?";
+    const tag = sellers.map((m) => `<a href="tg://user?id=${m.id}">${esc(m.name)}</a>`).join(" ");
+    await this.postAbout(d, `📦 ${tag}, #${n} ${esc(d.title.slice(0, 50))} is bought: please list it. /sell ${n} writes the listing.`);
+    for (const m of sellers) await this.team.dm(m.id, `📦 #${n} ${esc(d.title.slice(0, 50))} is bought: please list it. /sell ${n} writes the listing.`);
   }
 
   // --- reminders' buttons
@@ -837,11 +948,29 @@ Add one with /watch link, remove with /unwatch sol`);
     const msg = cq.message || {};
     const chat = msg.chat?.id;
     if (!this.allowed(user)) return;   // only allowed users can press buttons
+    this.team.learn(cq.from);
     if (data === "claim" || data === "claimed") return this.onClaim(cq, msg, chat, data);
     const colon = data.indexOf(":");
     const kind = colon < 0 ? data : data.slice(0, colon);
     const rest = colon < 0 ? "" : data.slice(colon + 1);
     if (kind === "pay") return this.onUseCost(cq, chat, user, rest);
+    if (kind === "ap" || kind === "rj") return this.decideBuy(cq, user, rest, kind === "ap");
+    if (kind === "wait") return this.answer(cq, "Waiting for the manager's OK");
+    if (kind === "duty") {
+      if (rest === "on") return this.answer(cq, await this.team.start(user));
+      if (rest === "off") return this.answer(cq, await this.team.end(user));
+      await this.tg.sendTo(chat, `🙋 ${esc(this.team.member(user)?.name || "")}, how long do you need covered?`,
+        { buttons: this.team.swapChoices(user), replyTo: msg.message_id });
+      return this.answer(cq, "Pick how long");
+    }
+    if (kind === "swr") {
+      const [len, owner] = rest.split(":");
+      if (Number(owner) !== user) return this.answer(cq, "That's someone else's question");
+      const end = len === "rest" ? romeTs(rome(this.now).date, 22) : Math.min(this.now + Number(len) * 3600, romeTs(rome(this.now).date, 22));
+      await this.tg.call("editMessageReplyMarkup", { chat_id: chat, message_id: msg.message_id, reply_markup: { inline_keyboard: [] } });
+      return this.answer(cq, await this.team.requestSwap(user, this.now, end));
+    }
+    if (kind === "swt") return this.answer(cq, await this.team.takeSwap(Number(rest), user));
     if (kind === "keep" || kind === "rel") return this.onKeepRelease(cq, user, kind, rest);
     if (["c", "b", "l", "s", "up", "dn", "m"].includes(kind)) return this.onDealButton(cq, chat, user, kind, rest);
     const view = await this.view();

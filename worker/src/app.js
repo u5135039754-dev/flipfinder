@@ -13,6 +13,7 @@ import { TOPIC_FOR_GROUP, dueReminders, weeklyDue, weeklyReport } from "./group.
 import { DAY, UserError, inQuietHours, nowSeconds } from "./util.js";
 import { action, snapshot, verifyInitData } from "./webapp.js";
 import { runCrypto } from "./crypto.js";
+import { recordRun } from "./team.js";
 
 export const MENU_VERSION = 1;   // bump to set the "📱 Open app" menu button again
 
@@ -87,8 +88,13 @@ async function handleApp(request, env, opts, url) {
   const { bot } = ctx;
   if (!bot.allowed(user.id)) return json({ error: "This app is only for the flipFinder group" }, 403);
   bot.capture = [];
+  bot.team.learn(user);   // names for mentions and requests, also from the app
   try {
-    if (request.method === "GET" && url.pathname === "/app/api/state") return json(await snapshot(bot, user));
+    if (request.method === "GET" && url.pathname === "/app/api/state") {
+      const state = await snapshot(bot, user);
+      await bot.save();
+      return json(state);
+    }
     if (request.method === "POST" && url.pathname === "/app/api/action") {
       const notice = await action(bot, user, await request.json());
       await bot.save();
@@ -140,7 +146,9 @@ const API = {
       group: body.group || "", sent: now, queued: quiet });
     if (!d) return { status: "exists" };
     if (quiet) return { status: "queued", n: d.n };
-    d.messages = await tg.sendAlert(d.text, d.photo, keyboard(body.key, d), TOPIC_FOR_GROUP[d.group]);
+    d.messages = await tg.sendAlert(d.text, d.photo, keyboard(body.key, d), TOPIC_FOR_GROUP[d.group],
+      await bot.team.dealMention(now));
+    d.alerted_at = now;
     await store.saveDeal(body.key, d);
     await bot.save();
     return { status: d.messages.length ? "sent" : "failed", n: d.n };
@@ -153,6 +161,7 @@ const API = {
   async "POST /api/run"(ctx, body) {
     const { store, tg, bot } = ctx;
     if (body.status) await store.put("status", body.status);
+    await recordRun(store, body, ctx.now);   // scans per day, for the Sunday report's bot health
     for (const [key, value] of Object.entries(body.values || {})) {
       const d = await store.deal(key);
       if (d && value !== null && d.value_now !== value) {
@@ -232,7 +241,8 @@ export async function runCron(env, opts = {}) {
   }
   // weekly report, Sunday 20:00 Italy time
   if (weeklyDue(await store.get("last_weekly"), now)) {
-    const text = weeklyReport(await store.deals(), await store.feedbackSince(now - 7 * DAY), now);
+    const all = await store.deals();
+    const text = weeklyReport(all, await store.feedbackSince(now - 7 * DAY), now) + (await bot.team.weekly(all, now));
     if (await tg.sendText(text, { topic: "summary" })) await store.put("last_weekly", new Date(now * 1000)
       .toLocaleDateString("en-CA", { timeZone: "Europe/Rome" }));
   }
@@ -243,8 +253,10 @@ export async function runCron(env, opts = {}) {
     let flushed = 0;
     for (const [key, d] of queued.slice(0, MAX_QUEUE_FLUSH)) {
       if (tg.callsLeft < 8) break;   // the rest go out in 5 minutes
-      d.messages = [...(d.messages || []), ...(await tg.sendAlert(d.text, d.photo, keyboard(key, d), TOPIC_FOR_GROUP[d.group || ""]))];
+      d.messages = [...(d.messages || []), ...(await tg.sendAlert(d.text, d.photo, keyboard(key, d),
+        TOPIC_FOR_GROUP[d.group || ""], await bot.team.dealMention(now)))];
       d.queued = false;
+      d.alerted_at = now;
       await store.saveDeal(key, d);
       flushed += d.messages.length ? 1 : 0;
     }
@@ -252,6 +264,10 @@ export async function runCron(env, opts = {}) {
   }
   // claims with no update, things bought but not listed, things listed but not sold
   await bot.reminders(dueReminders(await store.deals("WHERE status IN ('claimed', 'bought', 'listed')"), now));
+  // the team: shifts ending at 22:00, nobody on duty, scheduled shifts, late tasks, the pinned message;
+  // new deals nobody claimed within 10 minutes
+  await bot.team.tick();
+  await bot.team.unclaimed(await store.deals("WHERE status = 'new' AND sent >= ?", now - 6 * 3600));
   await bot.save();
 }
 

@@ -125,3 +125,28 @@ export function inQuietHours(ts) {
   const t = rome(ts);
   return t.hour * 60 + t.minute < 7 * 60 + 30;
 }
+
+/** The moment it's `hour:minute` on `date` ("2026-10-08") in Italy, as seconds. */
+export function romeTs(date, hour, minute = 0) {
+  const [y, m, d] = date.split("-").map(Number);
+  const want = Date.UTC(y, m - 1, d, hour, minute) / 1000;
+  let ts = want;
+  for (let i = 0; i < 3; i++) {   // Italy is UTC+1 or +2: converges in a step or two
+    const r = rome(ts);
+    const [ry, rm, rd] = r.date.split("-").map(Number);
+    ts += want - Date.UTC(ry, rm - 1, rd, r.hour, r.minute) / 1000;
+  }
+  return ts;
+}
+
+/** "2026-10-08" plus n days. */
+export function addDays(date, n) {
+  const [y, m, d] = date.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+}
+
+/** "14:05" in Italy. */
+export function hhmm(ts) {
+  const r = rome(ts);
+  return `${String(r.hour).padStart(2, "0")}:${String(r.minute).padStart(2, "0")}`;
+}

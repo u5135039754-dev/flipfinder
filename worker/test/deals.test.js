@@ -15,19 +15,28 @@ test("deal lifecycle: buys come out of the pot, sales go back in, profit is shar
   assert.ok(d.status === "claimed" && d.who === "Marco");
   assert.equal(t.tg.sent("editMessageText").length + t.tg.sent("editMessageCaption").length, 2);
   assert.match(t.tg.sent("editMessageText")[0].text, /✋ Claimed by Marco/);
-  assert.equal(t.tg.sent("editMessageCaption")[0].reply_markup.inline_keyboard[0][0].text, "💸 Bought (Marco)");
-  // a stranger's tap was ignored entirely; now Marco buys it: asked for the price, answers 30
+  assert.equal(t.tg.sent("editMessageCaption")[0].reply_markup.inline_keyboard[0][0].text, "🙋 Request buy (Marco)");
+  // a stranger's tap was ignored entirely; now Marco asks to buy it at the price he agreed: 30
   t.tg.clear();
   await t.update(tap(`b:${key}`, { user: MARCO }));
-  assert.ok(t.tg.texts()[0].includes("How much did you pay") && t.tg.texts()[0].includes("Known total"));
+  assert.ok(t.tg.texts()[0].includes("What price did you agree") && t.tg.texts()[0].includes("Known total"));
   t.tg.clear();
   await t.updates(msg("abc", { user: MARCO }), msg("30", { user: MARCO }));
-  const texts = t.tg.texts();
+  let texts = t.tg.texts();
   assert.match(texts[0], /need just the amount/);
-  assert.ok(texts.includes("💸 Bought for €30.00"));
-  assert.ok(texts.some((x) => x.includes("−€30.00 bought #1") && x.includes("cash now <b>€270.00</b>")));
+  assert.ok(texts.some((x) => x.includes("Marco asks to buy #1") && x.includes("€30.00") && x.includes("Vinted: pay €30.00 online")));
+  assert.ok(texts.some((x) => x.startsWith("🙋 Sent for approval")));
   d = await t.store.deal(key);
-  assert.ok(d.status === "bought" && d.paid === 30);
+  assert.ok(d.status === "claimed" && d.request.amount === 30);
+  assert.match(keyboard(key, d).inline_keyboard[0][0].text, /⏳ Waiting for OK: €30\.00 \(Marco\)/);
+  // the owner (a manager) approves: bought, paid from the pot
+  t.tg.clear();
+  await t.update(tap(`ap:${key}`));
+  texts = t.tg.texts();
+  assert.ok(texts.some((x) => x.includes("−€30.00 bought #1") && x.includes("cash now <b>€270.00</b>")));
+  assert.ok(texts.some((x) => x.includes("approved #1 at €30.00")));
+  d = await t.store.deal(key);
+  assert.ok(d.status === "bought" && d.paid === 30 && !d.request);
   t.tg.clear();
   await t.updates(tap(`l:${key}`, { user: MARCO }), tap(`s:${key}`, { user: MARCO }), msg("75", { user: MARCO }));
   d = await t.store.deal(key);
@@ -90,7 +99,7 @@ test("the budget-mode limit is the smaller of /budget and the pot's cash", async
   assert.equal((await fresh.api("GET", "/api/state")).body.pool, null);    // no deposits yet: no cap
 });
 
-test("bought suggests the known cost; a typed amount overrides it", async () => {
+test("the known cost is suggested; a typed price overrides it; the owner buys without approval", async () => {
   const t = await setup({ settings: withMarco });
   const key = await addDeal(t.store);
   await t.updates(tap(`c:${key}`, { user: MARCO }), tap(`b:${key}`, { user: MARCO }));
@@ -101,14 +110,17 @@ test("bought suggests the known cost; a typed amount overrides it", async () => 
   assert.match(t.tg.sent("answerCallbackQuery")[0].text, /^That's for/);
   await t.update(tap(`pay:${key}`, { user: MARCO }));
   let d = await t.store.deal(key);
-  assert.ok(d.status === "bought" && d.paid === 26.95);
-  assert.ok(t.tg.texts().includes("💸 Bought for €26.95"));
-  assert.equal(t.tg.sent("editMessageReplyMarkup").at(-1).reply_markup.inline_keyboard.length, 0);   // ✅ button gone
+  assert.ok(d.status === "claimed" && d.request.amount === 26.95);   // asked, not bought
   const t2 = await setup({ settings: withMarco });
   await addDeal(t2.store);
   await t2.updates(tap(`c:${key}`, { user: MARCO }), tap(`b:${key}`, { user: MARCO }), msg("27,50", { user: MARCO }));
-  d = await t2.store.deal(key);
-  assert.equal(d.paid, 27.5);
+  assert.equal((await t2.store.deal(key)).request.amount, 27.5);
+  const t3 = await setup({ settings: withMarco });
+  await addDeal(t3.store);
+  await t3.updates(tap(`c:${key}`), tap(`b:${key}`), msg("31"));     // the owner claims and buys: no approval needed
+  d = await t3.store.deal(key);
+  assert.ok(d.status === "bought" && d.paid === 31);
+  assert.ok(t3.tg.texts().some((x) => x.startsWith("💸 How much did you pay")));
 });
 
 test("deals are numbered and found by number or name", async () => {

@@ -10,8 +10,8 @@ async function sold(t, key, paid, soldFor) {
   const d = await t.store.deal(key);
   Object.assign(d, { status: "claimed", who: "Marco", who_id: MARCO });
   await t.store.saveDeal(key, d);
-  await t.updates(tap(`b:${key}`, { user: MARCO }), msg(String(paid), { user: MARCO }), tap(`l:${key}`, { user: MARCO }),
-    tap(`s:${key}`, { user: MARCO }), msg(String(soldFor), { user: MARCO }));
+  await t.updates(tap(`b:${key}`, { user: MARCO }), msg(String(paid), { user: MARCO }), tap(`ap:${key}`),
+    tap(`l:${key}`, { user: MARCO }), tap(`s:${key}`, { user: MARCO }), msg(String(soldFor), { user: MARCO }));
 }
 
 test("deposits: owner only, posted in the group's Summary topic, /pot shows everyone's share", async () => {
@@ -36,34 +36,38 @@ test("deposits: owner only, posted in the group's Summary topic, /pot shows ever
   assert.equal((await t.store.ledger()).length, 3);
 });
 
-test("buys over €50 need a 👍 from another member; the buyer's own 👍 doesn't count", async () => {
-  const t = await setup({ settings: members });
+test("only a manager approves; a rejection keeps the claim; the seller is asked to list it", async () => {
+  const t = await setup({ settings: { ...members, roles: { [OWNER]: "manager", [MARCO]: "buyer", [LUCA]: "seller" },
+    people: { [OWNER]: "Boss", [MARCO]: "Marco", [LUCA]: "Luca" } } });
   await t.update(msg("/deposit Owner 300"));
-  const key = await addDeal(t.store, { cost: 60 });
-  await t.update(tap(`c:${key}`, { user: MARCO, first: "Marco" }));
+  const key = await addDeal(t.store, { cost: 60, source: "subito" });
+  const deal = await t.store.deal(key);
+  deal.messages = [{ chat: GROUP, id: 8, photo: false }];
+  await t.store.saveDeal(key, deal);
+  await t.updates(tap(`c:${key}`, { user: MARCO, first: "Marco" }), tap(`b:${key}`, { user: MARCO }), msg("62", { user: MARCO }));
+  const ask = t.tg.sent().filter((p) => p.text?.includes("asks to buy"));
+  assert.deepEqual(ask.map((p) => String(p.chat_id)), [String(OWNER), GROUP]);          // the manager privately + the group
+  assert.ok(ask[0].text.includes("Subito pickup: send Marco €62.00 for it"));
+  assert.deepEqual(ask[0].reply_markup.inline_keyboard[0].map((b) => b.callback_data), [`ap:${key}`, `rj:${key}`]);
   t.tg.clear();
-  await t.update(tap(`b:${key}`, { user: MARCO }));
-  assert.match(t.tg.sent("answerCallbackQuery")[0].text, /needs a 👍 from another member/);
-  assert.match(t.tg.texts()[0], /costs €60\.00: buys over €50 need a 👍/);
-  assert.equal((await t.store.deal(key)).status, "claimed");
-  await t.update(tap(`up:${key}`, { user: MARCO }));                          // own vote
-  await t.update(tap(`b:${key}`, { user: MARCO }));
-  assert.equal(t.tg.sent("answerCallbackQuery").at(-1).text.includes("needs a 👍"), true);
+  await t.update(tap(`ap:${key}`, { user: LUCA }));                                      // not a manager
+  assert.match(t.tg.sent("answerCallbackQuery")[0].text, /Only a manager/);
+  await t.update(tap(`rj:${key}`));
+  let d = await t.store.deal(key);
+  assert.ok(d.status === "claimed" && !d.request && d.who === "Marco");
+  assert.ok(t.tg.texts().some((x) => x.includes("didn't approve buying #1")));
+  assert.equal(t.tg.sent("editMessageReplyMarkup").length, 2);                            // both Approve buttons gone
+  await t.updates(tap(`b:${key}`, { user: MARCO }), msg("58", { user: MARCO }));
   t.tg.clear();
-  await t.update(tap(`up:${key}`, { user: LUCA, first: "Luca" }));
-  assert.ok(t.tg.texts().some((x) => x.includes("#1 approved by Luca") && x.includes("can tap 💸 Bought")));
-  await t.updates(tap(`b:${key}`, { user: MARCO }), msg("62", { user: MARCO }));
-  assert.equal((await t.store.deal(key)).status, "bought");
-  assert.equal(summarize(await t.store.ledger(), await t.store.deals()).cash, 238);
-});
-
-test("a typed price over €50 also needs the 👍, even when the known cost was lower", async () => {
-  const t = await setup({ settings: members });
-  const key = await addDeal(t.store);                                        // known cost €26.95
-  await t.updates(tap(`c:${key}`, { user: MARCO }), tap(`b:${key}`, { user: MARCO }), msg("70", { user: MARCO }));
-  assert.ok(t.tg.texts().some((x) => x.includes("€70.00 is over €50")));
-  assert.equal((await t.store.deal(key)).status, "claimed");
-  assert.equal((await t.store.ledger()).length, 0);
+  await t.updates(tap(`ap:${key}`), tap(`ap:${key}`));                                   // a double tap pays once
+  d = await t.store.deal(key);
+  assert.ok(d.status === "bought" && d.paid === 58);
+  assert.equal(summarize(await t.store.ledger(), await t.store.deals()).cash, 242);
+  const texts = t.tg.texts();
+  assert.ok(texts.some((x) => x.includes('tg://user?id=777">Luca</a>, #1') && x.includes("please list it")));
+  assert.ok(t.tg.sent().some((p) => String(p.chat_id) === String(LUCA) && p.text.includes("please list it")));
+  assert.ok(t.tg.sent().some((p) => String(p.chat_id) === String(MARCO) && p.text.includes("Approved: #1 at €58.00")));
+  assert.match(t.tg.sent("answerCallbackQuery").at(-1).text, /already decided/);
 });
 
 test("withdrawals are limited to the member's money and the cash; /undo adds a reversing entry", async () => {
@@ -73,7 +77,7 @@ test("withdrawals are limited to the member's money and the cash; /undo adds a r
   const d = await t.store.deal(key);
   Object.assign(d, { status: "claimed", who: "Marco", who_id: MARCO });
   await t.store.saveDeal(key, d);
-  await t.updates(tap(`b:${key}`, { user: MARCO }), msg("40", { user: MARCO }));   // €160 cash, €40 in stock
+  await t.updates(tap(`b:${key}`, { user: MARCO }), msg("40", { user: MARCO }), tap(`ap:${key}`));   // €160 cash, €40 in stock
   t.tg.clear();
   await t.updates(msg("/withdraw Marco 150"), msg("/withdraw Nobody 5"), msg("/withdraw Marco 60", { user: MARCO }));
   const r = t.tg.texts();
