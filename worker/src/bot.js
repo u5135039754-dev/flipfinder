@@ -13,7 +13,7 @@ import { DEFAULT_WATCH, MAX_WATCH, findCoin, watchlist } from "./crypto.js";
 import { hhmm, rome, romeTs } from "./util.js";
 import { UserError, closeMatches, esc, euro, g, parseNumber, queryAndRange, splitArgs } from "./util.js";
 
-export const COMMANDS_VERSION = 14;   // bump when the list below changes, so it's registered again
+export const COMMANDS_VERSION = 15;   // bump when the list below changes, so it's registered again
 export const COMMANDS = [
   ["help", "List all commands"],
   ["app", "Open the flipFinder app: deals, stock, pot and settings"],
@@ -48,6 +48,7 @@ export const COMMANDS = [
   ["fast", "Fast lane (newest listings every few minutes); owner: /fast 2, /fast off"],
   ["setrole", "Owner only: /setrole Anna seller (manager, buyer, seller, or none to remove it)"],
   ["removerole", "Owner only: /removerole Anna (blocks them right away)"],
+  ["setname", "Owner only: the name the bot uses for someone: /setname 123456789 Anna"],
   ["ledger", "Every money action, newest last: /ledger or /ledger 30"],
   ["deposit", "Owner only: money put in: /deposit Marco 100"],
   ["withdraw", "Owner only: money taken out: /withdraw Marco 50"],
@@ -57,7 +58,7 @@ export const COMMANDS = [
   ["allow", "Owner only: first step for a new member: /allow 123456789, then /setrole"],
   ["intro", "Owner only: post or update the pinned intro in every topic"],
 ];
-const OWNER_ONLY = new Set(["allow", "intro", "deposit", "withdraw", "fix", "undo", "split", "setrole", "removerole", "delnote"]);
+const OWNER_ONLY = new Set(["allow", "intro", "deposit", "withdraw", "fix", "undo", "split", "setrole", "removerole", "delnote", "setname"]);
 export const LOCKED = "🔒 You're not a member of FLIP MAFIA";
 const IN_GROUP = new Set(["member", "administrator", "creator", "restricted"]);
 // the fast lane's settings (the scanner has the same defaults in flipfinder/fastlane.py)
@@ -342,6 +343,12 @@ Add one with /watch link, remove with /unwatch sol`);
     const role = args.at(-1).toLowerCase();
     if (role === "none") return this.takeRole(chat, name);
     await this.reply(chat, this.team.setRole(name, role));
+  }
+
+  async cmd_setname(chat, args, user) {
+    if (user !== this.ownerId) throw new UserError("Only the owner can use /setname");
+    if (args.length < 2) throw new UserError("Use /setname <id> <name>, e.g. /setname 123456789 Anna");
+    await this.reply(chat, this.team.setName(args[0], args.slice(1).join(" ")));
   }
 
   async cmd_removerole(chat, args, user) {

@@ -313,3 +313,30 @@ test("every team message is valid Telegram HTML (no stray <...> tags)", async ()
     for (const tag of text.matchAll(/<([^>\s]+)[^>]*>/g)) assert.ok(ok.has(tag[1]), `bad tag <${tag[1]}> in: ${text.slice(0, 80)}`);
   }
 });
+
+test("names: Telegram's first name and username, /setname wins, refreshed from the group once a day", async () => {
+  const t = await setup({ settings: { allowed_users: [MARCO, LUCA], roles: { [MARCO]: "buyer", [LUCA]: "seller" } } });
+  t.tg.fail = (m, p) => (m === "getChatMember"
+    ? { ok: true, result: { status: "member", user: { id: p.user_id, first_name: { [LUCA]: "Luca", [MARCO]: "Marco" }[p.user_id] || "Owner", last_name: "Rossi", username: `u${p.user_id}` } } }
+    : null);
+  await t.cron(at(10));                                                 // names were missing: asked Telegram
+  let s = await t.settings();
+  assert.equal(s.people[LUCA], "Luca");                                  // first name only
+  assert.equal(s.usernames[LUCA], `u${LUCA}`);
+  const asked = t.tg.sent("getChatMember").length;
+  await t.cron(at(11));
+  assert.equal(t.tg.sent("getChatMember").length, asked);                // once a day
+  await t.updates(msg(`/setname ${LUCA} Lucky`, { user: MARCO }), msg(`/setname ${LUCA} Lucky`), msg("/roles"));
+  const r = t.tg.texts().slice(-3);
+  assert.match(r[0], /Only the owner/);
+  assert.match(r[1], /is now called Lucky/);
+  assert.match(r[2], /<b>Lucky<\/b>/);
+  await t.update(msg("hi", { user: LUCA, first: "Luca" }));              // Telegram's name doesn't override /setname
+  s = await t.settings();
+  assert.equal(s.names[LUCA], "Lucky");
+  const { snapshot } = await import("../src/webapp.js");
+  const { open } = await import("../src/app.js");
+  const { bot } = await open(t.env, { fetchFn: t.tg.fetch, now: at(12) });
+  const sc = (await snapshot(bot, { id: MARCO, first_name: "Marco" })).schedule;
+  assert.deepEqual(sc.members.filter((m) => m.role).map((m) => m.name).sort(), ["Lucky", "Marco", "Owner"].sort());
+});

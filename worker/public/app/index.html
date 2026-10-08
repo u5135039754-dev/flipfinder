@@ -597,14 +597,22 @@ function scheduleTab(d) {
       h("span", { class: "dot", style: `width:14px;height:14px;margin:0;background:${personColor(byId[sc.on.id])}` }),
       h("div", {}, h("b", {}, `${sc.on.name} is on duty`), h("div", { class: "label" }, `since ${hhmm(sc.on.since)} · until ${hhmm(sc.on.until)}`))));
   }
+  // red is only for "nobody is watching" (08:00-22:00); going over someone's share is just a heads-up
+  const nowH = romeNow().h;
+  if (!sc.on && nowH >= sc.from && nowH < sc.to) {
+    out.push(h("div", { class: "card", style: "margin-top:14px;background:var(--bad-bg);color:var(--bad);font-weight:600" },
+      "🔴 Nobody is on duty right now"));
+  }
   out.push(h("h2", {}, "Today"), h("div", { class: "card" }, sc.members.filter((m) => m.role).map((m) => {
     const goal = m.target ?? m.cap;
     const over = m.cap && m.today > m.cap;
     return h("div", { class: "row", style: "display:block" },
       h("div", { style: "display:flex;justify-content:space-between" },
         h("span", {}, h("span", { class: "dot", style: `background:${personColor(m)}` }), m.name),
-        h("b", { style: over ? "color:var(--bad)" : "" }, `${m.today} / ${goal} h${m.cap ? " max" : ""}`)),
-      h("div", { class: "bar" }, h("i", { style: `width:${Math.min(100, (m.today / goal) * 100)}%;background:${over ? "var(--bad)" : personColor(m)}` })));
+        h("b", { style: over ? "color:var(--warn)" : "" }, `${m.today} / ${goal} h${m.cap ? " max" : ""}${over ? " · over" : ""}`)),
+      h("div", { class: "bar" }, h("i", { style: `width:${Math.min(100, (m.today / goal) * 100)}%;background:${personColor(m)}` })),
+      over ? h("div", { class: "label", style: "margin-top:6px" },
+        `Over the ${goal} h share (20% of the 08:00-22:00 day). Fine now and then: maybe hand some hours to someone else.`) : null);
   })));
   out.push(h("div", { class: "seg", style: "margin-top:18px" }, ["This week", "Next week"].map((label, i) =>
     h("button", { class: state.week === i ? "on" : "", onclick: () => { tap(); state.week = i; render(false); } }, label))));

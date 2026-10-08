@@ -335,6 +335,8 @@ export async function runCron(env, opts = {}) {
       bot.changed = true;
     }
   }
+  // members' names from Telegram, once a day (sooner when one is missing)
+  await bot.team.refreshNames();
   // once a day: anyone in the group without a role? (the owner gets a list, nobody is removed)
   const today = rome(now);
   if (today.hour >= MEMBER_CHECK_HOUR && (await store.get("member_check")) !== today.date) {

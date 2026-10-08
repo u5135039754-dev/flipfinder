@@ -50,7 +50,7 @@ export class Team {
     const s = this.bot.settings;
     const ids = [this.bot.ownerId, ...(s.allowed_users || [])];
     return [...new Set(ids.map(Number))].map((id, i) => ({
-      id, name: s.people?.[id] || (id === this.bot.ownerId ? "Owner" : `user ${id}`),
+      id, name: this.nameOf(id),
       role: s.roles?.[id] || (id === this.bot.ownerId ? "manager" : ""), slot: i % SLOTS,
     }));
   }
@@ -88,15 +88,64 @@ export class Team {
     return Number(id) === this.bot.ownerId || this.member(id)?.role === "manager";
   }
 
-  /** Telegram tells us people's names with every message; keep them for /roles and mentions. */
-  learn(user) {
-    if (!user?.id) return;
-    const name = [user.first_name, user.last_name].filter(Boolean).join(" ") || (user.username ? `@${user.username}` : "");
+  /** The name shown everywhere: the one the owner set (/setname), else Telegram's first name, else @username. */
+  nameOf(id) {
     const s = this.bot.settings;
-    if (name && s.people?.[user.id] !== name) {
-      s.people = { ...(s.people || {}), [user.id]: name };
+    return s.names?.[id] || s.people?.[id] || (s.usernames?.[id] ? `@${s.usernames[id]}` : "") ||
+      (Number(id) === this.bot.ownerId ? "Owner" : `user ${id}`);
+  }
+
+  /** Telegram tells us people's first name and username with everything they send; keep them. */
+  learn(user) {
+    if (!user?.id || user.is_bot) return;
+    const s = this.bot.settings;
+    const first = String(user.first_name || user.last_name || "").trim();
+    if (first && s.people?.[user.id] !== first) {
+      s.people = { ...(s.people || {}), [user.id]: first };
       this.bot.changed = true;
     }
+    if (user.username && s.usernames?.[user.id] !== user.username) {
+      s.usernames = { ...(s.usernames || {}), [user.id]: user.username };
+      this.bot.changed = true;
+    }
+  }
+
+  /**
+   * Once a day (and within the hour when a member's name is missing): ask Telegram for each
+   * member's first name and username in our group.
+   */
+  async refreshNames() {
+    const s = this.bot.settings;
+    const group = this.bot.tg.groups[0];
+    if (!group) return 0;
+    if (!this.inDutyHours()) return 0;   // daytime only: the bot stays quiet at night
+    const today = rome(this.now).date;
+    const ids = this.members().map((m) => m.id).filter((id) => id === this.bot.ownerId || s.roles?.[id] || (s.allowed_users || []).includes(id));
+    const missing = ids.some((id) => !s.names?.[id] && !s.people?.[id] && !s.usernames?.[id]);
+    const last = await this.bot.store.get("names_refresh", { date: "", at: 0 });
+    if (last.date === today && !(missing && this.now - last.at >= 3600)) return 0;
+    await this.bot.store.put("names_refresh", { date: today, at: this.now });
+    let n = 0;
+    for (const id of ids) {
+      if (this.bot.tg.callsLeft < 8) break;
+      const cm = await this.bot.tg.call("getChatMember", { chat_id: group, user_id: id });
+      if (cm?.user) {
+        this.learn(cm.user);
+        n++;
+      }
+    }
+    return n;
+  }
+
+  /** /setname: the owner's name for someone wins over what Telegram says. */
+  setName(who, name) {
+    const m = this.find(who);
+    if (!m) throw new UserError(`I don't know "${who}": use their Telegram id (/roles lists who's in)`);
+    const clean = name.replace(/[<>]/g, "").trim().slice(0, 40);
+    if (!clean) throw new UserError("Which name? e.g. /setname 123456789 Anna");
+    this.bot.settings.names = { ...(this.bot.settings.names || {}), [m.id]: clean };
+    this.bot.changed = true;
+    return `✅ ${esc(String(m.id))} is now called ${esc(clean)}`;
   }
 
   /** Hours a day: the main watcher's target, everyone else's 20% cap. */
