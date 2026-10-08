@@ -10,10 +10,10 @@ import { Handbook } from "./handbook.js";
 import { AI, PRICES } from "./ai.js";
 import { INTROS, TOPIC_FOR_GROUP, TOPIC_NAMES, mention, pricesFor, sellListing } from "./group.js";
 import { DEFAULT_WATCH, MAX_WATCH, findCoin, watchlist } from "./crypto.js";
-import { rome, romeTs } from "./util.js";
+import { hhmm, rome, romeTs } from "./util.js";
 import { UserError, closeMatches, esc, euro, g, parseNumber, queryAndRange, splitArgs } from "./util.js";
 
-export const COMMANDS_VERSION = 13;   // bump when the list below changes, so it's registered again
+export const COMMANDS_VERSION = 14;   // bump when the list below changes, so it's registered again
 export const COMMANDS = [
   ["help", "List all commands"],
   ["app", "Open the flipFinder app: deals, stock, pot and settings"],
@@ -45,6 +45,7 @@ export const COMMANDS = [
   ["delnote", "Owner only: remove a note: /delnote 3"],
   ["ai", "AI status; owner: /ai on|off, /ai auto on|off"],
   ["aiusage", "AI spend and calls today and this month"],
+  ["fast", "Fast lane (newest listings every few minutes); owner: /fast 2, /fast off"],
   ["setrole", "Owner only: /setrole Anna seller (manager, buyer, seller, or none to remove it)"],
   ["removerole", "Owner only: /removerole Anna (blocks them right away)"],
   ["ledger", "Every money action, newest last: /ledger or /ledger 30"],
@@ -59,6 +60,10 @@ export const COMMANDS = [
 const OWNER_ONLY = new Set(["allow", "intro", "deposit", "withdraw", "fix", "undo", "split", "setrole", "removerole", "delnote"]);
 export const LOCKED = "🔒 You're not a member of FLIP MAFIA";
 const IN_GROUP = new Set(["member", "administrator", "creator", "restricted"]);
+// the fast lane's settings (the scanner has the same defaults in flipfinder/fastlane.py)
+export const FAST_DEFAULTS = { enabled: false, interval: 2, groups: ["Guitars", "Amps", "Pedals", "Electronics", "Audio"],
+  per_run: 8, backoff_until: 0 };
+const FAST_BACKOFF = 3600;
 
 export function claimerName(user) {
   const name = [user.first_name, user.last_name].filter(Boolean).join(" ");
@@ -516,6 +521,83 @@ Add one with /watch link, remove with /unwatch sol`);
     if (!Number.isInteger(id)) throw new UserError("Which note? e.g. /delnote 3 (/notes lists them)");
     await this.ai.delNote(id);
     await this.reply(chat, `🗑 Note ${id} removed`);
+  }
+
+  // --- the fast lane: settings for the scanner's quick passes between full scans
+  fastSettings() {
+    return { ...FAST_DEFAULTS, ...(this.settings.fast || {}) };
+  }
+
+  async cmd_fast(chat, args, user) {
+    const [a = "", ...rest] = args.map((x) => x.toLowerCase());
+    if (a && user !== this.ownerId) throw new UserError("Only the owner can change the fast lane");
+    const set = (changes) => {
+      this.settings.fast = { ...(this.settings.fast || {}), ...changes };
+      this.changed = true;
+    };
+    if (a === "off") {
+      set({ enabled: false });
+      return this.reply(chat, "⚡ Fast lane off. The full scan still runs every 5 min.");
+    }
+    if (/^\d+$/.test(a)) {
+      const n = Number(a);
+      if (n < 1 || n > 10) throw new UserError("Every 1 to 10 minutes, e.g. /fast 2");
+      set({ enabled: true, interval: n });
+      return this.reply(chat, `⚡ Fast lane on: the newest listings every ${n} min (${this.fastSettings().per_run} searches a pass)`);
+    }
+    if (a === "per") {
+      const n = Number(rest[0]);
+      if (!Number.isInteger(n) || n < 1 || n > 20) throw new UserError("1 to 20 searches a pass, e.g. /fast per 8");
+      set({ per_run: n });
+      return this.reply(chat, `⚡ ${n} searches a pass (about ${n * 4} s)`);
+    }
+    if (a === "groups") {
+      const known = [...new Set((await this.view()).searches.map((x) => x.group))];
+      const want = rest.join(" ").split(/[,\s]+/).filter(Boolean);
+      const groups = want.map((w) => known.find((g) => g.toLowerCase() === w)).filter(Boolean);
+      if (!groups.length || groups.length !== want.length) {
+        throw new UserError(`Groups: ${known.join(", ")}. E.g. /fast groups guitars, amps, electronics`);
+      }
+      set({ groups });
+      return this.reply(chat, `⚡ Fast lane searches: ${groups.join(", ")} (in that order)`);
+    }
+    if (a) throw new UserError("Use /fast 2, /fast off, /fast per 8, /fast groups guitars, electronics");
+    await this.reply(chat, await this.fastText());
+  }
+
+  async fastText() {
+    const fs = this.fastSettings();
+    const runs = (await this.store.get("fast_stats", [])).filter((r) => this.now - r.at < 3600);
+    const avg = (k) => (runs.length ? runs.reduce((s, r) => s + (r[k] || 0), 0) / runs.length : 0);
+    const lines = [`⚡ <b>Fast lane</b>: ${fs.enabled ? `on, every ${fs.interval} min` : "off"}`,
+      `${fs.per_run} searches a pass from: ${esc(fs.groups.join(", "))}`];
+    if (fs.backoff_until > this.now) lines.push(`⚠️ Backing off after a Vinted block: every 5 min until ${hhmm(fs.backoff_until)}`);
+    lines.push(runs.length
+      ? `Last hour: ${runs.length} passes, ${avg("secs").toFixed(1)} s each on average, ` +
+        `${Math.round(runs.reduce((s, r) => s + r.requests, 0))} Vinted page loads, ` +
+        `${runs.reduce((s, r) => s + r.blocked, 0)} blocked, ${runs.reduce((s, r) => s + r.sent, 0)} deal(s) sent`
+      : "No passes in the last hour");
+    lines.push("", "The full scan (every 5 min), eBay (every 20 min) and Subito don't change.");
+    return lines.join("\n");
+  }
+
+  /** A fast pass finished: keep its numbers; a Vinted block slows it to every 5 min for an hour (told once). */
+  async fastReport(r) {
+    const stats = await this.store.get("fast_stats", []);
+    stats.push({ at: this.now, secs: Number(r.secs) || 0, requests: Number(r.requests) || 0, blocked: Number(r.blocked) || 0,
+      searches: Number(r.searches) || 0, checked: Number(r.checked) || 0, deals: Number(r.deals) || 0, sent: Number(r.sent) || 0 });
+    await this.store.put("fast_stats", stats.slice(-300));
+    // when the last pass started and how many ran: the scanner's "too soon?" check and rotation
+    const state = await this.store.get("fast_state", { last_started: 0, passes: 0 });
+    await this.store.put("fast_state", { last_started: Number(r.started) || this.now, passes: (state.passes || 0) + 1 });
+    const fs = this.fastSettings();
+    if (!(Number(r.blocked) > 0) || fs.backoff_until > this.now) return { backoff: fs.backoff_until > this.now };
+    this.settings.fast = { ...(this.settings.fast || {}), backoff_until: this.now + FAST_BACKOFF };
+    this.changed = true;
+    await this.tg.call("sendMessage", { chat_id: this.ownerId, parse_mode: "HTML",
+      text: `⚠️ <b>Fast lane</b>: Vinted refused ${Number(r.blocked)} request(s) (403/429). It slows to every 5 min ` +
+        `for an hour, then goes back to every ${fs.interval} min by itself. The full scan carries on as usual.` });
+    return { backoff: true };
   }
 
   // --- the group: join requests, who's in it

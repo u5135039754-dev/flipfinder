@@ -153,6 +153,7 @@ const API = {
       settings: ctx.settings,
       area: await store.get("area"),
       pool: await bot.pool(),
+      fast: await store.get("fast_state", { last_started: 0, passes: 0 }),
       open: open.filter(([, d]) => d.item).map(([key, d]) => ({ key, query: d.query || "", item: d.item })),
     };
   },
@@ -205,6 +206,13 @@ const API = {
       done++;
     }
     return { status: "ok", done };
+  },
+
+  /** A fast-lane pass: its numbers (/fast), and a back-off if Vinted blocked it. */
+  async "POST /api/fast"(ctx, body) {
+    const r = await ctx.bot.fastReport(body || {});
+    await ctx.bot.save();
+    return r;
   },
 
   /** The owner's test before switching the AI on: checks of recent deals, returned here, posted nowhere. */

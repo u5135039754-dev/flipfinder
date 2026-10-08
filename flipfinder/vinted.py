@@ -151,10 +151,12 @@ class VintedClient:
         })
         self._has_cookie = False
         self.blocked = 0   # 403/429 answers this run (sold-price checks back off when there are any)
+        self.requests = 0  # page loads this run (for the fast lane's numbers)
 
     def _refresh_cookie(self):
         # Visiting the homepage gives us the anonymous session cookie the API needs
         self.session.cookies.clear()
+        self.requests += 1
         r = self.session.get(f"https://{self.domain}/", timeout=20)
         r.raise_for_status()
         self._has_cookie = True
@@ -166,6 +168,7 @@ class VintedClient:
         url = f"https://{self.domain}{path}"
         for attempt in range(4):
             time.sleep(self.request_delay + random.uniform(0, 1))
+            self.requests += 1
             r = self.session.get(url, params=params, timeout=20)
             if r.status_code in (401, 403):
                 self.blocked += r.status_code == 403
@@ -199,6 +202,7 @@ class VintedClient:
                 return "unknown"
         time.sleep(self.request_delay + random.uniform(0, 1))
         try:
+            self.requests += 1
             r = self.session.get(f"https://{self.domain}/items/{item_id}", timeout=20)
         except requests.RequestException:
             return "unknown"

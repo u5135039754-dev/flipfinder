@@ -1,0 +1,44 @@
+# The fast lane: between full scans, the newest listings of the top searches (flipfinder/fastlane.py).
+# GitHub's own schedule can't run more often than every 5 min, so cron-job.org starts this every
+# minute through the GitHub API. A run that isn't due (fast lane off, quiet hours, too soon, backing
+# off after a Vinted block) stops in a second. Turned on and off with /fast in Telegram.
+name: flipFinder fast lane
+
+on:
+  workflow_dispatch:
+
+# One pass at a time, and at most one waiting: GitHub drops older waiting runs, so they never pile up
+concurrency:
+  group: flipfinder-fast
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  fast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # The full scan's seen list and price pools, read only: this lane never saves the cache
+      # (the full scan owns it, with the eBay call counter)
+      - uses: actions/cache/restore@v4
+        with:
+          path: data
+          key: flipfinder-data-${{ github.run_id }}
+          restore-keys: flipfinder-data-
+
+      - name: Fast pass
+        env:
+          FLIPFINDER_API_URL: ${{ secrets.FLIPFINDER_API_URL }}
+          FLIPFINDER_API_KEY: ${{ secrets.FLIPFINDER_API_KEY }}
+        run: python main.py --fast

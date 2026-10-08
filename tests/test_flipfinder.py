@@ -1523,3 +1523,92 @@ def test_deal_record_carries_what_the_ai_check_needs_and_pools_stay_small(tmp_pa
     saved = json.loads((tmp_path / "pools.json").read_text())["k"]["items"][0]
     assert "photos" not in saved and "description" not in saved
     assert cache.get("k")[0].title == "Boss DS-1 distortion"
+
+
+# --- the fast lane
+
+def test_fast_lane_timing_rules():
+    from datetime import datetime
+    from flipfinder import fastlane
+    rome = lambda h, m, sec=0: datetime(2026, 10, 7, h, m, sec, tzinfo=fastlane.ROME).timestamp()
+    off = fastlane.settings({"settings": {}})
+    assert off["enabled"] is False and off["interval"] == 2 and off["per_run"] == 8      # off until /fast 2
+    assert fastlane.due(off, rome(12, 0)) == (False, "the fast lane is off (/fast 2 turns it on)")
+    on = fastlane.settings({"settings": {"fast": {"enabled": True, "interval": 2}}})
+    last = rome(12, 0)
+    assert not fastlane.due(on, rome(12, 1, 10), last)[0]          # triggered a minute later: too soon
+    assert fastlane.due(on, rome(12, 1, 40), last)[0]              # late start of the next one: goes
+    assert fastlane.due(on, rome(12, 2, 30), last)[0]
+    assert fastlane.due(on, rome(7, 58), 0)[1].startswith("quiet hours")
+    backing = {**on, "backoff_until": rome(13, 0)}
+    assert fastlane.interval(backing, rome(12, 30)) == 5 and fastlane.interval(backing, rome(13, 1)) == 2
+    assert not fastlane.due(backing, rome(12, 3), last)[0] and "backing off" in fastlane.due(backing, rome(12, 3), last)[1]
+    assert fastlane.due(backing, rome(12, 5), last)[0]
+
+
+def test_fast_lane_picks_guitars_first_and_rotates_through_the_list():
+    from types import SimpleNamespace as NS
+    from flipfinder import fastlane
+    searches = ([NS(query=f"phone {n}", enabled=True, budget=False, g="Electronics") for n in range(6)] +
+                [NS(query=f"guitar {n}", enabled=True, budget=False, g="Guitars") for n in range(6)] +
+                [NS(query="pedal cheap", enabled=True, budget=True, g="Budget"), NS(query="off", enabled=False, budget=False, g="Guitars")])
+    cfg = NS(searches=searches)
+    fs = {**fastlane.DEFAULTS, "enabled": True, "per_run": 8}
+    group = lambda s: s.g
+    first = fastlane.this_pass(cfg, fs, group, 0)
+    second = fastlane.this_pass(cfg, fs, group, 1)
+    assert first == [f"guitar {n}" for n in range(6)] + ["phone 0", "phone 1"]      # guitars first, 8 a pass
+    assert second == [f"phone {n}" for n in range(2, 6)]                            # then the rest
+    assert fastlane.this_pass(cfg, fs, group, 2) == first                            # and round again
+    assert "pedal cheap" not in first + second and "off" not in first + second     # budget + disabled: full scan only
+
+
+def test_fast_scan_reads_the_cache_and_never_rebuilds_or_saves(tmp_path: Path):
+    from flipfinder.scanner import _key
+    s = _fake_scanner(tmp_path, 3, lambda searches: [_key(x) for x in searches])
+    s.pools.put(_key(s.cfg.searches[0]), [titled(900 + n, "thing 0 128GB", 300, "X") for n in range(10)])
+    s.pools.save()
+    before = (tmp_path / "pools.json").read_text(), (tmp_path / "seen.json").read_text()
+    deals = s.fast_scan(["thing 0", "thing 1"])      # thing 1 has no cached pool: skipped, not rebuilt
+    assert len(deals) == 5 and s.checked == 5
+    assert ((tmp_path / "pools.json").read_text(), (tmp_path / "seen.json").read_text()) == before
+    assert not hasattr(s, "pool_rebuilds") or s.pool_rebuilds == 0
+    s.seen = SeenStore(tmp_path / "empty.json")       # no saved scan yet: nothing to compare with
+    assert s.fast_scan(["thing 0"]) == []
+
+
+def test_a_fast_pass_sends_reports_and_skips_when_not_due(tmp_path: Path, monkeypatch):
+    import main as main_mod
+    from flipfinder import fastlane
+    (tmp_path / "c.yaml").write_text(f"""
+seen_file: {(tmp_path / 'data' / 'seen.json').as_posix()}
+searches:
+  - query: boss katana
+    group: Amps
+""", encoding="utf-8")
+    deal = evaluate(titled(1, "Boss Katana 50", 80, "Boss"), [titled(10 + i, "Boss Katana 50", 200, "Boss") for i in range(12)],
+                    Rules(min_profit=12, min_roi=35, max_roi=150))
+
+    class FastScanner:
+        def __init__(self, cfg):
+            self.client, self.checked = type("V", (), {"requests": 9, "blocked": 1})(), 3
+
+        def fast_scan(self, queries):
+            assert queries == ["boss katana"]
+            return [deal]
+
+    cloud = FakeCloud({"settings": {"fast": {"enabled": True, "interval": 1}}, "fast": {"last_started": 0, "passes": 3}})
+    cloud.fast_report = lambda body: cloud.calls.append(("fast", body)) or {}
+    monkeypatch.setattr(main_mod, "cloud_from_env", lambda: cloud)
+    monkeypatch.setattr(main_mod, "Scanner", FastScanner)
+    monkeypatch.setattr(fastlane, "due", lambda fs, now, last: (True, ""))
+    monkeypatch.setattr(sys, "argv", ["main.py", "--fast", "--config", str(tmp_path / "c.yaml")])
+    assert main_mod.main() == 0
+    assert [c[0] for c in cloud.calls] == ["state", "deal", "analyze", "fast"]
+    report = cloud.calls[-1][1]
+    assert report["requests"] == 9 and report["blocked"] == 1 and report["sent"] == 1 and report["searches"] == 1
+    assert report["started"] > 0
+    cloud.calls.clear()
+    monkeypatch.setattr(fastlane, "due", lambda fs, now, last: (False, "quiet hours"))
+    assert main_mod.main() == 0
+    assert [c[0] for c in cloud.calls] == ["state"]                 # not due: nothing searched, nothing sent

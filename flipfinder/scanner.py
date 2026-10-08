@@ -25,6 +25,7 @@ log = logging.getLogger(__name__)
 # expire together and push a run past the workflow timeout, so only this many are
 # rebuilt per run; the rest keep their older pool until their turn.
 MAX_POOL_REBUILDS = 4
+FAST_PER_PAGE = 24   # the fast lane only needs the listings that appeared since the last pass
 # A newly added search alerts on at most this many of the deals already listed
 # (the best ones); the rest of its current listings are just remembered.
 SEED_ALERTS = 3
@@ -366,8 +367,10 @@ class Scanner:
             log.info("'%s': price pool waits for the next run", s.query)
             return []
         pool = _merge(pool, self._other_pools(s), newest, ebay_newest, local)
-        rules = self._rules(s)
+        return [tag(d, s) for d in self._evaluate(s, fresh, pool, self._rules(s))]
 
+    def _evaluate(self, s: Search, fresh: list[Item], pool: list[Item], rules: Rules) -> list[Deal]:
+        """New listings against the price pool: the deals (with real Vinted shipping), near misses noted."""
         deals = []
         for item in fresh:
             self.seen.add(item.key)
@@ -400,7 +403,46 @@ class Scanner:
             elif deal and any(b.startswith(NEW_SELLER) for b in deal.blocked):
                 self.seller_skipped += 1
                 log.info("'%s': skipped a deal, brand-new seller at +%.0f%% ROI (item %s)", s.query, deal.roi, item.id)
-        return [tag(d, s) for d in deals]
+        return deals
+
+    def fast_scan(self, queries: list[str]) -> list[Deal]:
+        """
+        The fast lane: only the first page of the newest Vinted listings for a few searches,
+        checked against the cached price pools (Vinted, and eBay/Subito as last saved). No pool
+        rebuilds, no eBay or Subito calls, no sold checks, and nothing is saved: the full scan
+        owns the cache. A deal found here and again by the full scan is sent once (the Worker
+        refuses a listing it already has).
+        """
+        self.checked, self.failed_searches, self.near_misses, self.seller_skipped = 0, 0, [], 0
+        self.first_ebay = self.first_subito = False
+        if self.seen.is_empty:
+            log.info("Fast lane: no saved scan data yet, waiting for a full scan")
+            return []
+        wanted = {q.lower() for q in queries}
+        deals: list[Deal] = []
+        for s in sorted(self.cfg.searches, key=lambda x: not x.budget):
+            if not s.enabled or s.query.lower() not in wanted or not self.known.has(s):
+                continue
+            pool = self.pools.get(_key(s), any_age=True)
+            if not pool:
+                continue
+            try:
+                newest = self.client.search(s.query, order="newest_first", per_page=FAST_PER_PAGE,
+                                            price_from=s.price_from, price_to=s.price_to, extra=s.filters)
+            except Exception as e:
+                self.failed_searches += 1
+                log.error("Fast lane: search '%s' failed: %s", s.query, e)
+                continue
+            fresh = [i for i in newest if i.key not in self.seen]
+            log.info("Fast lane '%s': %d newest, %d new", s.query, len(newest), len(fresh))
+            if not fresh:
+                continue
+            keys = ([f"ebay {self._ebay_category(s)} " + _key(s)] if self.ebay else []) + ["subito " + _key(s)]
+            cached = [p for p in (self.pools.get(k, any_age=True) for k in keys) if p]
+            pool = _merge(pool, [i for p in cached for i in p], newest)
+            deals += [tag(d, s) for d in self._evaluate(s, fresh, pool, self._rules(s))]
+        deals.sort(key=lambda d: (d.budget, d.per_euro if d.budget else 0, d.rating, d.profit), reverse=True)
+        return deals
 
     def _seed(self, s: Search, listed: list[Item], fresh: list[Item]):
         """

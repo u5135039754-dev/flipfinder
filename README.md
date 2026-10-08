@@ -242,6 +242,14 @@ Kept in the Worker's private storage (names and roles too, never in the repo).
 - **Sunday report** adds duty hours vs target, deals caught per shift, average reaction time, open
   tasks, stock waiting to be listed or sold, and bot health.
 
+### Fast lane
+
+Off by default. /fast 2 checks the newest listings of the guitar and electronics searches every
+2 minutes between full scans (8 searches a pass, rotating; /fast per, /fast groups), against the
+saved price pools: no pool rebuilds, no eBay or Subito calls. The full scan, eBay and Subito keep
+their own timing. A Vinted 403/429 slows it to every 5 minutes for an hour and tells the owner.
+It's the `fastlane.yml` workflow, started every minute by a cron-job.org job through the GitHub API.
+
 ### AI checks (Claude)
 
 Optional, off by default (/ai on). Each deal gets a 🔍 Check with AI button: a member taps it and

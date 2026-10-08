@@ -105,6 +105,10 @@ class Cloud:
             log.warning("AI check request failed: %s", e)
             return {}
 
+    def fast_report(self, body: dict) -> dict:
+        """A fast-lane pass: time, page loads, blocks (the Worker backs off and tells the owner)."""
+        return self._call("POST", "/api/fast", body) or {}
+
     def put_demand(self, table: dict):
         self._call("PUT", "/api/demand", {"updated": time.time(), "searches": table})
 

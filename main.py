@@ -5,6 +5,7 @@ flipFinder entry point.
   python main.py --once          one scan then exit (used by GitHub Actions)
   python main.py --dry-run       print deals in the terminal, don't send them
   python main.py --test-telegram send a sample message to check the Worker and the bot work
+  python main.py --fast          one fast-lane pass: newest listings of the top searches (see fastlane.py)
 
 Settings changed from Telegram, deal tracking and the home area live in the Cloudflare
 Worker's private storage (FLIPFINDER_API_URL / FLIPFINDER_API_KEY); the Worker also sends
@@ -21,11 +22,12 @@ import sys
 import time
 
 from flipfinder import config as config_mod
+from flipfinder import fastlane
 from flipfinder.analyzer import Deal, market_value
 from flipfinder.cloud import Cloud
 from flipfinder.health import FAIL_ALERT_AFTER, RunStats, miss_record
 from flipfinder.scanner import Scanner, _key, describe_miss
-from flipfinder.settings import apply_area, apply_settings, effective_budget, set_budget
+from flipfinder.settings import apply_area, apply_settings, effective_budget, search_group, set_budget
 from flipfinder.telegram import format_deal
 from flipfinder.vinted import Item
 
@@ -61,12 +63,49 @@ def prepare(cfg, state: dict | None):
     return cfg
 
 
+def fast_pass(cloud: Cloud | None, args) -> int:
+    """One fast-lane pass. Never fails the workflow for Vinted trouble: it reports and backs off."""
+    started = time.time()
+    state = cloud.state() if cloud else None
+    fs = fastlane.settings(state)
+    last = (state or {}).get("fast") or {}
+    if args.force:
+        fs = {**fs, "enabled": True}
+    run, why = fastlane.due(fs, started, last.get("last_started", 0))
+    if not run and not args.force:
+        logging.info("Fast lane: skipped, %s", why)
+        return 0
+    cfg = prepare(config_mod.load(args.config), state)
+    queries = fastlane.this_pass(cfg, fs, search_group, last.get("passes", 0))
+    scanner = Scanner(cfg)
+    deals = scanner.fast_scan(queries)
+    sent_keys = []
+    for deal in deals[:MAX_ALERTS_PER_SCAN]:
+        if args.dry_run:
+            print("\n" + format_deal(deal) + "\n")
+            continue
+        if cloud.send_deal(deal, format_deal(deal)) == "sent":
+            sent_keys.append(deal.item.key)
+    secs = round(time.time() - started, 1)
+    vinted = scanner.client
+    logging.info("Fast lane: %d searches, %d Vinted page loads, %d blocked (403/429), %d new listing(s) checked, "
+                 "%d deal(s), %.1fs", len(queries), vinted.requests, vinted.blocked, scanner.checked, len(deals), secs)
+    if cloud and not args.dry_run:
+        if sent_keys:
+            cloud.analyze(sent_keys)
+        cloud.fast_report({"started": started, "secs": secs, "requests": vinted.requests, "blocked": vinted.blocked,
+                           "searches": len(queries), "checked": scanner.checked, "deals": len(deals), "sent": len(sent_keys)})
+    return 0
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="flipFinder - flip alerts")
     p.add_argument("--config", default="config.yaml")
     p.add_argument("--once", action="store_true")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--test-telegram", action="store_true")
+    p.add_argument("--fast", action="store_true", help="one fast-lane pass")
+    p.add_argument("--force", action="store_true", help="with --fast: run even if it isn't due")
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args()
 
@@ -87,6 +126,9 @@ def main() -> int:
         ok = any(res.get("notified", []))
         print("Sent, check Telegram." if ok else "Failed, see the error above.")
         return 0 if ok else 1
+
+    if args.fast:
+        return fast_pass(cloud, args)
 
     stats = None if args.dry_run else RunStats(config_mod.load(args.config).seen_file.parent / "stats.json")
     catalog_sent = False
