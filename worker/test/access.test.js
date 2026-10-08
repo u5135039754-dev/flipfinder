@@ -184,3 +184,17 @@ test("joins and leaves are tracked; the webhook is told to send join requests an
   assert.deepEqual(hooks[0], { url: "https://w/telegram", secret_token: "hook-secret",
     allowed_updates: ["message", "callback_query", "chat_join_request", "chat_member"] });
 });
+
+test("two requests at once don't undo each other's settings (a /setrole during the 5-min job is kept)", async () => {
+  const t = await setup({ settings: { allowed_users: [MARCO, LUCA], roles: {} } });
+  const { open } = await import("../src/app.js");
+  // the 5-min job reads settings, then a /setrole comes in and is saved, then the job saves its own change
+  const job = await open(t.env, { fetchFn: t.tg.fetch, now: t.now });
+  await t.update(msg(`/setrole ${LUCA} seller`));
+  job.bot.settings.commands_version = 99;
+  job.bot.changed = true;
+  await job.bot.save();
+  const s = await t.settings();
+  assert.equal(s.roles[LUCA], "seller");                   // the role survived
+  assert.equal(s.commands_version, 99);                    // and so did the job's change
+});

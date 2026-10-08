@@ -74,6 +74,7 @@ export class Bot {
   /** store: Store; tg: Telegram; settings from the store; now in seconds. */
   constructor({ store, tg, ownerId, settings, now, fetchFn, geckoKey, aiKey }) {
     Object.assign(this, { store, tg, settings, now });
+    this.loaded = structuredClone(settings || {});   // as read: save() writes back only what this run changed
     this.fetchFn = fetchFn || ((...a) => fetch(...a));   // CoinGecko lookups for /watch
     this.geckoKey = geckoKey || "";
     this.ownerId = Number(ownerId);
@@ -185,7 +186,20 @@ export class Bot {
       this.settings.chat_migrations = { ...(this.settings.chat_migrations || {}), ...this.tg.newMigrations };
       this.changed = true;
     }
-    if (this.changed) await this.store.put("settings", this.settings);
+    if (this.changed) {
+      // Another request (the 5-min job, a command) may have saved settings since we read them:
+      // start from what's stored now and apply only the parts this run changed, so nothing is lost
+      const fresh = await this.store.settings();
+      for (const k of new Set([...Object.keys(this.settings), ...Object.keys(this.loaded)])) {
+        if (JSON.stringify(this.settings[k]) === JSON.stringify(this.loaded[k])) continue;
+        if (this.settings[k] === undefined) delete fresh[k];
+        else fresh[k] = this.settings[k];
+      }
+      await this.store.put("settings", fresh);
+      this.loaded = structuredClone(fresh);
+      Object.assign(this.settings, fresh);
+      this.changed = false;
+    }
     for (const [, newId] of moved) {
       await this.tg.sendText(`ℹ️ Your Telegram group was upgraded to a supergroup, so its chat id changed to ` +
         `<code>${newId}</code>. flipFinder switched to it by itself.`, { chats: [String(this.ownerId)] });
