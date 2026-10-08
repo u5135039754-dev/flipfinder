@@ -37,14 +37,43 @@ async function getJson(fetchFn, url, apiKey) {
   }
 }
 
-/** Prices in EUR, 24 h change and 24 h volume for the watchlist: {id: {price, change, volume}}. */
+/**
+ * Prices in EUR, 24 h change and 24 h volume for the watchlist: {id: {price, change, volume, source}}.
+ * CoinGecko first (it needs the free Demo key from Cloudflare: without one it answers 429); any coin
+ * it didn't give comes from Coinbase, then Kraken (price and 24 h change only, no volume).
+ */
 export async function markets(fetchFn, coins, apiKey) {
   const ids = coins.map((c) => c.id).join(",");
   const data = await getJson(fetchFn, `${GECKO}/coins/markets?vs_currency=eur&ids=${encodeURIComponent(ids)}` +
     "&price_change_percentage=24h", apiKey);
-  if (!Array.isArray(data)) return null;
-  return Object.fromEntries(data.map((m) => [m.id, { price: m.current_price, change: m.price_change_percentage_24h,
-    volume: m.total_volume }]));
+  const out = Array.isArray(data) ? Object.fromEntries(data.filter((m) => m.current_price != null)
+    .map((m) => [m.id, { price: m.current_price, change: m.price_change_percentage_24h, volume: m.total_volume, source: "CoinGecko" }])) : {};
+  for (const c of coins) {
+    if (out[c.id]) continue;
+    const p = (await coinbasePrice(fetchFn, c.symbol)) || (await krakenPrice(fetchFn, c.symbol));
+    if (p) out[c.id] = p;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/** Coinbase's public 24 h stats: last price and the price 24 h ago. */
+export async function coinbasePrice(fetchFn, symbol) {
+  const d = await getJson(fetchFn, `https://api.exchange.coinbase.com/products/${encodeURIComponent(symbol.toUpperCase())}-EUR/stats`);
+  const last = Number(d?.last);
+  const open = Number(d?.open);
+  if (!(last > 0)) return null;
+  return { price: last, change: open > 0 ? (last / open - 1) * 100 : null, volume: null, source: "Coinbase" };
+}
+
+/** Kraken's public ticker: last price and today's opening price (00:00 UTC). */
+export async function krakenPrice(fetchFn, symbol) {
+  const sym = symbol.toUpperCase() === "BTC" ? "XBT" : symbol.toUpperCase();
+  const d = await getJson(fetchFn, `https://api.kraken.com/0/public/Ticker?pair=${encodeURIComponent(sym)}EUR`);
+  const t = d && !d.error?.length ? Object.values(d.result || {})[0] : null;
+  const last = Number(t?.c?.[0]);
+  const open = Number(t?.o);
+  if (!(last > 0)) return null;
+  return { price: last, change: open > 0 ? (last / open - 1) * 100 : null, volume: null, source: "Kraken" };
 }
 
 /** "Normal" 24 h volume: the average of the rolling 24 h volume over the last 7 days. */
@@ -98,18 +127,43 @@ export async function headlines(fetchFn, n = 5) {
       if (r.ok) all.push(...parseRss(await r.text(), source));
     } catch { /* one feed down: the other still counts */ }
   }
-  const seen = new Set();
-  return all.sort((a, b) => b.at - a.at).filter((h) => {
-    const k = h.title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().slice(0, 60);
-    if (seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  }).slice(0, n);
+  const kept = [];
+  for (const h of all.sort((a, b) => b.at - a.at)) {
+    if (kept.some((k) => sameStory(k.title, h.title))) continue;   // the same story from the other site
+    kept.push(h);
+    if (kept.length >= n) break;
+  }
+  return kept;
+}
+
+const STOP = new Set(["the", "and", "for", "with", "from", "into", "after", "amid", "over", "says", "said", "its", "this",
+  "that", "are", "was", "has", "have", "will", "new", "how", "why", "what", "who", "as", "to", "of", "in", "on", "at", "a", "an", "is"]);
+
+/** The words that carry a headline: lower case, no small words, plural "s" dropped ("surges" = "surge"). */
+function storyWords(title) {
+  const t = title.toLowerCase()
+    .replace(/\b([a-z])\.([a-z])\.?/g, "$1$2")                          // "U.S." = "US"
+    .replace(/(\$?\d+(?:\.\d+)?)\s*(?:billion|bn)\b/g, "$1b")          // "$1 billion" = "$1B"
+    .replace(/(\$?\d+(?:\.\d+)?)\s*(?:million|mn)\b/g, "$1m");
+  return new Set(t.replace(/[^a-z0-9$%. ]+/g, " ").split(/\s+/)
+    .map((w) => w.replace(/[.]+$/, "").replace(/(?<=[a-z]{3})s$/, "")).filter((w) => w.length >= 2 && !STOP.has(w)));
+}
+
+/** Two headlines about the same story: most of the shorter one's key words are in the other. */
+export function sameStory(a, b) {
+  const x = storyWords(a);
+  const y = storyWords(b);
+  const small = Math.min(x.size, y.size);
+  if (small < 3) return a.trim().toLowerCase() === b.trim().toLowerCase();
+  let both = 0;
+  for (const w of x) if (y.has(w)) both++;
+  return both / small >= 0.6;
 }
 
 // --- messages
 
 const pct = (x) => `${x >= 0 ? "▲" : "▼"}${Math.abs(x).toFixed(1)}%`;
+const change = (x) => `(${x >= 0 ? "+" : "−"}${Math.abs(x).toFixed(1)}%)`;
 const eur = (x) => (x >= 100 ? `€${num(x, 0)}` : x >= 1 ? `€${num(x, 2)}` : `€${Number(x.toPrecision(3))}`);
 
 export function volumeText(volume, avg) {
@@ -125,8 +179,9 @@ export function digest({ coins, prices, avgs, news, trend, now }) {
       lines.push(`${esc(c.symbol)}: no price right now`);
       continue;
     }
-    const vol = volumeText(p.volume, avgs?.[c.id]?.avg);
-    lines.push(`${esc(c.symbol)} ${eur(p.price)} ${p.change != null ? pct(p.change) : ""}${vol ? ` · ${vol}` : ""}`);
+    const vol = p.volume ? volumeText(p.volume, avgs?.[c.id]?.avg) : "";
+    lines.push(`${esc(c.symbol)} ${eur(p.price)}${p.change != null ? ` ${change(p.change)}` : ""}${vol ? ` · ${vol}` : ""}` +
+      (p.source && p.source !== "CoinGecko" ? ` <i>(${p.source})</i>` : ""));
   }
   lines.push("", "<b>Headlines</b>");
   if (news.length) news.forEach((h, i) => lines.push(`${i + 1}. <a href="${esc(h.link)}">${esc(h.title)}</a> (${h.source})`));
@@ -159,7 +214,7 @@ export async function runCrypto({ store, tg, settings, now, fetchFn, apiKey }) {
   }
   const send = async (text) => {
     let ok = false;
-    for (const g of groups) ok = (await tg.sendTo(g, text, { topic: "crypto" })) !== null || ok;
+    for (const g of groups) ok = (await tg.sendTo(g, text, { topic: "crypto", preview: false })) !== null || ok;
     return ok;
   };
   const sent = [];
@@ -174,7 +229,7 @@ export async function runCrypto({ store, tg, settings, now, fetchFn, apiKey }) {
       }
     }
     const avg = state.avgs[c.id]?.avg;
-    if (avg && p.volume / avg >= VOLUME_ALERT && now - (last.volume || 0) >= ALERT_EVERY) {
+    if (avg && p.volume && p.volume / avg >= VOLUME_ALERT && now - (last.volume || 0) >= ALERT_EVERY) {
       if (await send(`📈 <b>${esc(c.symbol)} trading ${(p.volume / avg).toFixed(1)}× its normal volume</b> ` +
         `(24 h vs the 7-day average) · ${eur(p.price)} ${p.change != null ? pct(p.change) : ""}\n<i>${DISCLAIMER}</i>`)) {
         last.volume = now;

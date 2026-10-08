@@ -61,11 +61,11 @@ export class Telegram {
   }
 
   /** One message to one chat; in a group it goes to `topic` (General if that topic is unknown). */
-  async sendTo(chat, text, { buttons, topic, replyTo, photo } = {}) {
+  async sendTo(chat, text, { buttons, topic, replyTo, photo, preview = true } = {}) {
     chat = this.migrations[String(chat)] || String(chat);
     const payload = { chat_id: chat, parse_mode: "HTML" };
     if (photo) Object.assign(payload, { photo, caption: text });
-    else Object.assign(payload, { text, disable_web_page_preview: false });
+    else Object.assign(payload, { text, disable_web_page_preview: !preview });
     if (buttons) payload.reply_markup = buttons;
     const thread = topic && Telegram.isGroup(chat) ? this.topics[topic] : null;
     if (thread) payload.message_thread_id = thread;
