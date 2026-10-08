@@ -149,6 +149,28 @@
   .dutybtn .timer { font-size: 22px; font-weight: 800; letter-spacing: 0.01em; font-variant-numeric: tabular-nums; line-height: 1.1; }
   .dutybtn .sub { font-size: 11px; font-weight: 600; opacity: 0.9; text-transform: uppercase; letter-spacing: 0.06em; }
   .duty .label-big { margin-top: 14px; font-size: 17px; font-weight: 700; }
+  /* the handbook page */
+  .hb-hero { text-align: center; padding: 6px 12px 18px; }
+  .hb-hero .book { font-size: 44px; line-height: 1; }
+  .hb-hero h2 { all: unset; display: block; font-size: 21px; font-weight: 800; letter-spacing: 0.02em; margin-top: 10px; }
+  .hb-hero p { margin: 6px 0 0; color: var(--muted); font-size: 14.5px; line-height: 1.4; }
+  .hb { padding: 0; overflow: hidden; }
+  .hb-head { width: 100%; border: 0; background: none; color: inherit; display: flex; align-items: center; gap: 14px; padding: 14px 16px; text-align: left; font: inherit; cursor: pointer; }
+  .hb-icon { width: 44px; height: 44px; border-radius: 14px; display: grid; place-items: center; font-size: 22px; flex: none; }
+  .hb-head .t { flex: 1; min-width: 0; }
+  .hb-head .t b { display: block; font-size: 16.5px; }
+  .hb-head .t span { color: var(--muted); font-size: 13px; }
+  .hb-head .chev { color: var(--muted); transition: transform 0.2s ease; font-size: 20px; }
+  .hb.open .chev { transform: rotate(90deg); }
+  .hb-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.25s ease; }
+  .hb.open .hb-body { grid-template-rows: 1fr; }
+  .hb-body > div { overflow: hidden; }
+  .hb ol { list-style: none; counter-reset: r; margin: 0; padding: 2px 16px 14px; }
+  .hb li { counter-increment: r; display: flex; gap: 12px; padding: 9px 0; border-top: 1px solid var(--line); font-size: 14.5px; line-height: 1.4; }
+  .hb li::before { content: counter(r); flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
+    font-size: 12px; font-weight: 700; background: var(--hb-tint); color: var(--hb-ink); margin-top: -1px; }
+  .hb-foot { text-align: center; color: var(--muted); font-size: 12.5px; font-style: italic; margin: 18px 0 8px; }
+  .hb-link { width: 100%; }
   .duty .next { margin-top: 4px; font-size: 13.5px; color: var(--muted); text-align: center; }
   .gridwrap { position: relative; }
   .grid { display: grid; grid-template-columns: 34px repeat(7, 1fr); gap: 3px; }
@@ -228,6 +250,8 @@ const PEOPLE = { dark: ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "
   light: ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#4a3aa7"] };
 const ROME = "Europe/Rome";
 const state = { tab: "deals", data: null, cat: "All", platform: "All", max: null, busy: false, week: 0 };
+const startParam = tg?.initDataUnsafe?.start_param || new URLSearchParams(location.hash.slice(1)).get("tgWebAppStartParam") || "";
+if (startParam === "handbook") { state.tab = "handbook"; state.back = "deals"; }
 try { Object.assign(state, JSON.parse(localStorage.getItem("ff-filters") || "{}"), { busy: false, data: null }); } catch {}
 state.tab = new URLSearchParams(location.search).get("tab") || state.tab;
 
@@ -339,7 +363,9 @@ function render(animate = true) {
   }));
   document.getElementById("cash").textContent = d?.pot?.started ? `Pot ${euro0(d.pot.cash)}` : "";
   const main = document.getElementById("main");
-  main.replaceChildren(...(d ? ({ deals: dealsTab, stock: stockTab, pot: potTab, schedule: scheduleTab, settings: settingsTab })[state.tab](d) : skeleton()));
+  main.replaceChildren(...(d ? ({ deals: dealsTab, stock: stockTab, pot: potTab, schedule: scheduleTab, settings: settingsTab,
+    handbook: handbookPage })[state.tab](d) : skeleton()));
+  if (state.tab === "handbook") tg?.BackButton?.show(); else tg?.BackButton?.hide();
   if (animate) { main.classList.remove("enter"); void main.offsetWidth; main.classList.add("enter"); }
 }
 
@@ -652,10 +678,55 @@ function dutyButton(sc, onMe) {
 }
 
 // --- Settings
+// --- Handbook (opened by link or from Settings, not a tab)
+const HB_TINTS = ["#3987e5", "#d95926", "#1baf7a", "#8f5bd6", "#c9922b", "#d6457a"];
+
+function openHandbook(back = "settings") {
+  tap("light");
+  state.back = back;
+  state.tab = "handbook";
+  render();
+  window.scrollTo(0, 0);
+}
+
+function handbookPage(d) {
+  const book = d.handbook;
+  if (!book?.sections?.length) return [empty("📖", "No handbook yet", "The owner writes it with /handbook edit in the chat.")];
+  state.hbOpen ??= new Set([book.sections[0].key]);
+  const [icon, ...rest] = book.title.split(" ");
+  const out = [h("div", { class: "hb-hero" }, h("div", { class: "book" }, /\p{Extended_Pictographic}/u.test(icon) ? icon : "📖"),
+    h("h2", {}, /\p{Extended_Pictographic}/u.test(icon) ? rest.join(" ") : book.title), book.intro ? h("p", {}, book.intro) : null)];
+  book.sections.forEach((x, i) => {
+    const tint = HB_TINTS[i % HB_TINTS.length];
+    const card = h("div", { class: "card hb" + (state.hbOpen.has(x.key) ? " open" : ""),
+      style: `--hb-tint:color-mix(in srgb, ${tint} 18%, transparent);--hb-ink:${tint}` });
+    const head = h("button", { class: "hb-head", "aria-expanded": String(state.hbOpen.has(x.key)), onclick: () => {
+      tap("light");
+      const open = !card.classList.contains("open");
+      card.classList.toggle("open", open);
+      head.setAttribute("aria-expanded", String(open));
+      if (open) state.hbOpen.add(x.key); else state.hbOpen.delete(x.key);
+    } },
+    h("div", { class: "hb-icon", style: `background:color-mix(in srgb, ${tint} 18%, transparent)` }, x.icon),
+    h("div", { class: "t" }, h("b", {}, x.name), h("span", {}, x.person ? `In charge: ${x.person} · ${x.rules.length} rules` : `${x.rules.length} rules`)),
+    h("span", { class: "chev" }, "›"));
+    card.append(head, h("div", { class: "hb-body" }, h("div", {}, h("ol", {}, x.rules.map((r) => h("li", {}, r))))));
+    out.push(card);
+  });
+  if (book.updated) {
+    const dt = new Date(book.updated * 1000).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "Europe/Rome" });
+    out.push(h("div", { class: "hb-foot" }, `Last updated: ${dt}`));
+  }
+  return out;
+}
+
+tg?.BackButton?.onClick?.(() => { tap("light"); state.tab = state.back || "deals"; render(); });
+
 function settingsTab(d) {
   const s = d.settings;
   const edit = (label, onclick) => h("button", { class: "btn", onclick }, label);
-  const out = [h("h2", { style: "margin-top:8px" }, "Budget mode"), h("div", { class: "card" },
+  const out = [h("button", { class: "btn hb-link", style: "margin-top:8px", onclick: () => openHandbook("settings") }, "📖 Team handbook"),
+    h("h2", {}, "Budget mode"), h("div", { class: "card" },
     h("div", { class: "row" }, h("div", {}, h("div", { style: "font-weight:600" }, `Budget ${euro(s.budget_setting)}`),
       h("div", { class: "label" }, `In effect: ${euro(s.budget)} (never more than the pot's cash)`)),
     edit("Edit", () => sheet("Budget-mode budget", [{ label: "Budget (€)", value: s.budget_setting }], ([v]) => act({ action: "budget", value: v }).then((r) => !!r)))))];

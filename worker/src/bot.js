@@ -322,7 +322,7 @@ Add one with /watch link, remove with /unwatch sol`);
       if (!this.rules) return void (await this.handbook.send(chat, msg?.is_topic_message ? msg.message_thread_id : null));
       // in the Rules topic it's already pinned: just make sure it still is
       const ok = await this.handbook.ensure(chat, this.rules.thread);
-      return this.reply(chat, ok ? "📖 The handbook is pinned at the top" : "📖 No handbook yet");
+      return this.reply(chat, ok ? "📖 The handbook is pinned at the top: tap 📖 Open handbook" : "📖 No handbook yet");
     }
     if (user !== this.ownerId) throw new UserError("Only the owner can edit the handbook");
     if (!args[1]) throw new UserError("Which section? e.g. /handbook edit buying");
@@ -343,8 +343,8 @@ Add one with /watch link, remove with /unwatch sol`);
   }
 
   async editHandbook(chat, name, text) {
-    const { section, pinned } = await this.handbook.edit(name, text, this.now);
-    return this.reply(chat, `✅ Updated ${esc(section.title, false)}${pinned ? " in the pinned handbook" : ""}`);
+    const { section } = await this.handbook.edit(name, text, this.now);
+    return this.reply(chat, `✅ Updated ${esc(section.title, false)}. The app shows it now`);
   }
 
   async cmd_tasks(chat) {

@@ -244,13 +244,16 @@ Kept in the Worker's private storage (names and roles too, never in the repo).
 
 ### Rules topic (team handbook)
 
-Create a topic, send /topic rules in it, and the handbook is posted there as ONE pinned message
-(pinned silently, the "pinned a message" notice removed), each section's rules in a collapsed quote.
-/handbook shows a copy anywhere; /handbook edit <section> (owner only) replaces a section's rules,
-on the lines below or as a reply, and the pinned message is edited in place. In the Rules topic,
-commands and the bot's answers are deleted after 10 seconds, so only the handbook stays (the bot
-needs the "Delete messages" admin right). The text lives only in the Worker's private storage
-(key `handbook`), never in the repo. /rules still shows the deal rules.
+The handbook is a page in the Mini App (📖 Handbook: section cards with the person in charge and
+numbered rules, folding open; also under Settings). Create a topic, send /topic rules in it, and the
+bot pins ONE short message there (silently, the "pinned a message" notice removed) with a
+📖 Open handbook button: a t.me/<bot>?startapp=handbook link, so the bot needs a Main Mini App
+(BotFather > Bot Settings > Configure Mini App). /handbook shows that message anywhere;
+/handbook edit <section> (owner only) replaces a section's rules, on the lines below or as a reply:
+the app shows them at once with a new "Last updated" date, the pinned message stays the same. In the
+Rules topic, commands and the bot's answers are deleted after 10 seconds (the bot needs the "Delete
+messages" admin right). The text lives only in the Worker's private storage (key `handbook`), never
+in the repo. /rules still shows the deal rules.
 
 ### Crypto topic (news only)
 

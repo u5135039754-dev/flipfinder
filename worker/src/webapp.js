@@ -3,6 +3,7 @@
 // Actions run through the same Bot code as the chat buttons, so deal messages, money posts
 // and the €50 approval rule behave exactly the same.
 
+import { forApp } from "./handbook.js";
 import { UserError, nowSeconds, parseNumber } from "./util.js";
 import { shares } from "./pot.js";
 import { romeTs } from "./util.js";
@@ -71,6 +72,7 @@ export async function snapshot(bot, user) {
     me: { id: user.id, name: [user.first_name, user.last_name].filter(Boolean).join(" "), owner: user.id === bot.ownerId,
       manager: bot.team.isManager(user.id), team: bot.team.active },
     schedule: await bot.team.grid(),
+    handbook: forApp(await bot.handbook.load()),
     deals: open.map(card).sort((a, b) => b.sent - a.sent),
     stock: stockList.map(card),
     pot: { ...pot, shares: shares(pot, bot.splitMode()), split: bot.splitMode(), series,
