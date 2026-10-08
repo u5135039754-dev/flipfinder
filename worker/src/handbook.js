@@ -1,16 +1,34 @@
-// The team handbook: sections pinned in the 📖 Rules topic, /handbook to repost it anywhere,
-// /handbook edit <section> (owner) to change one. The text lives only in the private D1 storage
-// (kv "handbook"), never in the code: it names the team.
+// The team handbook: ONE message pinned in the 📖 Rules topic, each section's rules in a collapsed
+// quote. /handbook shows it anywhere, /handbook edit <section> (owner) changes a section and the
+// pinned message is edited in place. The text lives only in the private D1 storage (kv "handbook"),
+// never in the code: it names the team.
 
-import { UserError, esc } from "./util.js";
+import { UserError, esc, rome } from "./util.js";
 
-/** "🛒 BUYING (Anna)" -> "buying" */
+const LIMIT = 4000;   // Telegram's 4,096 characters per message, with some room
+
+/** "🛒 Buying · Anna" -> "buying" */
 export function sectionKey(title) {
   return (title.toLowerCase().match(/[a-z]+/) || ["section"])[0];
 }
 
-export function sectionText(s) {
-  return `<b>${esc(s.title, false)}</b>\n${esc(s.text, false)}`;   // quotes need no escaping in Telegram HTML
+/** The whole handbook as one HTML message. */
+export function render(book) {
+  const parts = [`<b>${esc(book.title || "📖 HANDBOOK", false)}</b>`];
+  if (book.intro) parts[0] += `\n${esc(book.intro, false)}`;
+  for (const s of book.sections) {
+    parts.push(`<b>${esc(s.title, false)}</b>\n<blockquote expandable>${esc(s.text.trim(), false)}</blockquote>`);
+  }
+  if (book.updated) {
+    const t = rome(book.updated);
+    parts.push(`<i>Last updated: ${Number(t.day)} ${t.month} ${t.date.slice(0, 4)}</i>`);
+  }
+  return parts.join("\n\n");
+}
+
+/** Characters Telegram counts (the text without the HTML tags). */
+function visibleLength(html) {
+  return html.replace(/<[^>]+>/g, "").replace(/&(amp|lt|gt|quot);/g, "x").length;
 }
 
 export class Handbook {
@@ -19,7 +37,7 @@ export class Handbook {
   }
 
   async load() {
-    this._data ??= await this.bot.store.get("handbook", { sections: [], posted: {} });
+    this._data ??= await this.bot.store.get("handbook", { sections: [] });
     return this._data;
   }
 
@@ -38,63 +56,61 @@ export class Handbook {
     return s;
   }
 
-  /** Every section as its own message in `chat` (and `thread`); pinned when it's the Rules topic. */
-  async post(chat, thread = null, pin = false) {
-    const { sections, posted } = await this.load();
-    if (!sections.length) {
-      await this.bot.reply(chat, "📖 No handbook yet. The owner writes it with /handbook edit &lt;section&gt;");
-      return 0;
+  /** A copy of the handbook (not pinned) wherever someone asked for it. */
+  async send(chat, thread = null) {
+    const book = await this.load();
+    if (!book.sections.length) {
+      return this.bot.reply(chat, "📖 No handbook yet. The owner writes it with /handbook edit &lt;section&gt;");
     }
-    const where = (posted[`${chat}:${thread ?? ""}`] ??= {});
-    let n = 0;
-    for (const s of sections) {
-      const text = sectionText(s);
-      const old = pin ? where[s.key] : null;
-      if (old && old.text === text) {
-        n++;
-        continue;   // already there and unchanged
-      }
-      if (old && await this.bot.tg.call("editMessageText", { chat_id: chat, message_id: old.id, text, parse_mode: "HTML",
-        disable_web_page_preview: true })) {
-        old.text = text;
-        n++;
-        continue;
-      }
-      const payload = { chat_id: chat, text, parse_mode: "HTML", disable_web_page_preview: true };
-      if (thread) payload.message_thread_id = thread;
-      const res = await this.bot.tg.call("sendMessage", payload);
-      if (!res?.message_id) continue;
-      n++;
-      if (pin) {
-        await this.bot.tg.call("pinChatMessage", { chat_id: chat, message_id: res.message_id, disable_notification: true });
-        where[s.key] = { id: res.message_id, text };
-      }
-    }
-    await this.save();
-    return n;
+    const payload = { chat_id: chat, text: render(book), parse_mode: "HTML", disable_web_page_preview: true };
+    if (thread) payload.message_thread_id = thread;
+    return this.bot.tg.call("sendMessage", payload);
   }
 
-  /** New text for a section; the pinned copies in the Rules topic are edited in place. */
-  async edit(name, text) {
+  /**
+   * Makes sure the Rules topic has the handbook, pinned: the message we posted is edited in place;
+   * a new one (pinned silently, the "pinned a message" notice removed) only when it's gone.
+   */
+  async ensure(chat, thread) {
+    const book = await this.load();
+    if (!book.sections.length || !thread) return false;
+    const text = render(book);
+    const tg = this.bot.tg;
+    const old = book.message;
+    if (old && String(old.chat) === String(chat) && old.thread === thread) {
+      const r = await tg.request("editMessageText", { chat_id: chat, message_id: old.id, text, parse_mode: "HTML",
+        disable_web_page_preview: true });
+      if (r.ok || /not modified/.test(r.error)) return true;
+      if (!/not found|can't be edited/.test(r.error)) return false;   // Telegram trouble: try again later
+    }
+    const sent = await tg.call("sendMessage", { chat_id: chat, message_thread_id: thread, text, parse_mode: "HTML",
+      disable_web_page_preview: true });
+    if (!sent?.message_id) return false;
+    book.message = { chat: String(chat), thread, id: sent.message_id };
+    await this.save();
+    if (await tg.call("pinChatMessage", { chat_id: chat, message_id: sent.message_id, disable_notification: true })) {
+      // the "pinned a message" notice comes right after it
+      await tg.call("deleteMessage", { chat_id: chat, message_id: sent.message_id + 1 });
+    }
+    return true;
+  }
+
+  /** New rules for one section; the pinned message is updated in place. */
+  async edit(name, text, now) {
     const s = await this.find(name);
     const body = text.trim();
     if (!body) throw new UserError("The new text is empty");
-    if (body.length > 3500) throw new UserError("That's too long for one Telegram message (3,500 characters max)");
+    const book = await this.load();
+    const before = s.text;
     s.text = body;
-    const { posted } = await this.load();
-    let updated = 0;
-    for (const [where, keys] of Object.entries(posted)) {
-      const old = keys[s.key];
-      if (!old) continue;
-      const chat = where.split(":")[0];
-      const newText = sectionText(s);
-      if (await this.bot.tg.call("editMessageText", { chat_id: chat, message_id: old.id, text: newText, parse_mode: "HTML",
-        disable_web_page_preview: true })) {
-        old.text = newText;
-        updated++;
-      }
+    if (visibleLength(render({ ...book, updated: now })) > LIMIT) {
+      s.text = before;
+      throw new UserError("That makes the handbook too long for one Telegram message. Shorten it a little");
     }
+    book.updated = now;
     await this.save();
-    return { section: s, updated };
+    const where = book.message;
+    const pinned = where ? await this.ensure(where.chat, where.thread) : false;
+    return { section: s, pinned };
   }
 }

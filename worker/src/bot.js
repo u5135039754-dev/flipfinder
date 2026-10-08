@@ -37,7 +37,7 @@ export const COMMANDS = [
   ["duty", "Who's on duty, with Start / End / Swap buttons"],
   ["task", "Tasks: /task add Photos for #12 @Anna by fri · /task done 3"],
   ["tasks", "Open tasks"],
-  ["handbook", "The team handbook (owner: /handbook edit buying, then the new text)"],
+  ["handbook", "The team handbook (owner: /handbook edit buying, then the new rules)"],
   ["setrole", "Owner only: /setrole Anna seller (manager, buyer or seller)"],
   ["ledger", "Every money action, newest last: /ledger or /ledger 30"],
   ["deposit", "Owner only: money put in: /deposit Marco 100"],
@@ -66,6 +66,8 @@ export class Bot {
     this.capture = null;           // the Mini App: replies and pop-ups collected here instead of sent
     this.team = new Team(this);
     this.handbook = new Handbook(this);
+    this.cleanup = [];   // {chat, id}: commands and replies in the Rules topic, deleted 10 s later
+    this.rules = null;   // {chat, thread} while answering a message in the Rules topic
     this._deals = null;
   }
 
@@ -134,7 +136,19 @@ export class Bot {
     }
     const payload = { chat_id: chat, text, parse_mode: "HTML", disable_web_page_preview: true };
     if (buttons) payload.reply_markup = { inline_keyboard: buttons };
-    return this.tg.call("sendMessage", payload);
+    const rules = this.rules && String(this.rules.chat) === String(chat) ? this.rules : null;
+    if (rules) payload.message_thread_id = rules.thread;   // answers stay in the Rules topic, briefly
+    const sent = await this.tg.call("sendMessage", payload);
+    if (rules && sent?.message_id) this.cleanup.push({ chat: String(chat), id: sent.message_id });
+    return sent;
+  }
+
+  /** Answering a message in the Rules topic: the command and our answer go away after 10 s. */
+  enterRules(msg, isCommand) {
+    const thread = this.settings.topics?.rules;
+    if (!thread || !msg.is_topic_message || msg.message_thread_id !== thread) return;
+    this.rules = { chat: msg.chat.id, thread };
+    if (isCommand) this.cleanup.push({ chat: String(msg.chat.id), id: msg.message_id });
   }
 
   async answer(cq, text) {
@@ -159,8 +173,12 @@ export class Bot {
 
   async handle(update) {
     try {
+      const m = update.message;
       if (update.callback_query) await this.onButton(update.callback_query);
-      else if (update.message) await this.onMessage(update.message);
+      else if (m?.pinned_message && m.is_topic_message && m.message_thread_id === this.settings.topics?.rules) {
+        // only the handbook is pinned there: no "pinned a message" notices
+        await this.tg.call("deleteMessage", { chat_id: m.chat.id, message_id: m.message_id });
+      } else if (m) await this.onMessage(m);
     } finally {
       await this.save();
     }
@@ -174,7 +192,8 @@ export class Bot {
     if (!this.allowed(user)) return;   // not someone we take commands from: ignore quietly
     this.team.learn(msg.from);
     this.learnTopic(msg);
-    if (!text.startsWith("/")) return this.onPriceReply(chat, user, text);
+    this.enterRules(msg, text.startsWith("/"));
+    if (!text.startsWith("/")) return this.onPriceReply(chat, user, text, msg);
     const space = text.indexOf(" ");
     const head = space < 0 ? text : text.slice(0, space);
     const rest = space < 0 ? "" : text.slice(space + 1);
@@ -300,25 +319,32 @@ Add one with /watch link, remove with /unwatch sol`);
 
   async cmd_handbook(chat, args, user, msg) {
     if ((args[0] || "").toLowerCase() !== "edit") {
-      await this.handbook.post(chat, msg?.is_topic_message ? msg.message_thread_id : null, false);
-      return;
+      if (!this.rules) return void (await this.handbook.send(chat, msg?.is_topic_message ? msg.message_thread_id : null));
+      // in the Rules topic it's already pinned: just make sure it still is
+      const ok = await this.handbook.ensure(chat, this.rules.thread);
+      return this.reply(chat, ok ? "📖 The handbook is pinned at the top" : "📖 No handbook yet");
     }
     if (user !== this.ownerId) throw new UserError("Only the owner can edit the handbook");
     if (!args[1]) throw new UserError("Which section? e.g. /handbook edit buying");
-    // the new text can come in the same message, on the lines after "/handbook edit buying"
+    // the new rules can come in the same message, on the lines after "/handbook edit buying"
     const full = msg?.text || "";
     const nl = full.indexOf("\n");
-    if (nl > 0 && full.slice(nl + 1).trim()) {
-      const { section, updated } = await this.handbook.edit(args[1], full.slice(nl + 1));
-      return this.reply(chat, `✅ Updated "${esc(section.title)}"${updated ? ` and its pinned copy` : ""}`);
-    }
+    if (nl > 0 && full.slice(nl + 1).trim()) return this.editHandbook(chat, args[1], full.slice(nl + 1));
     const s = await this.handbook.find(args[1]);
-    const sent = await this.tg.call("sendMessage", { chat_id: chat, parse_mode: "HTML",
-      text: `✏️ Reply to this message with the new text for <b>${esc(s.title)}</b> (it replaces the whole section).\n\nNow:\n${esc(s.text)}`,
-      reply_markup: { force_reply: true, input_field_placeholder: "the new section text" } });
+    const payload = { chat_id: chat, parse_mode: "HTML",
+      text: `✏️ Reply to this message with the new rules for <b>${esc(s.title, false)}</b>, one per line ` +
+        `(they replace the whole section).\n\nNow:\n${esc(s.text, false)}`,
+      reply_markup: { force_reply: true, input_field_placeholder: "1. ...  2. ..." } };
+    if (this.rules) payload.message_thread_id = this.rules.thread;
+    const sent = await this.tg.call("sendMessage", payload);   // stays until the answer comes
     const pending = await this.store.get("pending", {});
     pending[String(user)] = { handbook: s.key, chat, ask_msg: sent?.message_id ?? null };
     await this.store.put("pending", pending);
+  }
+
+  async editHandbook(chat, name, text) {
+    const { section, pinned } = await this.handbook.edit(name, text, this.now);
+    return this.reply(chat, `✅ Updated ${esc(section.title, false)}${pinned ? " in the pinned handbook" : ""}`);
   }
 
   async cmd_tasks(chat) {
@@ -627,8 +653,10 @@ Add one with /watch link, remove with /unwatch sol`);
         "/topic budget or /topic summary");
     }
     const known = Object.keys(TOPIC_NAMES).filter((k) => k in (this.settings.topics || {})).map((k) => TOPIC_NAMES[k]);
-    await this.tg.call("sendMessage", { chat_id: chat, message_thread_id: msg.message_thread_id, parse_mode: "HTML",
+    if (key === "rules" && !this.rules) this.enterRules(msg, true);   // just became the Rules topic
+    const sent = await this.tg.call("sendMessage", { chat_id: chat, message_thread_id: msg.message_thread_id, parse_mode: "HTML",
       text: `✅ This topic is now <b>${TOPIC_NAMES[key]}</b>. Set so far: ${known.join(", ")}` });
+    if (key === "rules" && sent?.message_id) this.cleanup.push({ chat: String(chat), id: sent.message_id });
     await this.postIntro(chat, key);
     if (!this.settings.intros?.[String(chat)]?.general) await this.postIntro(chat, "general");
   }
@@ -638,10 +666,7 @@ Add one with /watch link, remove with /unwatch sol`);
    * in place (and pinned again in case someone unpinned it); a new one only when it's gone.
    */
   async postIntro(chat, key) {
-    if (key === "rules") {   // the Rules topic gets the handbook, one pinned message per section
-      const thread = this.settings.topics?.rules;
-      return thread ? (await this.handbook.post(chat, thread, true)) > 0 : false;
-    }
+    if (key === "rules") return this.handbook.ensure(chat, this.settings.topics?.rules);   // the handbook, one message
     const text = INTROS[key];
     const thread = key === "general" ? null : this.settings.topics?.[key];
     if (key !== "general" && !thread) return false;
@@ -782,15 +807,23 @@ Add one with /watch link, remove with /unwatch sol`);
     await this.applyPrice(chat, user, Number(d.cost));
   }
 
-  async onPriceReply(chat, user, text) {
+  async onPriceReply(chat, user, text, msg = null) {
     const pending = (await this.store.get("pending", {}))[String(user)];
     if (!pending || String(pending.chat) !== String(chat)) return;   // just chatting
     if (pending.handbook) {
       const all = await this.store.get("pending", {});
       delete all[String(user)];
       await this.store.put("pending", all);
-      const { section, updated } = await this.handbook.edit(pending.handbook, text);
-      return this.reply(chat, `✅ Updated "${esc(section.title)}"${updated ? ` and its pinned copy` : ""}`);
+      if (this.rules) {   // the question and the answer go too
+        if (msg?.message_id) this.cleanup.push({ chat: String(chat), id: msg.message_id });
+        if (pending.ask_msg) this.cleanup.push({ chat: String(chat), id: pending.ask_msg });
+      }
+      try {
+        return await this.editHandbook(chat, pending.handbook, msg?.text || text);
+      } catch (e) {
+        if (!(e instanceof UserError)) throw e;
+        return this.reply(chat, `⚠️ ${esc(e.message, false)}`);
+      }
     }
     const amount = parseNumber(text);
     if (amount === null) return this.reply(chat, `⚠️ I need just the amount, e.g. 45 (got ${esc(text.slice(0, 30))})`);

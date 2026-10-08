@@ -18,6 +18,24 @@ import { recordRun } from "./team.js";
 export const MENU_VERSION = 1;   // bump to set the "📱 Open app" menu button again
 
 export const MAX_QUEUE_FLUSH = 15;
+export const CLEANUP_DELAY = 10;   // seconds a command and its answer stay in the Rules topic
+
+/** Deletes the Rules topic leftovers that are due (all of them with now = Infinity). */
+export async function flushCleanup(store, tg, now) {
+  const list = await store.get("cleanup", []);
+  const due = list.filter((x) => now - x.at >= CLEANUP_DELAY);
+  if (!due.length) return 0;
+  const chats = [...new Set(due.map((x) => x.chat))];
+  for (const chat of chats) {
+    const ids = due.filter((x) => x.chat === chat).map((x) => x.id);
+    if ((await tg.call("deleteMessages", { chat_id: chat, message_ids: ids })) === null) {
+      for (const id of ids) await tg.call("deleteMessage", { chat_id: chat, message_id: id });
+    }
+  }
+  const fresh = await store.get("cleanup", []);   // others may have been added meanwhile
+  await store.put("cleanup", fresh.filter((x) => !due.some((d) => d.chat === x.chat && d.id === x.id)));
+  return due.length;
+}
 
 /** Everything a request needs: storage, settings, a Telegram client set up with topics and moved chats. */
 export async function open(env, { fetchFn, now } = {}) {
@@ -62,6 +80,15 @@ export async function handleRequest(request, env, opts = {}) {
       await bot.handle(update);
     } catch (e) {
       console.error("update failed", e?.stack || e);   // 200 anyway: Telegram would resend it forever
+    }
+    if (bot.cleanup.length) {
+      const items = bot.cleanup.map((x) => ({ ...x, at: ctx.now }));
+      await store.put("cleanup", [...(await store.get("cleanup", [])), ...items]);
+      opts.waitUntil?.((async () => {
+        await new Promise((r) => setTimeout(r, opts.cleanupDelay ?? CLEANUP_DELAY * 1000));
+        const later = await open(env, opts);
+        await flushCleanup(later.store, later.tg, Infinity);
+      })().catch((e) => console.error("cleanup failed", e?.stack || e)));
     }
     return new Response("ok");
   }
@@ -228,6 +255,12 @@ export async function runCron(env, opts = {}) {
       settings.commands_version = COMMANDS_VERSION;
       bot.changed = true;
     }
+  }
+  // leftovers in the Rules topic, and the pinned handbook if it isn't there yet
+  await flushCleanup(store, tg, now);
+  const rulesThread = settings.topics?.rules;
+  if (rulesThread && tg.groups.length && !(await store.get("handbook", {})).message) {
+    await bot.handbook.ensure(tg.groups[0], rulesThread);
   }
   // the "📱 Open app" button next to the message box in private chats
   const appUrl = await store.get("app_url");
