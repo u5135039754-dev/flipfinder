@@ -56,6 +56,7 @@ def item_from_ebay(raw: dict) -> Item | None:
         url=raw.get("itemWebUrl", f"https://www.ebay.it/itm/{item_id}"),
         condition=str(raw.get("condition") or ""),
         photo=image.get("imageUrl", ""),
+        photos=[u for u in [image.get("imageUrl")] + [x.get("imageUrl") for x in (raw.get("additionalImages") or [])[:3]] if u],
         source="ebay",
         shipping=cheapest_shipping(raw.get("shippingOptions")),
         location=", ".join(x for x in (loc.get("city"), loc.get("country")) if x),

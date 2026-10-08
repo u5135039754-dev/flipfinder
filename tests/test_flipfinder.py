@@ -990,6 +990,10 @@ class FakeCloud:
     def put_demand(self, table):
         self.calls.append(("demand", table))
 
+    def analyze(self, keys):
+        self.calls.append(("analyze", keys))
+        return {}
+
     def report_run(self, status=None, values=None, notify=None):
         self.calls.append(("run", status, values, notify))
         return {"notified": [True] * len(notify or []), "flushed": 2}
@@ -1044,12 +1048,13 @@ searches:
     assert cfg.subito.enabled and cfg.subito.radius_km == 20                 # private area from the Worker
     assert cfg.budget == 50                                                  # the pool caps the budget
     kinds = [c[0] for c in cloud.calls]
-    assert kinds == ["state", "catalog", "deal", "demand", "run"]
+    assert kinds == ["state", "catalog", "deal", "analyze", "demand", "run"]
+    assert cloud.calls[3][1] == [deal.item.key]                               # new deals offered for an AI check
     catalog_sent = cloud.calls[1][1]
     assert all("enabled" not in s for s in catalog_sent["searches"])         # config.yaml as is
     assert cloud.calls[2][1] == deal.item.key and "Boss DS-1" in cloud.calls[2][2]
-    assert "boss ds 1" in cloud.calls[3][1]
-    status = cloud.calls[4][1]
+    assert "boss ds 1" in cloud.calls[4][1]
+    status = cloud.calls[5][1]
     assert status["runs"] == 1 and status["checked"] == 40 and status["deals_sent"] == 1
     stats = json.loads((tmp_path / "data" / "stats.json").read_text())
     assert stats["deals_sent"] == 3                                          # + 2 sent from the overnight queue
@@ -1499,3 +1504,22 @@ def test_summary_counts_skipped_sellers(tmp_path: Path):
     s.record_run(10, 0, None, seller_skipped=2)
     s.record_run(10, 0, None)
     assert "🛡 2 deals skipped: brand-new seller and suspiciously cheap" in s.summary_text(Rules())
+
+
+def test_deal_record_carries_what_the_ai_check_needs_and_pools_stay_small(tmp_path: Path):
+    from flipfinder.cloud import deal_record
+    from flipfinder.scanner import PoolCache
+    item = titled(1, "Boss DS-1 distortion", 25, "Boss")
+    item.photos, item.description = ["https://img/1.jpg", "https://img/2.jpg"], "Works fine, a few scratches"
+    deal = evaluate(item, [titled(10 + i, "Boss DS-1 distortion", 60, "Boss") for i in range(12)],
+                    Rules(min_profit=12, min_roi=35, max_roi=150))
+    rec = deal_record(deal)
+    assert rec["item"]["photos"] == ["https://img/1.jpg", "https://img/2.jpg"]
+    assert rec["item"]["description"] == "Works fine, a few scratches"
+    assert 1 <= len(rec["comparables"]) <= 8 and rec["comparables"][0]["price"] == 60
+    cache = PoolCache(tmp_path / "pools.json", 180)
+    cache.put("k", [item])
+    cache.save()
+    saved = json.loads((tmp_path / "pools.json").read_text())["k"]["items"][0]
+    assert "photos" not in saved and "description" not in saved
+    assert cache.get("k")[0].title == "Boss DS-1 distortion"

@@ -242,6 +242,18 @@ Kept in the Worker's private storage (names and roles too, never in the repo).
 - **Sunday report** adds duty hours vs target, deals caught per shift, average reaction time, open
   tasks, stock waiting to be listed or sold, and bot health.
 
+### AI checks (Claude)
+
+Optional, off by default (/ai on). Each deal gets a 🔍 Check with AI button: a member taps it and
+Claude Haiku looks at the photos (up to 4), the listing, the market numbers and the comparables, and
+replies under the deal with a verdict, risks, repairs, questions for the seller and a max offer that
+keeps our min profit. 🧠 Deep analysis runs Claude Sonnet. Reply to a deal or its check to ask about
+it, use /ask or @mention the bot for anything else, or send the bot a photo with a caption in a
+private chat. /note saves a lesson the AI always considers (/notes, /delnote). Limits: a daily €
+cap and questions per person (/ai cap, /ai limit); /aiusage shows the spend. /ai auto on checks new
+deals automatically. The API key is a Cloudflare secret (ANTHROPIC_API_KEY), never in the repo; if
+the AI is off, broken or out of credit, deals go out exactly as before.
+
 ### Members only
 
 Roles are the only key. Only people with a role (the owner always has one) can use the bot, the

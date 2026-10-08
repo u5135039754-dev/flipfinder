@@ -90,6 +90,8 @@ def item_from_subito(ad: dict) -> Item | None:
         url=(ad.get("urls") or {}).get("default", ""),
         condition=_feature(ad, "/item_condition", "value").split(" - ")[0],
         photo=photo,
+        photos=[i["cdn_base_url"] + "?rule=gallery-desktop-2x-auto" for i in images[:4] if i.get("cdn_base_url")],
+        description=str(ad.get("body") or "")[:1500],
         source="subito",
         shipping=ship_cost,
         location=str(town.get("value") or ""),

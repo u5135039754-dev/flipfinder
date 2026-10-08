@@ -109,6 +109,7 @@ def main() -> int:
             deals, ok, error = [], False, f"the scan crashed: {type(e).__name__}: {e}"
         logging.info("Found %d deal(s)", len(deals))
         sent = queued = 0
+        sent_keys = []
         for deal in deals[:MAX_ALERTS_PER_SCAN]:
             if args.dry_run:
                 print("\n" + format_deal(deal) + "\n" + explain(deal) + "\n")
@@ -116,6 +117,10 @@ def main() -> int:
             result = cloud.send_deal(deal, format_deal(deal))
             sent += result == "sent"
             queued += result == "queued"
+            if result == "sent":
+                sent_keys.append(deal.item.key)
+        if cloud and not args.dry_run:
+            cloud.analyze(sent_keys)   # nothing happens unless the owner turned on /ai auto
         if queued:
             logging.info("Quiet hours: %d deal(s) queued for 07:30", queued)
         if cloud and not args.dry_run and scanner.demand_due():

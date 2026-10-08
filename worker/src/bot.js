@@ -7,12 +7,13 @@ import { SELLER_MESSAGE, fullText, keyboard, stock, profit, findDeal } from "./d
 import { allocate, entryLine, memberKey, potText, reverse, shares, summarize } from "./pot.js";
 import { ROLES, Team } from "./team.js";
 import { Handbook } from "./handbook.js";
+import { AI, PRICES } from "./ai.js";
 import { INTROS, TOPIC_FOR_GROUP, TOPIC_NAMES, mention, pricesFor, sellListing } from "./group.js";
 import { DEFAULT_WATCH, MAX_WATCH, findCoin, watchlist } from "./crypto.js";
 import { rome, romeTs } from "./util.js";
 import { UserError, closeMatches, esc, euro, g, parseNumber, queryAndRange, splitArgs } from "./util.js";
 
-export const COMMANDS_VERSION = 12;   // bump when the list below changes, so it's registered again
+export const COMMANDS_VERSION = 13;   // bump when the list below changes, so it's registered again
 export const COMMANDS = [
   ["help", "List all commands"],
   ["app", "Open the flipFinder app: deals, stock, pot and settings"],
@@ -38,6 +39,12 @@ export const COMMANDS = [
   ["task", "Tasks: /task add Photos for #12 @Anna by fri · /task done 3"],
   ["tasks", "Open tasks"],
   ["handbook", "The team handbook (owner: /handbook edit buying, then the new rules)"],
+  ["ask", "Ask the AI: /ask is a Boss DS-1 for €30 a good buy?"],
+  ["note", "Teach the AI a lesson: /note amps need a tube check"],
+  ["notes", "The team's notes for the AI"],
+  ["delnote", "Owner only: remove a note: /delnote 3"],
+  ["ai", "AI status; owner: /ai on|off, /ai auto on|off"],
+  ["aiusage", "AI spend and calls today and this month"],
   ["setrole", "Owner only: /setrole Anna seller (manager, buyer, seller, or none to remove it)"],
   ["removerole", "Owner only: /removerole Anna (blocks them right away)"],
   ["ledger", "Every money action, newest last: /ledger or /ledger 30"],
@@ -49,7 +56,7 @@ export const COMMANDS = [
   ["allow", "Owner only: first step for a new member: /allow 123456789, then /setrole"],
   ["intro", "Owner only: post or update the pinned intro in every topic"],
 ];
-const OWNER_ONLY = new Set(["allow", "intro", "deposit", "withdraw", "fix", "undo", "split", "setrole", "removerole"]);
+const OWNER_ONLY = new Set(["allow", "intro", "deposit", "withdraw", "fix", "undo", "split", "setrole", "removerole", "delnote"]);
 export const LOCKED = "🔒 You're not a member of FLIP MAFIA";
 const IN_GROUP = new Set(["member", "administrator", "creator", "restricted"]);
 
@@ -60,7 +67,7 @@ export function claimerName(user) {
 
 export class Bot {
   /** store: Store; tg: Telegram; settings from the store; now in seconds. */
-  constructor({ store, tg, ownerId, settings, now, fetchFn, geckoKey }) {
+  constructor({ store, tg, ownerId, settings, now, fetchFn, geckoKey, aiKey }) {
     Object.assign(this, { store, tg, settings, now });
     this.fetchFn = fetchFn || ((...a) => fetch(...a));   // CoinGecko lookups for /watch
     this.geckoKey = geckoKey || "";
@@ -69,6 +76,7 @@ export class Bot {
     this.capture = null;           // the Mini App: replies and pop-ups collected here instead of sent
     this.team = new Team(this);
     this.handbook = new Handbook(this);
+    this.ai = new AI(this, aiKey);
     this.cleanup = [];   // {chat, id}: commands and replies in the Rules topic, deleted 10 s later
     this.rules = null;   // {chat, thread} while answering a message in the Rules topic
     this._deals = null;
@@ -210,7 +218,10 @@ export class Bot {
     this.team.learn(msg.from);
     this.learnTopic(msg);
     this.enterRules(msg, text.startsWith("/"));
-    if (!text.startsWith("/")) return this.onPriceReply(chat, user, text, msg);
+    if (!text.startsWith("/")) {
+      if (await this.aiMessage(msg, text)) return;
+      return this.onPriceReply(chat, user, text, msg);
+    }
     const space = text.indexOf(" ");
     const head = space < 0 ? text : text.slice(0, space);
     const rest = space < 0 ? "" : text.slice(space + 1);
@@ -362,6 +373,149 @@ Add one with /watch link, remove with /unwatch sol`);
     }
     if (ok) await done(`🚪 ${esc(name)} is out of the group. They can ask to join again; I'll only let them in with a role.`);
     return this.answer(cq, ok ? "Removed" : "Couldn't remove");
+  }
+
+  // --- the AI (Claude): read-only checks and answers; members with a role only (checked before this)
+  async onAiButton(cq, chat, msg, user, kind, key) {
+    if (!this.ai.config.enabled) return this.answer(cq, "🧠 The AI is switched off");
+    const d = await this.store.deal(key);
+    if (!d) return this.answer(cq, "That deal is gone");
+    const deep = kind === "aid";
+    if (deep ? d.ai_deep : d.ai) return this.answer(cq, deep ? "Deep analysis done: see the reply" : "Already checked: see the 🧠 reply under the deal");
+    const busy = deep ? "ai_deep_busy" : "ai_busy";
+    if (d[busy] && this.now - d[busy] < 90) return this.answer(cq, "Already on it, one moment");
+    d[busy] = this.now;
+    await this.store.saveDeal(key, d);
+    await this.answer(cq, deep ? "🧠 Deep analysis… up to a minute" : "🔍 Checking… a few seconds");
+    const r = deep ? await this.ai.deep(key, d, user) : await this.ai.check(key, d, { user });
+    if (r.error) {
+      d[busy] = 0;
+      await this.store.saveDeal(key, d);
+      await this.tg.sendTo(chat, r.error, { replyTo: msg.message_id });
+    }
+  }
+
+  /** The deal a message belongs to (the alert or its AI check), if any. */
+  async dealByMessage(chat, id) {
+    const same = (m) => String(m.chat) === String(chat) && m.id === id;
+    return (await this.allDeals()).find(([, d]) => (d.messages || []).some(same) || (d.ai?.msgs || []).some(same)) || null;
+  }
+
+  async botUsername() {
+    if (!this.settings.bot_username) {
+      const me = await this.tg.call("getMe", {});
+      if (!me?.username) return null;
+      this.settings.bot_username = me.username;
+      this.changed = true;
+    }
+    return this.settings.bot_username;
+  }
+
+  /** Text that isn't a command: a reply to a deal, an @mention, or a photo in a private chat goes to the AI. */
+  async aiMessage(msg, text) {
+    if (!this.ai.config.enabled) return false;
+    const chat = msg.chat.id;
+    const user = msg.from?.id;
+    const pending = (await this.store.get("pending", {}))[String(user)];
+    if (pending && String(pending.chat) === String(chat)) return false;   // they're answering the bot's question
+    const isPrivate = msg.chat.type === "private" || (!Telegram.isGroup(chat) && chat === user);
+    if (msg.photo && isPrivate) {
+      const image = await this.ai.photoBlock(msg.photo);
+      if (!image) {
+        await this.reply(chat, "⚠️ I couldn't open that photo, try again");
+        return true;
+      }
+      await this.ai.ask(chat, user, (msg.caption || "").trim(), { image, replyTo: msg.message_id });
+      return true;
+    }
+    if (!text) return false;
+    if (msg.reply_to_message) {
+      const found = await this.dealByMessage(chat, msg.reply_to_message.message_id);
+      if (found) {
+        await this.ai.answerAboutDeal(chat, user, found[0], found[1], text, msg.message_id);
+        return true;
+      }
+    }
+    if (text.includes("@")) {
+      const name = await this.botUsername();
+      const tag = name ? new RegExp(`@${name.replace(/[^\w]/g, "")}\\b`, "ig") : null;
+      if (tag && tag.test(text)) {
+        await this.ai.ask(chat, user, text.replace(tag, "").trim() || "Hi", { replyTo: msg.message_id });
+        return true;
+      }
+    }
+    return false;
+  }
+
+  async cmd_ask(chat, args, user, msg) {
+    if (!this.ai.config.enabled) throw new UserError("🧠 The AI is switched off");
+    const q = (msg?.text || args.join(" ")).replace(/^\/ask(@\S+)?\s*/i, "").trim();
+    if (!q) throw new UserError("Ask something, e.g. /ask is a Boss DS-1 for €30 a good buy?");
+    await this.ai.ask(chat, user, q, { replyTo: msg?.message_id });
+  }
+
+  async cmd_ai(chat, args, user) {
+    const [a = "", b = ""] = args.map((x) => x.toLowerCase());
+    if (!a) return this.reply(chat, await this.ai.usageText());
+    if (user !== this.ownerId) throw new UserError("Only the owner can change the AI settings");
+    const number = (lo, hi) => {
+      const x = parseNumber(b);
+      if (x === null || x < lo || x > hi) throw new UserError(`Give a number from ${lo} to ${hi}`);
+      return x;
+    };
+    if (a === "on" || a === "off") {
+      this.ai.set({ enabled: a === "on" });
+      return this.reply(chat, `🧠 AI is now ${a}` + (a === "on" && !this.ai.apiKey ? " (but no API key is set up yet)" : "") +
+        (a === "on" ? ". New deals get a 🔍 Check with AI button." : ". Deals go out exactly as before."));
+    }
+    if (a === "auto" && (b === "on" || b === "off")) {
+      this.ai.set({ auto: b === "on" });
+      return this.reply(chat, b === "on" ? `🧠 New deals rated ${this.ai.config.min_rating}+ are checked automatically`
+        : "🧠 Checks run only when someone taps 🔍 Check with AI");
+    }
+    if (a === "model" || a === "deepmodel") {
+      if (!PRICES[b]) throw new UserError(`Models I know the prices of: ${Object.keys(PRICES).join(", ")}`);
+      this.ai.set({ [a === "model" ? "model" : "deep_model"]: b });
+      return this.reply(chat, `🧠 ${a === "model" ? "Checks and questions" : "Deep analysis"} now use ${b}`);
+    }
+    if (a === "cap") {
+      this.ai.set({ daily_cap_eur: number(0, 20) });
+      return this.reply(chat, `🧠 Daily AI spend cap: ${euro(this.ai.config.daily_cap_eur)}`);
+    }
+    if (a === "limit") {
+      this.ai.set({ user_daily: Math.round(number(1, 500)) });
+      return this.reply(chat, `🧠 Up to ${this.ai.config.user_daily} AI questions per person a day`);
+    }
+    if (a === "minrating") {
+      this.ai.set({ min_rating: Math.round(number(1, 10)) });
+      return this.reply(chat, `🧠 Automatic checks for deals rated ${this.ai.config.min_rating}+`);
+    }
+    throw new UserError("Use /ai on|off, /ai auto on|off, /ai cap 0.5, /ai limit 20, /ai minrating 6, /ai model <id>, /ai deepmodel <id>");
+  }
+
+  async cmd_aiusage(chat) {
+    await this.reply(chat, await this.ai.usageText());
+  }
+
+  async cmd_note(chat, args, user, msg) {
+    const text = (msg?.text || args.join(" ")).replace(/^\/note(@\S+)?\s*/i, "").trim();
+    if (!text) throw new UserError("Write the lesson, e.g. /note Strats from seller X were fake");
+    const id = await this.ai.addNote(text, this.team.member(user)?.name || "");
+    await this.reply(chat, `📝 Note ${id} saved. The AI takes it into account from now on.`);
+  }
+
+  async cmd_notes(chat) {
+    const notes = await this.ai.notes();
+    if (!notes.length) return this.reply(chat, "📝 No notes yet. Add one with /note &lt;lesson&gt;");
+    await this.reply(chat, ["📝 <b>Notes for the AI</b>", ...notes.map((x) => `${x.id}. ${esc(x.text)}`)].join("\n"));
+  }
+
+  async cmd_delnote(chat, args, user) {
+    if (user !== this.ownerId) throw new UserError("Only the owner can remove notes");
+    const id = Number(args[0]);
+    if (!Number.isInteger(id)) throw new UserError("Which note? e.g. /delnote 3 (/notes lists them)");
+    await this.ai.delNote(id);
+    await this.reply(chat, `🗑 Note ${id} removed`);
   }
 
   // --- the group: join requests, who's in it
@@ -879,7 +1033,7 @@ Add one with /watch link, remove with /unwatch sol`);
   /** Edit every copy of the deal (private chat and group) to the current status. */
   async refreshDeal(key, d) {
     const text = fullText(d);
-    const kb = keyboard(key, d);
+    const kb = keyboard(key, d, this.ai.config.enabled);
     for (const m of d.messages || []) {
       if (m.photo) {
         await this.tg.call("editMessageCaption", { chat_id: m.chat, message_id: m.id, caption: text.slice(0, 1024),
@@ -1189,6 +1343,7 @@ Add one with /watch link, remove with /unwatch sol`);
     const rest = colon < 0 ? "" : data.slice(colon + 1);
     if (kind === "pay") return this.onUseCost(cq, chat, user, rest);
     if (kind === "kick") return this.onKick(cq, chat, msg, user, rest);
+    if (kind === "ai" || kind === "aid") return this.onAiButton(cq, chat, msg, user, kind, rest);
     if (kind === "ap" || kind === "rj") return this.decideBuy(cq, user, rest, kind === "ap");
     if (kind === "wait") return this.answer(cq, "Waiting for the manager's OK");
     if (kind === "duty") {

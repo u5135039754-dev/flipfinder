@@ -47,6 +47,8 @@ class Item:
     delivery: str = ""                # Subito: "pickup" (travel cost) or "shipping"
     negotiable: bool = False          # Subito: "trattabile"
     seller: dict | None = None        # trust: reviews, rating, items sold... (seller_line in telegram.py)
+    photos: list = field(default_factory=list)   # up to 4 photo URLs, for the AI check (not kept in the pools)
+    description: str = ""             # the seller's text (Vinted: from the item page), for the AI check
 
     @property
     def key(self) -> str:
@@ -108,6 +110,7 @@ class Item:
             size=size,
             condition=condition,
             photo=photo or _text(raw.get("thumbnailUrl")),
+            photos=[p["url"] for p in photos[:4] if isinstance(p, dict) and p.get("url")],
             favourites=int(raw.get("favouriteCount") or 0),
         )
 

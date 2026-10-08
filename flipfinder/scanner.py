@@ -61,7 +61,9 @@ class PoolCache:
         return [Item(**i) for i in entry["items"]]
 
     def put(self, key: str, items: list[Item]):
-        self.data[key] = {"ts": time.time(), "items": [asdict(i) for i in items]}
+        # photos and descriptions only matter for a deal's AI check: keep the cache small
+        self.data[key] = {"ts": time.time(), "items": [{k: v for k, v in asdict(i).items() if k not in ("photos", "description")}
+                                                       for i in items]}
 
     def save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -463,6 +465,7 @@ class Scanner:
             return assess(item, pool, rules, query)
         pickup = not d.shipping_available or is_pickup_only(f"{item.title}\n{d.description}")
         item.seller = self._vinted_seller(d)
+        item.description = (d.description or "")[:1500]
         log.info("Item %s: shipping %s%s", item.id,
                  "unknown" if d.shipping is None else f"{d.shipping:.2f}", ", pickup only" if pickup else "")
         return assess(item, pool, rules, query, shipping=d.shipping,

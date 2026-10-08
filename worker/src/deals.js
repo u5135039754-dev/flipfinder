@@ -9,7 +9,8 @@ export const SELLER_MESSAGE = (title) =>
   `Ciao! L'articolo "${title}" è ancora disponibile? Se sì, potresti mandarmi un breve video ` +
   "in cui si vede che funziona? Grazie mille!";
 
-export function keyboard(key, d) {
+/** A deal's buttons; `ai`: the AI is on, so it gets 🔍 Check with AI. */
+export function keyboard(key, d, ai = false) {
   const votes = Object.values(d.votes || {});
   const up = votes.filter((v) => v === "up").length;
   const down = votes.filter((v) => v === "down").length;
@@ -27,6 +28,7 @@ export function keyboard(key, d) {
       { text: down ? `👎 ${down}` : "👎", callback_data: `dn:${key}` },
       { text: "📩 Message seller", callback_data: `m:${key}` },
     ]);
+    if (ai) rows.push([{ text: "🔍 Check with AI", callback_data: `ai:${key}` }]);
   }
   return { inline_keyboard: rows };
 }

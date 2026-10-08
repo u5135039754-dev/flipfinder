@@ -54,7 +54,8 @@ export async function open(env, { fetchFn, now } = {}) {
   });
   const t = now ?? nowSeconds();
   return { store, settings, tg, now: t, fetchFn: fetchFn || ((...a) => fetch(...a)),
-    bot: new Bot({ store, tg, ownerId: env.OWNER_ID, settings, now: t, fetchFn, geckoKey: env.COINGECKO_KEY }) };
+    bot: new Bot({ store, tg, ownerId: env.OWNER_ID, settings, now: t, fetchFn, geckoKey: env.COINGECKO_KEY,
+      aiKey: env.ANTHROPIC_API_KEY }) };
 }
 
 function json(data, status = 200) {
@@ -177,12 +178,49 @@ const API = {
       group: body.group || "", sent: now, queued: quiet });
     if (!d) return { status: "exists" };
     if (quiet) return { status: "queued", n: d.n };
-    d.messages = await tg.sendAlert(d.text, d.photo, keyboard(body.key, d), TOPIC_FOR_GROUP[d.group],
+    d.messages = await tg.sendAlert(d.text, d.photo, keyboard(body.key, d, bot.ai.config.enabled), TOPIC_FOR_GROUP[d.group],
       await bot.team.dealMention(now));
     d.alerted_at = now;
     await store.saveDeal(body.key, d);
     await bot.save();
     return { status: d.messages.length ? "sent" : "failed", n: d.n };
+  },
+
+  /**
+   * After each run: AI checks of the new deals, only when the owner turned on /ai auto. Also picks up
+   * deals posted since (the overnight queue), at most 3 per run. Never posts anything else.
+   */
+  async "POST /api/analyze"(ctx, body) {
+    const { bot, store, now } = ctx;
+    const cfg = bot.ai.config;
+    if (!cfg.enabled || !cfg.auto) return { status: "off" };
+    const keys = new Set(body?.keys || []);
+    const todo = (await store.deals("WHERE sent >= ?", now - 3 * 3600))
+      .filter(([k, d]) => (keys.has(k) || d.alerted_at) && d.messages?.length && !d.ai && (d.rating ?? 0) >= cfg.min_rating)
+      .slice(0, 3);
+    let done = 0;
+    for (const [key, d] of todo) {
+      const r = await bot.ai.check(key, d, { user: "auto" });
+      if (r.error) return { status: "stopped", done, reason: r.error };
+      done++;
+    }
+    return { status: "ok", done };
+  },
+
+  /** The owner's test before switching the AI on: checks of recent deals, returned here, posted nowhere. */
+  async "POST /api/ai/test"(ctx, body) {
+    const { bot, store, now } = ctx;
+    const n = Math.min(Math.max(Number(body?.count) || 3, 1), 5);
+    const recent = (await store.deals("WHERE sent >= ?", now - 7 * 86400)).filter(([, d]) => d.messages?.length)
+      .sort((a, b) => b[1].sent - a[1].sent).slice(0, n);
+    const results = [];
+    for (const [key, d] of recent) {
+      const before = bot.ai.spent || 0;
+      const r = await bot.ai.check(key, d, { user: "auto", post: false });
+      results.push({ n: d.n, title: d.title, rating: d.rating, text: r.text || r.error,
+        cost_usd: Math.round(((bot.ai.spent || 0) - before) * 1e6) / 1e6 });
+    }
+    return { results, total_usd: Math.round((bot.ai.spent || 0) * 1e6) / 1e6, usd_to_eur: bot.ai.config.usd_to_eur };
   },
 
   /**
@@ -305,7 +343,7 @@ export async function runCron(env, opts = {}) {
     let flushed = 0;
     for (const [key, d] of queued.slice(0, MAX_QUEUE_FLUSH)) {
       if (tg.callsLeft < 8) break;   // the rest go out in 5 minutes
-      d.messages = [...(d.messages || []), ...(await tg.sendAlert(d.text, d.photo, keyboard(key, d),
+      d.messages = [...(d.messages || []), ...(await tg.sendAlert(d.text, d.photo, keyboard(key, d, bot.ai.config.enabled),
         TOPIC_FOR_GROUP[d.group || ""], await bot.team.dealMention(now)))];
       d.queued = false;
       d.alerted_at = now;

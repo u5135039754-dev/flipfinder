@@ -33,6 +33,9 @@ def deal_record(deal: Deal) -> dict:
         "item": asdict(it), "sell_days": deal.sell_days, "sold_count": deal.sold_count,
         "demand": demand_line(deal) if deal.demand else "",
         "seller": " · ".join(x.replace("👤 ", "") for x in seller_lines(deal)),
+        # what the market value was worked out from, for the AI check
+        "comparables": [{"title": c.title[:80], "price": c.price, "condition": c.condition, "source": c.source}
+                        for c in (deal.sample or [])[:8]],
         # queue order overnight: budget deals by profit per euro, the rest by rating, then profit
         "score": [int(deal.budget), round(deal.per_euro, 4) if deal.budget else 0, deal.rating, deal.profit],
     }
@@ -92,6 +95,15 @@ class Cloud:
             "key": deal.item.key, "text": text, "photo": deal.item.photo, "group": getattr(deal, "group", ""),
             "record": deal_record(deal)})
         return (res or {}).get("status", "failed")
+
+    def analyze(self, keys: list[str]) -> dict:
+        """AI checks for new deals (the Worker decides: only when /ai auto is on). Never stops a run."""
+        try:
+            res = self.session.post(f"{self.url}/api/analyze", json={"keys": keys}, timeout=120)
+            return res.json() if res.ok else {}
+        except (requests.RequestException, ValueError) as e:
+            log.warning("AI check request failed: %s", e)
+            return {}
 
     def put_demand(self, table: dict):
         self._call("PUT", "/api/demand", {"updated": time.time(), "searches": table})

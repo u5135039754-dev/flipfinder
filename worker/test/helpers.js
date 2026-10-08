@@ -42,7 +42,26 @@ export function fakeTelegram() {
     sent: (method = "sendMessage") => calls.filter((c) => c.method === method).map((c) => c.payload),
     texts: () => t.sent().map((p) => p.text),
     clear: () => calls.splice(0),
-    fetch: async (url, init) => {
+    claude: [],          // requests the Worker sent to Anthropic's API (a stand-in answers them)
+    answerClaude: null,  // (body, n) => a Messages API response, or {status, error}
+    fetch: async (url, init = {}) => {
+      url = String(url);
+      if (url.startsWith("https://api.anthropic.com/")) {
+        const body = JSON.parse(init.body);
+        t.claude.push({ url, body, headers: Object.fromEntries(new Headers(init.headers || {})) });
+        const r = t.answerClaude ? await t.answerClaude(body, t.claude.length) : { status: 500, error: "no stand-in" };
+        if (r.status && r.status !== 200) {
+          return new Response(JSON.stringify({ type: "error", error: { type: "api_error", message: r.error || "boom" } }),
+            { status: r.status, headers: { "content-type": "application/json" } });
+        }
+        return new Response(JSON.stringify({ id: `msg_${t.claude.length}`, type: "message", role: "assistant",
+          model: body.model, stop_reason: "end_turn", usage: { input_tokens: 1000, output_tokens: 100 }, ...r }),
+        { headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("/file/bot")) {   // a photo someone sent the bot
+        calls.push({ method: "download", payload: { url } });
+        return new Response(new Uint8Array([255, 216, 255, 224, 1, 2, 3]));
+      }
       const method = url.split("/").pop();
       const payload = JSON.parse(init.body);
       calls.push({ method, payload });
