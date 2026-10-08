@@ -1612,4 +1612,8 @@ searches:
     cloud.calls.clear()
     monkeypatch.setattr(fastlane, "due", lambda fs, now, last: (False, "quiet hours"))
     assert main_mod.main() == 0
-    assert [c[0] for c in cloud.calls] == ["state"]                 # not due: nothing searched, nothing sent
+    assert [c[0] for c in cloud.calls] == ["state"]                 # quiet hours: nothing searched, nothing counted
+    cloud.calls.clear()
+    monkeypatch.setattr(fastlane, "due", lambda fs, now, last: (False, "too soon (every 1 min)"))
+    assert main_mod.main() == 0
+    assert [c[0] for c in cloud.calls] == ["state", "fast"] and cloud.calls[1][1]["skipped"]   # a skipped pass, counted

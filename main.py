@@ -74,6 +74,8 @@ def fast_pass(cloud: Cloud | None, args) -> int:
     run, why = fastlane.due(fs, started, last.get("last_started", 0))
     if not run and not args.force:
         logging.info("Fast lane: skipped, %s", why)
+        if cloud and fs["enabled"] and not why.startswith("quiet"):
+            cloud.fast_report({"skipped": True, "reason": why[:60]})   # counted in the owner's weekly line
         return 0
     cfg = prepare(config_mod.load(args.config), state)
     queries = fastlane.this_pass(cfg, fs, search_group, last.get("passes", 0))

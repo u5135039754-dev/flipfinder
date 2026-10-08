@@ -347,8 +347,10 @@ export async function runCron(env, opts = {}) {
   if (weeklyDue(await store.get("last_weekly"), now)) {
     const all = await store.deals();
     const text = weeklyReport(all, await store.feedbackSince(now - 7 * DAY), now) + (await bot.team.weekly(all, now));
-    if (await tg.sendText(text, { topic: "summary" })) await store.put("last_weekly", new Date(now * 1000)
-      .toLocaleDateString("en-CA", { timeZone: "Europe/Rome" }));
+    if (await tg.sendText(text, { topic: "summary" })) {
+      await store.put("last_weekly", new Date(now * 1000).toLocaleDateString("en-CA", { timeZone: "Europe/Rome" }));
+      await bot.fastWeekly();   // and the owner's one-line fast-lane week, in private
+    }
   }
   // deals found overnight, best first, once quiet hours are over
   if (!inQuietHours(now)) {

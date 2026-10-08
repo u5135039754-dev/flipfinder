@@ -23,6 +23,22 @@ test("/fast: the owner turns it on and off and picks the searches; members can l
   assert.equal((await t.settings()).fast.enabled, false);
 });
 
+test("the owner's Sunday line: passes, skipped passes, blocks; then the week starts again", async () => {
+  const t = await setup({ settings: { fast: { enabled: true, interval: 1 } } });
+  const report = (body, at) => t.api("POST", "/api/fast", body, { at });
+  await report({ secs: 30, requests: 9, blocked: 0, sent: 1 }, DAYTIME);
+  await report({ skipped: true, reason: "too soon" }, DAYTIME + 30);
+  await report({ secs: 31, requests: 9, blocked: 1, sent: 0 }, DAYTIME + 60);
+  assert.equal((await t.store.get("fast_state")).passes, 2);               // skips don't move the rotation
+  const sunday = Date.UTC(2026, 9, 11, 18, 5) / 1000;                     // Sunday 20:05 in Italy
+  t.tg.clear();
+  await t.cron(sunday);
+  const line = t.tg.sent().find((p) => p.text?.startsWith("⚡ Fast lane this week"));
+  assert.equal(line.chat_id, OWNER);
+  assert.equal(line.text, "⚡ Fast lane this week: 2 passes, 1 skipped, 1 blocked (403/429), 1 deal(s) sent first");
+  assert.deepEqual(await t.store.get("fast_week"), { since: sunday, passes: 0, skipped: 0, blocked: 0, sent: 0 });
+});
+
 test("pass reports: averages for /fast; a Vinted block backs off for an hour and tells the owner once", async () => {
   const t = await setup({ settings: { fast: { enabled: true, interval: 2 } } });
   const pass = (at, extra = {}) => t.api("POST", "/api/fast", { secs: 30, requests: 9, blocked: 0, searches: 8, checked: 4,

@@ -617,6 +617,17 @@ Add one with /watch link, remove with /unwatch sol`);
 
   /** A fast pass finished: keep its numbers; a Vinted block slows it to every 5 min for an hour (told once). */
   async fastReport(r) {
+    // this week's totals for the owner's Sunday line
+    const week = await this.store.get("fast_week", { since: this.now, passes: 0, skipped: 0, blocked: 0, sent: 0 });
+    if (r.skipped) {
+      week.skipped += 1;
+      await this.store.put("fast_week", week);
+      return { skipped: true };
+    }
+    week.passes += 1;
+    week.blocked += Number(r.blocked) || 0;
+    week.sent += Number(r.sent) || 0;
+    await this.store.put("fast_week", week);
     const stats = await this.store.get("fast_stats", []);
     stats.push({ at: this.now, secs: Number(r.secs) || 0, requests: Number(r.requests) || 0, blocked: Number(r.blocked) || 0,
       searches: Number(r.searches) || 0, checked: Number(r.checked) || 0, deals: Number(r.deals) || 0, sent: Number(r.sent) || 0 });
@@ -632,6 +643,17 @@ Add one with /watch link, remove with /unwatch sol`);
       text: `⚠️ <b>Fast lane</b>: Vinted refused ${Number(r.blocked)} request(s) (403/429). It slows to every 5 min ` +
         `for an hour, then goes back to every ${fs.interval} min by itself. The full scan carries on as usual.` });
     return { backoff: true };
+  }
+
+  /** Sunday: one line to the owner about the fast lane's week, then the totals start again. */
+  async fastWeekly() {
+    const w = await this.store.get("fast_week", null);
+    if (!w || !(w.passes || w.skipped || w.blocked)) return null;
+    const text = `⚡ Fast lane this week: ${w.passes} passes, ${w.skipped} skipped, ${w.blocked} blocked (403/429), ` +
+      `${w.sent} deal(s) sent first`;
+    await this.tg.call("sendMessage", { chat_id: this.ownerId, text });
+    await this.store.put("fast_week", { since: this.now, passes: 0, skipped: 0, blocked: 0, sent: 0 });
+    return text;
   }
 
   // --- the group: join requests, who's in it
