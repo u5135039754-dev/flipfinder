@@ -455,6 +455,8 @@ export async function runCron(env, opts = {}) {
   // new deals nobody claimed within 10 minutes
   await bot.team.tick();
   await bot.team.unclaimed(await store.deals("WHERE status = 'new' AND sent >= ?", now - 6 * 3600));
+  // Sunday 19:30: the treasurer's screenshot of the pot's balance
+  await bot.potCheck();
   // the weekly meeting's reminders (the day before, 15 minutes before)
   await bot.meeting.tick();
   // 🚨 Buy now alerts nobody answered in 5 minutes: everyone else

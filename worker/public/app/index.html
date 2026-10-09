@@ -590,7 +590,9 @@ function potTab(d) {
   const p = d.pot;
   if (!p.started) return [empty("💰", "The pot is empty", "The owner records money with /deposit name amount.")];
   const out = [h("div", { class: "card" }, h("div", { class: "label" }, "Pot balance (cash)"), h("div", { class: "hero" }, euro(p.cash)),
-    h("div", { class: "label" }, `${euro0(p.stock)} in stock · ${euro0(p.cash + p.stock)} in total`))];
+    h("div", { class: "label" }, `${euro0(p.stock)} in stock · ${euro0(p.cash + p.stock)} in total`),
+    p.treasurer ? h("div", { class: "label", style: "margin-top:4px" }, `🏦 ${p.treasurer} holds the money`) : null,
+    p.owed > 0.004 ? h("div", { class: "label", style: "margin-top:4px" }, `👛 Owed to members: ${euro0(p.owed)}`) : null)];
   out.push(h("div", { class: "card ring-wrap" }, ring(p.cash, p.stock), h("div", { class: "legend" },
     h("div", { class: "item" }, h("span", {}, h("span", { class: "dot", style: "background:var(--cash)" }), "Cash"), h("b", {}, euro0(p.cash))),
     h("div", { class: "item" }, h("span", {}, h("span", { class: "dot", style: "background:var(--stock)" }), "In stock"), h("b", {}, euro0(p.stock))),

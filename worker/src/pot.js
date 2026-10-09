@@ -1,4 +1,5 @@
-// The shared pot: real money sits in the treasurer's (owner's) bank account; the bot only keeps
+// The shared pot: real money sits in the treasurer's bank account (/settreasurer; the owner until set);
+// the bot only keeps
 // the numbers. Every money action is a ledger entry and entries are never changed: a correction
 // is a new entry. Each entry says what it does to the pot's cash and to members' accounts:
 //   deposited / withdrawn / profit: {member name: euros}
@@ -72,10 +73,11 @@ export function reverse(e) {
   return { amount: -e.amount, deposited: neg(e.deposited), withdrawn: neg(e.withdrawn), profit: neg(e.profit), owed: neg(e.owed) };
 }
 
-export function potText(summary, mode, budget) {
+export function potText(summary, mode, budget, treasurer = "") {
   const s = summary;
   const lines = [
     "💰 <b>The pot</b>",
+    ...(treasurer ? [`🏦 ${esc(treasurer)} holds the pot's money (treasurer); the bot only keeps the numbers`] : []),
     `Cash: <b>${euro(s.cash)}</b> · in stock (at cost): ${euro(s.stock)} · total: ${euro(s.cash + s.stock)}`,
     `Profit so far: ${euro(s.profit)} · split ${mode === "equal" ? "equally" : "by contribution"}`,
   ];

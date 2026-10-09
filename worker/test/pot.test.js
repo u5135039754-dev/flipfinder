@@ -26,12 +26,12 @@ test("deposits: owner only, posted in the group's Summary topic, /pot shows ever
   assert.match(posts[2].text, /deposit from luca · cash now <b>€300\.00<\/b>/);
   const replies = sent.filter((p) => String(p.chat_id) === "111").map((p) => p.text);
   assert.equal(replies.filter((x) => x.startsWith("💶")).length, 3);       // the private chat gets a copy
-  assert.ok(replies.some((x) => x.includes("Only the owner (treasurer) can use /deposit")));
+  assert.ok(replies.some((x) => x.includes("Only the owner can use /deposit")));
   assert.ok(replies.some((x) => x.includes("Who and how much?")) && replies.some((x) => x.includes("between €0.01")));
   t.tg.clear();
   await t.update(msg("/pot", { user: MARCO }));
   const pot = t.tg.texts()[0];
-  assert.match(pot, /Cash: <b>€300\.00<\/b> · in stock \(at cost\): €0\.00/);
+  assert.match(pot, /🏦 Owner holds the pot's money \(treasurer\); the bot only keeps the numbers\nCash: <b>€300\.00<\/b> · in stock \(at cost\): €0\.00/);
   assert.ok(pot.includes("· Owner: €100.00 · €0.00 (33%) · <b>€100.00</b>"));
   assert.equal((await t.store.ledger()).length, 3);
 });
@@ -148,4 +148,41 @@ test("cents are split without losing any", () => {
   assert.deepEqual(allocate(-10, { A: 1 / 3, B: 1 / 3, C: 1 / 3 }), { A: -3.34, B: -3.33, C: -3.33 });
   assert.deepEqual(allocate(5, {}), {});
   assert.equal(Object.values(allocate(99.99, { A: 0.5, B: 0.25, C: 0.25 })).reduce((s, x) => s + x, 0).toFixed(2), "99.99");
+});
+
+test("/settreasurer: a member (shown as a name of our choice) holds the money; /pot says so; owner only", async () => {
+  const t = await setup({ settings: { ...members, roles: { [OWNER]: "manager", [MARCO]: "buyer", [LUCA]: "seller" },
+    people: { [OWNER]: "Boss", [MARCO]: "Marco✨", [LUCA]: "Luca" } } });
+  await t.updates(msg("/deposit Boss 100"), msg("/settreasurer Marco", { user: MARCO }), msg("/settreasurer Nobody"),
+    msg("/settreasurer marco as Marcello"), msg("/pot", { user: LUCA }), msg("/settreasurer"));
+  const r = t.tg.texts();
+  assert.match(r.at(-5), /Only the owner/);
+  assert.match(r.at(-4), /No team member called "Nobody"/);
+  assert.match(r.at(-3), /🏦 Marcello is now the treasurer/);
+  assert.match(r.at(-2), /🏦 Marcello holds the pot's money \(treasurer\)/);
+  assert.match(r.at(-1), /Treasurer: Marcello/);
+  assert.deepEqual((await t.settings()).treasurer, { id: MARCO, name: "Marcello" });
+});
+
+test("Sunday 19:30: the treasurer is asked for a screenshot of the balance, once; in Summary if a DM fails", async () => {
+  const t = await setup({ settings: { ...members, roles: { [OWNER]: "manager", [MARCO]: "buyer" }, people: { [MARCO]: "Marco" },
+    treasurer: { id: MARCO, name: "Marcello" } } });
+  await t.update(msg("/deposit Boss 100"));
+  const sun = (h, m) => Date.UTC(2026, 9, 11, h - 2, m) / 1000;   // Sunday 11 Oct, Italy time
+  t.tg.clear();
+  await t.cron(sun(19, 20));
+  assert.ok(!t.tg.texts().some((x) => x.includes("Weekly pot check")));
+  await t.cron(sun(19, 31));
+  await t.cron(sun(19, 36));
+  const asks = t.tg.sent().filter((p) => p.text?.includes("Weekly pot check"));
+  assert.equal(asks.length, 1);
+  assert.equal(String(asks[0].chat_id), String(MARCO));
+  assert.match(asks[0].text, /post a screenshot of the pot's bank balance in the Summary topic\.\nThe bot's numbers: cash <b>€100\.00<\/b>, in stock €0\.00/);
+  // next week, private chat closed: in Summary with a mention instead
+  t.tg.fail = (method, p) => (method === "sendMessage" && String(p.chat_id) === String(MARCO) ? { ok: false, description: "bot was blocked" } : null);
+  t.tg.clear();
+  await t.cron(sun(19, 31) + 7 * 86400);
+  const post = t.tg.sent().find((p) => p.text?.includes("Weekly pot check") && String(p.chat_id) === GROUP);
+  assert.equal(post.message_thread_id, 44);
+  assert.ok(post.text.startsWith('<a href="tg://user?id=555">Marcello</a>, 📸'));
 });

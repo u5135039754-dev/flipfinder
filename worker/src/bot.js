@@ -17,7 +17,8 @@ import { DEFAULT_WATCH, MAX_WATCH, findCoin, watchlist } from "./crypto.js";
 import { hhmm, rome, romeTs } from "./util.js";
 import { UserError, closeMatches, esc, euro, g, parseNumber, queryAndRange, splitArgs } from "./util.js";
 
-export const COMMANDS_VERSION = 23;   // bump when the list below changes, so it's registered again
+export const COMMANDS_VERSION = 24;   // bump when the list below changes, so it's registered again
+export const POT_CHECK_MIN = 19 * 60 + 30;   // Sunday 19:30: the treasurer's pot balance screenshot
 export const COMMANDS = [
   ["help", "List all commands"],
   ["app", "Open the flipFinder app: deals, stock, pot and settings"],
@@ -65,13 +66,14 @@ export const COMMANDS = [
   ["withdraw", "Owner only: money taken out: /withdraw Marco 50"],
   ["fix", "Owner only: correct a price: /fix 12 paid 45 or /fix 12 sold 80"],
   ["paidby", "Owner only: a buy paid with a member's own money: /paidby Marco 12 (the pot owes them)"],
+  ["settreasurer", "Owner only: who holds the pot's money: /settreasurer <member> [as <name>]"],
   ["refund", "Owner only: the pot pays a member back: /refund Marco 58 12"],
   ["undo", "Owner only: cancel a deposit, withdrawal or fix with a new entry: /undo 7"],
   ["split", "Owner only: how profit is shared: /split contribution or /split equal"],
   ["allow", "Owner only: first step for a new member: /allow 123456789, then /setrole"],
   ["intro", "Owner only: post or update the pinned intro in every topic"],
 ];
-const OWNER_ONLY = new Set(["allow", "intro", "deposit", "withdraw", "fix", "undo", "split", "setrole", "removerole", "delnote", "setname", "remind", "repairs", "abroad", "reports", "paidby", "refund"]);
+const OWNER_ONLY = new Set(["allow", "intro", "deposit", "withdraw", "fix", "undo", "split", "setrole", "removerole", "delnote", "setname", "remind", "repairs", "abroad", "reports", "paidby", "refund", "settreasurer"]);
 export const LOCKED = "🔒 You're not a member of FLIP MAFIA";
 const IN_GROUP = new Set(["member", "administrator", "creator", "restricted"]);
 // the fast lane's settings (the scanner has the same defaults in flipfinder/fastlane.py)
@@ -1114,7 +1116,7 @@ Add one with /watch link, remove with /unwatch sol`);
   async cmd_pot(chat) {
     const setting = this.settings.budget ?? (await this.store.get("catalog", {})).budget ?? 72;
     const p = await this.pot();
-    await this.reply(chat, potText(p, this.splitMode(), effectiveBudget(setting, p.started ? p.cash : null)));
+    await this.reply(chat, potText(p, this.splitMode(), effectiveBudget(setting, p.started ? p.cash : null), this.treasurer().name));
   }
 
   async cmd_pool(chat, args, user) {
@@ -1129,7 +1131,7 @@ Add one with /watch link, remove with /unwatch sol`);
   }
 
   ownerOnly(user, cmd) {
-    if (user !== this.ownerId) throw new UserError(`Only the owner (treasurer) can use /${cmd}`);
+    if (user !== this.ownerId) throw new UserError(`Only the owner can use /${cmd}`);
   }
 
   async cmd_deposit(chat, args, user) {
@@ -1570,7 +1572,52 @@ Add one with /watch link, remove with /unwatch sol`);
       if (e instanceof UserError) return this.answer(cq, e.message);
       throw e;
     }
-    return this.answer(cq, "👛 Noted: the pot owes you this, the owner pays it back with /refund");
+    return this.answer(cq, `👛 Noted: the pot owes you this, ${this.treasurer().name} pays it back (then the owner records /refund)`.slice(0, 190));
+  }
+
+  /** Who holds the pot's money: settings.treasurer {id, name}, the owner until it's set. */
+  treasurer() {
+    const t = this.settings.treasurer;
+    if (t?.id) return { id: Number(t.id), name: t.name || this.team.nameOf(t.id) };
+    return { id: this.ownerId, name: this.team.nameOf(this.ownerId) };
+  }
+
+  /** /settreasurer <member> [as <name>]: who holds the money ("owner" or "me": back to the owner). */
+  async cmd_settreasurer(chat, args, user) {
+    this.ownerOnly(user, "settreasurer");
+    const text = args.join(" ").trim();
+    if (!text) return this.reply(chat, `🏦 Treasurer: ${esc(this.treasurer().name)}. Change it: /settreasurer <member> [as <name>]`);
+    const [who, shown = ""] = text.split(/\s+as\s+/i);
+    const key = (s) => String(s).toLowerCase().normalize("NFKD").replace(/[^a-z0-9а-яё]/gi, "");
+    let m;
+    if (["owner", "me"].includes(who.toLowerCase())) m = { id: this.ownerId };
+    else {
+      const all = this.team.members();
+      m = all.find((x) => key(x.name) === key(who)) || all.find((x) => key(x.name).startsWith(key(who)) && key(who).length >= 3);
+    }
+    if (!m) throw new UserError(`No team member called "${who}". /team lists them`);
+    this.settings.treasurer = { id: m.id, ...(shown.trim() ? { name: shown.trim().slice(0, 40) } : {}) };
+    this.changed = true;
+    await this.reply(chat, `🏦 ${esc(this.treasurer().name)} is now the treasurer: they hold the pot's money, and every Sunday ` +
+      "the bot asks them for a 📸 screenshot of the balance");
+  }
+
+  /** Sunday 19:30: the treasurer is asked for a screenshot of the pot's balance (to check against the bot). */
+  async potCheck() {
+    const t = rome(this.now);
+    if (t.weekday !== "Sun" || t.hour * 60 + t.minute < POT_CHECK_MIN || (await this.store.get("pot_check")) === t.date) return;
+    const p = await this.pot();
+    if (!p.started) return;
+    await this.store.put("pot_check", t.date);
+    const tr = this.treasurer();
+    const text = `📸 <b>Weekly pot check</b>: please post a screenshot of the pot's bank balance in the Summary topic.\n` +
+      `The bot's numbers: cash <b>${euro(p.cash)}</b>` + (p.owed > 0.004 ? ` (of which ${euro(p.owed)} is owed to members)` : "") +
+      `, in stock ${euro(p.stock)}. If the bank says something else, tell the owner.`;
+    const sent = (await this.tg.sendTo(String(tr.id), text)) !== null;
+    if (!sent || !this.tg.groups.length) {
+      const who = `<a href="tg://user?id=${tr.id}">${esc(tr.name)}</a>`;
+      for (const g of this.tg.groups) await this.tg.sendTo(g, `${who}, ${text}`, { topic: "summary" });
+    }
   }
 
   /** /paidby <name> <deal#> [amount]: someone paid for a deal with their own money (owner, after the fact). */

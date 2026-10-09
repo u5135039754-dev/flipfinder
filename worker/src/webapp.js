@@ -80,7 +80,7 @@ export async function snapshot(bot, user) {
     handbook: forApp(await bot.handbook.load()),
     deals: open.map(card).sort((a, b) => b.sent - a.sent),
     stock: stockList.map(card),
-    pot: { ...pot, shares: shares(pot, bot.splitMode()), split: bot.splitMode(), series,
+    pot: { ...pot, shares: shares(pot, bot.splitMode()), split: bot.splitMode(), series, treasurer: bot.treasurer().name,
       ledger: ledger.slice(-60).reverse().map((e) => ({ id: e.id, at: e.at, kind: e.kind, amount: e.amount,
         member: e.member || "", n: e.n || null, note: e.note || "", ref: e.ref || null })) },
     settings: {
