@@ -75,6 +75,10 @@ def apply_settings(cfg, settings: dict):
             setattr(cfg.rules, name, RULES[name][0](value))
     cfg.rules.repairs = settings.get("repairs", True) is not False   # /repairs on|off (on unless turned off)
     cfg.rules.abroad = settings.get("abroad") is True                  # /abroad on|off (Italy only unless turned on)
+    # applied from a report's suggestions (✅ Apply): music minimums, and values per category or search
+    cfg.music_rules = {**cfg.music_rules, **{k: float(v) for k, v in (settings.get("music_rules") or {}).items()
+                                             if k in ("min_profit", "min_roi")}}
+    cfg.value_adjust = {str(k).lower(): float(v) for k, v in (settings.get("value_adjust") or {}).items() if 0.5 <= float(v) <= 1.5}
     return cfg
 
 

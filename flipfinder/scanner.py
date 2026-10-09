@@ -332,6 +332,10 @@ class Scanner:
                             max_roi=float(br["max_roi"]), max_cost=float(self.cfg.budget), budget=True)
         if s.max_roi is not None:
             rules = replace(rules, max_roi=s.max_roi)
+        va = getattr(self.cfg, "value_adjust", None) or {}
+        factor = va.get(s.query.lower(), va.get(search_group(s).lower(), 1.0))
+        if factor != 1.0:
+            rules = replace(rules, value_factor=factor)
         if search_group(s) in MUSIC:
             # one search ("boss", "marshall amplificatore") covers dozens of models: fewer of each
             rules = replace(rules, min_comparables=min(rules.min_comparables, MUSIC_MIN_COMPARABLES))

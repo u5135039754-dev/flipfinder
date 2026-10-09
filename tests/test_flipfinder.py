@@ -1664,9 +1664,30 @@ def test_hard_repairs_need_twice_the_minimum_profit():
 
 def test_repairs_switch_reaches_the_scanner():
     from flipfinder.settings import apply_settings
-    cfg = type("C", (), {"searches": [], "rules": Rules()})()
+    cfg = type("C", (), {"searches": [], "rules": Rules(), "music_rules": {"min_profit": 20, "min_roi": 35}})()
     assert apply_settings(cfg, {}).rules.repairs is True
     assert apply_settings(cfg, {"repairs": False}).rules.repairs is False
+
+
+def test_report_suggestions_reach_the_scanner_music_rules_and_values(tmp_path: Path):
+    from flipfinder import config as cm
+    from flipfinder.scanner import Scanner
+    from flipfinder.settings import apply_settings
+    cfg = cm.load("config.yaml")
+    cfg.seen_file = tmp_path / "seen.json"
+    apply_settings(cfg, {"music_rules": {"min_profit": 15}, "value_adjust": {"electronics": 0.85, "ps5": 0.9, "x": 9}})
+    assert cfg.music_rules == {"min_profit": 15.0, "min_roi": 35}
+    assert cfg.value_adjust == {"electronics": 0.85, "ps5": 0.9}                 # out-of-range factors ignored
+    sc = Scanner(cfg)
+    by = {s.query: s for s in cfg.searches}
+    assert sc._rules(by["boss"]).min_profit == 15
+    assert sc._rules(by["iphone 13"]).value_factor == 0.85 and sc._rules(by["ps5"]).value_factor == 0.9   # a search beats its category
+    assert sc._rules(by["boss"]).value_factor == 1.0
+    item = titled(1, "Boss DS-1 distortion", 25, "Boss")
+    pool = [titled(10 + i, "Boss DS-1 distortion", 60, "Boss") for i in range(10)]
+    rules = Rules(min_profit=1, min_roi=1, max_roi=500)
+    from dataclasses import replace as dc_replace
+    assert assess(item, pool, dc_replace(rules, value_factor=0.85)).market_value == 51
 
 
 def test_item_page_photos_main_first_then_the_rest():

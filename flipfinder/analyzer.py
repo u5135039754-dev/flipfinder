@@ -68,6 +68,7 @@ class Rules:
     repairs: bool = True            # damaged listings we can fix become repair deals (/repairs on|off)
     abroad: bool = False            # Vinted listings shipping from outside Italy (/abroad on|off)
     max_price: float | None = None  # main deals: the most we pay all in (/setrule max_price), budget has its own
+    value_factor: float = 1.0       # a report suggestion applied: market value x this for the search's category
     budget: bool = False            # a budget-mode search (ranked by profit per euro spent)
     check: str = ""                 # "what to check before buying", shown in the alert
     sold: list = field(default_factory=list)   # [(Item, days to sell or None, sold at)] likely sold lately (sold.py)
@@ -589,6 +590,8 @@ def assess(item: Item, pool: list[Item], rules: Rules, query: str = "",
     if asking is None:
         return None
     value, sold_n, sell_days = blend_sold(item, asking, rules, query)
+    if rules.value_factor != 1.0:
+        value = round(value * rules.value_factor, 2)   # e.g. iPhones sold 15% under what we predicted
     n = len(comps)
     by_platform = platform_values(comps, rules.min_comparables)
     resell_on, sell_fee = best_resale(value, by_platform, rules.sell_fees, item.source)

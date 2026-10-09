@@ -89,6 +89,7 @@ class Config:
     budget_setting: float = 72           # the configured /budget value (the pool can lower it)
     budget_rules: dict = field(default_factory=lambda: {"min_profit": 12, "min_roi": 35, "max_roi": 150})
     music_rules: dict = field(default_factory=lambda: {"min_profit": 20, "min_roi": 35})
+    value_adjust: dict = field(default_factory=dict)   # category or search -> factor on market value (report suggestions)
     ebay: EbaySettings = field(default_factory=EbaySettings)
     subito: SubitoSettings = field(default_factory=SubitoSettings)
 

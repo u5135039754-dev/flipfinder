@@ -80,14 +80,28 @@ async function collect(bot) {
 
 const EMPTY = { sent: 0, yes: 0, no: 0, claimed: 0, bought: 0, spent: 0, sold: 0, made: 0, profit: 0, sold_cost: 0, ai_usd: 0 };
 
-/** Rows for the last `days` days (oldest first), their totals, money in stock and profit per week. */
-export async function dailyStats(bot, { days = 7 } = {}) {
+/** Every date from `from` to `to` ("YYYY-MM-DD", both included), never before STATS_FROM. */
+export function datesBetween(from, to) {
+  const out = [];
+  for (let t = Date.parse(`${from}T12:00:00Z`); t <= Date.parse(`${to}T12:00:00Z`); t += DAY * 1000) {
+    const date = new Date(t).toISOString().slice(0, 10);
+    if (date >= STATS_FROM) out.push(date);
+  }
+  return out;
+}
+
+/**
+ * Rows for the last `days` days (oldest first), or `from`-`to`, their totals, money in stock and
+ * profit per week.
+ */
+export async function dailyStats(bot, { days = 7, from = null, to = null } = {}) {
   const { days: all, inStock } = await collect(bot);
   const eur = bot.ai.config.usd_to_eur;
   const shape = (r) => ({ date: r.date, sent: r.sent, yes: r.yes, no: r.no, claimed: r.claimed, bought: r.bought,
     spent: r2(r.spent), sold: r.sold, made: r2(r.made), profit: r2(r.profit), sold_cost: r2(r.sold_cost),
     ai: Math.round(r.ai_usd * eur * 10000) / 10000 });
-  const rows = dayList(bot.now, days).map((date) => shape({ ...EMPTY, ...(all[date] || {}), date }));
+  const dates = from && to ? datesBetween(from, to) : dayList(bot.now, days);
+  const rows = dates.map((date) => shape({ ...EMPTY, ...(all[date] || {}), date }));
   const totals = rows.reduce((t, r) => {
     for (const k of Object.keys(EMPTY).filter((k) => k !== "ai_usd")) t[k] += r[k];
     t.ai += r.ai;

@@ -8,6 +8,7 @@ import { allocate, entryLine, memberKey, potText, reverse, shares, summarize } f
 import { ROLES, Team } from "./team.js";
 import { Handbook } from "./handbook.js";
 import { Kits, kitButtons, kitText } from "./kit.js";
+import { Reports } from "./reports.js";
 import { AI, PRICES } from "./ai.js";
 import { dailyStats, daysSinceStart, statsCsv, statsText } from "./stats.js";
 import { INTROS, TOPIC_FOR_GROUP, TOPIC_NAMES, dealTopic, mention, pricesFor, sellListing } from "./group.js";
@@ -15,7 +16,7 @@ import { DEFAULT_WATCH, MAX_WATCH, findCoin, watchlist } from "./crypto.js";
 import { hhmm, rome, romeTs } from "./util.js";
 import { UserError, closeMatches, esc, euro, g, parseNumber, queryAndRange, splitArgs } from "./util.js";
 
-export const COMMANDS_VERSION = 20;   // bump when the list below changes, so it's registered again
+export const COMMANDS_VERSION = 21;   // bump when the list below changes, so it's registered again
 export const COMMANDS = [
   ["help", "List all commands"],
   ["app", "Open the flipFinder app: deals, stock, pot and settings"],
@@ -48,6 +49,7 @@ export const COMMANDS = [
   ["ai", "AI status; owner: /ai on|off, /ai auto on|off, /ai hide-no on|off"],
   ["aiusage", "AI spend and calls today and this month"],
   ["stats", "Daily numbers: deals, YES/NO, claims, buys, sales, profit, AI cost; /stats 30, /stats csv"],
+  ["reports", "Owner only: the weekly and monthly report files (Excel), tap one to get it again"],
   ["fast", "Fast lane (newest listings every few minutes); owner: /fast 2, /fast off"],
   ["setrole", "Owner only: /setrole Anna seller (manager, buyer, seller, or none to remove it)"],
   ["removerole", "Owner only: /removerole Anna (blocks them right away)"],
@@ -64,7 +66,7 @@ export const COMMANDS = [
   ["allow", "Owner only: first step for a new member: /allow 123456789, then /setrole"],
   ["intro", "Owner only: post or update the pinned intro in every topic"],
 ];
-const OWNER_ONLY = new Set(["allow", "intro", "deposit", "withdraw", "fix", "undo", "split", "setrole", "removerole", "delnote", "setname", "remind", "repairs", "abroad"]);
+const OWNER_ONLY = new Set(["allow", "intro", "deposit", "withdraw", "fix", "undo", "split", "setrole", "removerole", "delnote", "setname", "remind", "repairs", "abroad", "reports"]);
 export const LOCKED = "🔒 You're not a member of FLIP MAFIA";
 const IN_GROUP = new Set(["member", "administrator", "creator", "restricted"]);
 // the fast lane's settings (the scanner has the same defaults in flipfinder/fastlane.py)
@@ -91,6 +93,7 @@ export class Bot {
     this.handbook = new Handbook(this);
     this.ai = new AI(this, aiKey);
     this.kits = new Kits(this);
+    this.reports = new Reports(this);
     this.cleanup = [];   // {chat, id}: commands and replies in the Rules topic, deleted 10 s later
     this.rules = null;   // {chat, thread} while answering a message in the Rules topic
     this._deals = null;
@@ -622,6 +625,15 @@ Add one with /watch link, remove with /unwatch sol`);
     await this.reply(chat, statsText(await dailyStats(this, { days }), days));
   }
 
+  /** /reports: the latest report files, a button each to get it again. */
+  async cmd_reports(chat, args, user) {
+    this.ownerOnly(user, "reports");
+    const list = await this.reports.list();
+    if (!list.length) return this.reply(chat, "📊 No reports yet. The first comes on Sunday at 20:00 (and monthly on the 1st).");
+    await this.reply(chat, "📊 <b>Reports</b> (tap one to get the file)", list.map((r) => [{
+      text: `${r.kind === "week" ? "Week" : "Month"} ${r.from.slice(5)} to ${r.to.slice(5)}`, callback_data: `rep:${r.id}` }]));
+  }
+
   async cmd_aiusage(chat) {
     await this.reply(chat, await this.ai.usageText());
   }
@@ -977,6 +989,7 @@ Add one with /watch link, remove with /unwatch sol`);
       `abroad: ${this.settings.abroad === true ? "on (🌍 listings from other countries too)" : "off (Vinted: Italy only)"}`,
       "", `<i>Music gear (amps, pedals, guitars): min_profit €${g(view.music_rules.min_profit)}, ` +
         `min_roi ${g(view.music_rules.min_roi)}%</i>`,
+      ...Object.entries(this.settings.value_adjust || {}).map(([k, f]) => `<i>${esc(k)} values ${f >= 1 ? "+" : ""}${Math.round((f - 1) * 100)}%</i>`),
       `<i>Budget mode (€${g(view.budget)}): min_profit €${g(br.min_profit)}, ` +
         `min_roi ${g(br.min_roi)}%, max_roi ${g(br.max_roi)}%</i>`,
     ].join("\n"));
@@ -1621,6 +1634,24 @@ Add one with /watch link, remove with /unwatch sol`);
     if (kind === "ai" || kind === "aq" || kind === "aid") return this.onAiButton(cq, chat, msg, user, kind, rest);
     if (kind === "num") return this.onNumbers(cq, chat, msg, rest);
     if (kind === "unrej") return this.onNotANo(cq, user, rest);
+    if (kind === "rep") {
+      if (user !== this.ownerId) return this.answer(cq, "Only the owner");
+      await this.answer(cq, "📊 Sending it");
+      if (!(await this.reports.resend(rest, chat))) await this.reply(chat, "⚠️ That report is gone");
+      return;
+    }
+    if (kind === "sug") {
+      const [id, i] = [rest.slice(0, rest.lastIndexOf(":")), Number(rest.slice(rest.lastIndexOf(":") + 1))];
+      const done = await this.reports.apply(id, i, user);
+      await this.answer(cq, done.slice(0, 190));
+      if (done.startsWith("✅")) {
+        await this.reply(chat, done);
+        const rep = (await this.store.get("reports", [])).find((x) => x.id === id);
+        await this.tg.call("editMessageReplyMarkup", { chat_id: chat, message_id: msg.message_id,
+          reply_markup: this.reports.buttons(id, rep?.suggestions || []) || { inline_keyboard: [] } });
+      }
+      return;
+    }
     if (kind === "ap" || kind === "rj") return this.decideBuy(cq, user, rest, kind === "ap");
     if (kind === "wait") return this.answer(cq, "Waiting for the manager's OK");
     if (kind === "duty") {

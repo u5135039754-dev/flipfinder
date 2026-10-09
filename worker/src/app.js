@@ -16,6 +16,7 @@ import { runCrypto } from "./crypto.js";
 import { recordRun } from "./team.js";
 import { dailyStats, freezeDays, statsText, weekLine } from "./stats.js";
 import { kitText } from "./kit.js";
+import { toBase64 } from "./xlsx.js";
 
 export const MENU_VERSION = 1;   // bump to set the "📱 Open app" menu button again
 export const WEBHOOK_VERSION = 1;   // bump when the update types below change
@@ -259,6 +260,12 @@ const API = {
     return { results };
   },
 
+  /** The owner's look at a report file: made with real data, returned here, sent and saved nowhere. */
+  async "POST /api/report/test"(ctx, body) {
+    const r = await ctx.bot.reports.make(body?.kind === "month" ? "month" : "week", { save: false });
+    return { name: r.name, caption: r.caption, xlsx: toBase64(r.bytes), suggestions: r.suggestions };
+  },
+
   /** /stats as text, for the owner to look at without Telegram. */
   async "POST /api/stats"(ctx, body) {
     const days = Math.min(Math.max(Math.round(Number(body?.days) || 7), 1), 90);
@@ -416,7 +423,14 @@ export async function runCron(env, opts = {}) {
     if (await tg.sendText(text, { topic: "summary" })) {
       await store.put("last_weekly", new Date(now * 1000).toLocaleDateString("en-CA", { timeZone: "Europe/Rome" }));
       await bot.fastWeekly();   // and the owner's one-line fast-lane week, in private
+      await bot.reports.make("week");   // the week's report file
     }
+  }
+  // the month's report file on the 1st (from 09:00), for the month before
+  const month = rome(now);
+  if (Number(month.day) === 1 && month.hour >= 9 && (await store.get("last_monthly")) !== month.date.slice(0, 7)) {
+    await store.put("last_monthly", month.date.slice(0, 7));
+    await bot.reports.make("month");
   }
   // deals found overnight, best first, once quiet hours are over
   if (!inQuietHours(now)) {
