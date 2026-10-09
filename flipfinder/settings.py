@@ -10,6 +10,7 @@ RULES = {   # name: (type, min, max), like /setrule allows
     "min_roi": (float, 0, 1_000),
     "min_rating": (int, 1, 10),
     "max_roi": (float, 1, 10_000),
+    "max_price": (float, 1, 10_000),
 }
 
 
@@ -73,6 +74,7 @@ def apply_settings(cfg, settings: dict):
         if name in RULES:
             setattr(cfg.rules, name, RULES[name][0](value))
     cfg.rules.repairs = settings.get("repairs", True) is not False   # /repairs on|off (on unless turned off)
+    cfg.rules.abroad = settings.get("abroad") is True                  # /abroad on|off (Italy only unless turned on)
     return cfg
 
 

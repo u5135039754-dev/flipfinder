@@ -5,7 +5,7 @@ Python 3.10+ app that finds underpriced Vinted listings and sends Telegram alert
 ## Layout
 - `main.py` CLI entry (`--once`, `--dry-run`, `--test-telegram`, `-v`)
 - `flipfinder/vinted.py` Vinted search client: loads the `/catalog` page and reads items from its embedded Next.js data (`/api/v2/catalog/items` is gone, 404)
-- `flipfinder/analyzer.py` market value (median of comparables matched by query relevance, brand and model tokens from titles, IQR outlier removal, same-size preference), profit, ROI, 1-10 rating, filters
+- `flipfinder/analyzer.py` market value (median of comparables matched by query relevance (category words optional, brand counts), brand and model tokens from titles, IQR outlier removal + asking prices over 1.3x the median dropped, bundles (games, 2+ controllers) left out for plain items, same-size preference; "Playstation 5" = ps5, disc/digital are model words, a comparable must share the item's model words except disc), profit, ROI, 1-10 rating, filters (max_price for main deals, default 200; Vinted from abroad skipped unless /abroad on: country from the seller's profile page)
 - `flipfinder/scanner.py` per-search scan, price pool cache in `data/pools.json`
 - `flipfinder/ebay.py` eBay Browse API client (EBAY_IT, Buy It Now, app token), searched every 20 min, pools every 3 h (~3,050 of 5,000 calls/day), calls/day in `data/ebay.json`
 - `flipfinder/subito.py` Subito app JSON API (hades.subito.it, app headers; the website is Akamai-blocked): new listings per category in the home province, kept within `radius_km`, pickup travel cost vs seller shipping
@@ -26,7 +26,7 @@ Python 3.10+ app that finds underpriced Vinted listings and sends Telegram alert
 
 ## Notes
 - Keep `request_delay` >= 2s. Handle 401/403 by refreshing the cookie, 429 by backing off.
-- Market value: asking prices, blended with likely-sold prices once 5+ sold comparables exist (sold.py).
+- Market value: asking prices, blended with likely-sold prices once 3+ sold comparables exist (sold.py). Music searches (Guitars/Amps/Pedals) need 5 comparables, others 8.
 
 ## Plan decisions (agreed with the owner; keep until done)
 Working rules: the owner doesn't code. Build, test, dry run, show results in plain language, and ask before every push. Manual steps one at a time in simple words. Never ask for secrets in chat. Everything stays free (€0).

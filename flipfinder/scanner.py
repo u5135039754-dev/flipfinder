@@ -17,6 +17,7 @@ from .ebay import EbayClient
 from .subito import CATEGORY_FOR_VINTED_CATALOG, SubitoClient
 from .sold import SoldTracker
 from .storage import SeenStore
+from .settings import search_group
 from .vinted import Item, VintedClient
 
 log = logging.getLogger(__name__)
@@ -25,6 +26,8 @@ log = logging.getLogger(__name__)
 # expire together and push a run past the workflow timeout, so only this many are
 # rebuilt per run; the rest keep their older pool until their turn.
 MAX_POOL_REBUILDS = 4
+MUSIC = {"Guitars", "Amps", "Pedals"}
+MUSIC_MIN_COMPARABLES = 5   # same-model listings needed to value music gear
 FAST_PER_PAGE = 24   # the fast lane only needs the listings that appeared since the last pass
 # A newly added search alerts on at most this many of the deals already listed
 # (the best ones); the rest of its current listings are just remembered.
@@ -149,7 +152,6 @@ class KnownSearches:
 
 def tag(deal: Deal, s: Search) -> Deal:
     """Which search found it, and its category (for the group topic)."""
-    from .settings import search_group
     deal.query, deal.group = s.query, search_group(s)
     return deal
 
@@ -311,9 +313,9 @@ class Scanner:
     def _subito_for(self, s: Search) -> list[Item]:
         """This run's new local Subito listings that belong to this search."""
         return [i for i in self.subito_new
-                if is_relevant(i.title, s.query)
+                if is_relevant(i.title, s.query, i.brand)
                 and (s.price_from is None or i.price >= s.price_from)
-                and (s.price_to is None or i.price <= s.price_to)]
+                and (self._price_to(s) is None or i.price <= self._price_to(s))]
 
     # --- scanning ----------------------------------------------------------------
 
@@ -330,20 +332,33 @@ class Scanner:
                             max_roi=float(br["max_roi"]), max_cost=float(self.cfg.budget), budget=True)
         if s.max_roi is not None:
             rules = replace(rules, max_roi=s.max_roi)
+        if search_group(s) in MUSIC:
+            # one search ("boss", "marshall amplificatore") covers dozens of models: fewer of each
+            rules = replace(rules, min_comparables=min(rules.min_comparables, MUSIC_MIN_COMPARABLES))
         now = time.time()
         tracked, scale = self.sold.coverage(_key(s), now)
         return replace(rules, match_brand=s.match_brand, check=s.check, missing_part_cost=s.missing_part_cost,
                        sold=self.sold.sold_for(_key(s), now), tracked_days=tracked, sold_scale=scale, now=now)
 
+    def _price_to(self, s: Search) -> float | None:
+        """
+        The search's max price, never above the main deals' max price: no point loading what we
+        wouldn't buy. Only at search time: the saved pools and sold history keep their keys.
+        """
+        cap = self.cfg.rules.max_price
+        if s.budget or cap is None:
+            return s.price_to
+        return cap if s.price_to is None else min(s.price_to, cap)
+
     def scan_search(self, s: Search) -> list[Deal]:
         newest = self.client.search(s.query, order="newest_first",
-                                    price_from=s.price_from, price_to=s.price_to,
+                                    price_from=s.price_from, price_to=self._price_to(s),
                                     extra=s.filters)
         self.sold.anchor(newest, time.time())   # newest ids = listed just now: dates for days-to-sell
         ebay_newest: list[Item] = []
         if self.ebay and self.ebay_due:
             try:
-                ebay_newest = self.ebay.search(s.query, price_from=s.price_from, price_to=s.price_to,
+                ebay_newest = self.ebay.search(s.query, price_from=s.price_from, price_to=self._price_to(s),
                                                limit=self.cfg.ebay.new_per_search,
                                                category=self._ebay_category(s))
             except Exception as e:   # eBay trouble shouldn't stop the Vinted scan
@@ -428,7 +443,7 @@ class Scanner:
                 continue
             try:
                 newest = self.client.search(s.query, order="newest_first", per_page=FAST_PER_PAGE,
-                                            price_from=s.price_from, price_to=s.price_to, extra=s.filters)
+                                            price_from=s.price_from, price_to=self._price_to(s), extra=s.filters)
             except Exception as e:
                 self.failed_searches += 1
                 log.error("Fast lane: search '%s' failed: %s", s.query, e)
@@ -507,6 +522,7 @@ class Scanner:
             return assess(item, pool, rules, query)
         pickup = not d.shipping_available or is_pickup_only(f"{item.title}\n{d.description}")
         item.seller = self._vinted_seller(d)
+        item.country = (item.seller or {}).pop("country", "") or ""
         item.description = (d.description or "")[:1500]
         if d.photos:
             item.photos = d.photos[:4]   # the search page only has the first photo
@@ -526,7 +542,7 @@ class Scanner:
             seller["id"] = d.seller_id   # only for spotting reposts (kept in the Worker's private storage, never logged)
             try:
                 prof = self.client.seller_profile(d.seller_id)
-                seller.update(sold=prof.get("sold"), negative=prof.get("negative"))
+                seller.update(sold=prof.get("sold"), negative=prof.get("negative"), country=prof.get("country", ""))
             except Exception as e:   # never print the profile: public logs
                 log.warning("Couldn't open a seller profile: %s", type(e).__name__)
         return seller
@@ -623,7 +639,7 @@ class Scanner:
         out = {}
         for s in self.cfg.searches:
             pool = [i for i in (self.pools.get(_key(s), any_age=True) or [])
-                    if i.source == "vinted" and is_relevant(i.title, s.query)]
+                    if i.source == "vinted" and is_relevant(i.title, s.query, i.brand)]
             if len(pool) < 3:
                 continue
             rules = self._rules(s)

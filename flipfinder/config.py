@@ -118,6 +118,7 @@ def load(path: str | Path = "config.yaml") -> Config:
         min_rating=int(r.get("min_rating", 6)),
         min_comparables=int(r.get("min_comparables", 8)),
         max_roi=float(r.get("max_roi", 400)),
+        max_price=float(r["max_price"]) if r.get("max_price") is not None else None,
         resell_costs=float(r.get("resell_costs", 0)),
         shipping_cost=float(r.get("shipping_cost", 15)),
         exclude_keywords=tuple(global_excl),

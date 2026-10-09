@@ -66,6 +66,8 @@ class Rules:
     max_cost: float | None = None   # budget: price + fee + shipping/pickup (+ missing parts) must fit
     missing_part_cost: float = 0.0  # cameras: added when the listing says no battery/charger
     repairs: bool = True            # damaged listings we can fix become repair deals (/repairs on|off)
+    abroad: bool = False            # Vinted listings shipping from outside Italy (/abroad on|off)
+    max_price: float | None = None  # main deals: the most we pay all in (/setrule max_price), budget has its own
     budget: bool = False            # a budget-mode search (ranked by profit per euro spent)
     check: str = ""                 # "what to check before buying", shown in the alert
     sold: list = field(default_factory=list)   # [(Item, days to sell or None, sold at)] likely sold lately (sold.py)
@@ -83,8 +85,11 @@ def is_excluded(item: Item, keywords) -> bool:
     return any(re.search(rf"\b{re.escape(k.lower())}\b", title) for k in keywords)
 
 
+HIGH_ASK = 1.3   # asking prices this far above the median are wishful thinking, not the market
+
+
 def remove_outliers(prices: list[float]) -> list[float]:
-    """Drop prices outside 1.5x IQR so a few silly listings don't move the median."""
+    """Drop prices outside 1.5x IQR, and any over 1.3x the median, so silly listings don't move the median."""
     if len(prices) < 4:
         return prices
     s = sorted(prices)
@@ -92,7 +97,9 @@ def remove_outliers(prices: list[float]) -> list[float]:
     q3 = s[(3 * len(s)) // 4]
     iqr = q3 - q1
     lo, hi = q1 - 1.5 * iqr, q3 + 1.5 * iqr
-    return [p for p in s if lo <= p <= hi]
+    kept = [p for p in s if lo <= p <= hi]
+    top = median(kept) * HIGH_ASK
+    return [p for p in kept if p <= top]
 
 
 # --- Title matching ------------------------------------------------------------
@@ -109,6 +116,12 @@ PHRASES = [
     (re.compile(r"\bcyber ?shot\b"), "cybershot"),
     (re.compile(r"\bmk ?(ii|2)\b"), "mk2"),
     (re.compile(r"\bmk ?(iii|3)\b"), "mk3"),
+    # consoles: "Playstation 5" is a PS5; the disc and digital versions sell at different prices
+    (re.compile(r"\bplay ?station ?5\b|\bps ?5\b"), "ps5"),
+    (re.compile(r"\b(?:con |avec |with |mit |versione |version )?(?:lettore|lecteur|lector|laufwerk)"
+                r"(?: (?:cd|dvd|disco|disc|dischi|blu ?ray))?\b"), " disc "),
+    (re.compile(r"\b(?:standard|disco|disk|disque|blu ?ray)(?: edition| edizione)?\b"), " disc "),
+    (re.compile(r"\b(?:digitale|numerique|digital edition)\b"), " digital "),
 ]
 SYNONYMS = {
     "lp": "lespaul", "strat": "stratocaster", "serie": "series",
@@ -146,14 +159,18 @@ FILLER = set("""
     sbloccato unlocked libero operatore batteria battery
     mezzanotte midnight galassia starlight grafite graphite argento silver oro gold grigio gray grey
     siderale space viola purple verde green rosa pink azzurro giallo yellow
+    fat console consola konsole
 """.split())
 
 # Words that make a different model (and price): an iPhone 13 Pro isn't an iPhone 13,
 # a 3060 Ti isn't a 3060. They have to match exactly, like model numbers.
-MODEL_WORDS = {"pro", "max", "mini", "plus", "oled", "ti", "super", "slim", "digital", "lite",
+MODEL_WORDS = {"pro", "max", "mini", "plus", "oled", "ti", "super", "slim", "digital", "disc", "lite",
                "ultra", "se", "cellular", "lte", "xt", "xl",
                # special editions sell at their own prices
                "limited", "edition", "edizione", "custom"}
+
+# variants a listing usually is when it doesn't say: a PS5 that doesn't say "digital" has a disc drive
+DEFAULT_WORDS = {"disc"}
 
 _YEAR = re.compile(r"^(19[5-9]\d|20[0-3]\d)$")
 _WATTS = re.compile(r"^\d+(w|watt|watts)$")
@@ -208,9 +225,15 @@ def normalize(text: str) -> tuple[str, ...]:
     return tuple(out)
 
 
-def is_relevant(title: str, query: str) -> bool:
-    """True when the title contains every word of the search query."""
-    return set(normalize(query)) <= set(normalize(title))
+def is_relevant(title: str, query: str, brand: str = "") -> bool:
+    """
+    True when the title (or the listing's brand) has every word of the search query. Category
+    words in the query ("amplificatore", "chitarra", "pedale") may be missing: the search's
+    Vinted category already says so, and "Marshall MG15CFR" is a Marshall amp.
+    """
+    words = set(normalize(query))
+    needed = (words - FILLER) or words
+    return needed <= set(normalize(title)) | set(normalize(brand))
 
 
 _ROMAN = {"ii", "iii", "iv"}   # "Player II", "Special-II" are different models too
@@ -260,6 +283,16 @@ def price_spread(prices: list[float]) -> float:
 TIGHT_SPREAD = 0.35   # the whole pool only counts as comparables when it's this consistent
 
 
+# a console with games or extra controllers sells for more: not a comparable for a plain one
+BUNDLE = re.compile(r"\b(giochi|gioco|games?|jeux|jeu|juegos?|spiele|spiel|bundle)\b|"
+                    r"\b(2|3|4|due|tre|deux|trois|dos|tres|zwei)\s*(controller|controllers|manette|manettes|mandos?|joysticks?|joypad)\b",
+                    re.IGNORECASE)
+
+
+def is_bundle(title: str) -> bool:
+    return bool(BUNDLE.search(title))
+
+
 def find_comparables(item: Item, pool: list[Item], min_comparables: int,
                      query: str = "", match_brand: bool = True) -> tuple[list[Item], str]:
     """
@@ -273,10 +306,14 @@ def find_comparables(item: Item, pool: list[Item], min_comparables: int,
     """
     others = [p for p in pool if p.id != item.id]
     if query:
-        others = [p for p in others if is_relevant(p.title, query)]
+        others = [p for p in others if is_relevant(p.title, query, p.brand)]
     if item.brand and match_brand:
         brand = item.brand.lower()
         others = [p for p in others if not p.brand or p.brand.lower() == brand]
+    if not is_bundle(item.title):
+        plain = [p for p in others if not is_bundle(p.title)]
+        if len(plain) >= min_comparables:
+            others = plain
     if item.size:
         same_size = [p for p in others if p.size == item.size]
         if len(same_size) >= min_comparables:
@@ -308,8 +345,10 @@ def find_comparables(item: Item, pool: list[Item], min_comparables: int,
         if tight(same_number):
             return same_number, "listings without a model number (prices are tight)"
     # Last resort, only when prices are tight, and never against a listing whose model
-    # number contradicts this one (a 128GB is never valued like a 256GB or a Pro)
-    compatible = [p for p in others if model_numbers(tokens(p)) <= numbers]
+    # number contradicts this one (a 128GB is never valued like a 256GB or a Pro), nor one
+    # missing this one's model words (a Pro isn't valued like a plain one; "disc" may be left out)
+    must = (numbers & MODEL_WORDS) - DEFAULT_WORDS
+    compatible = [p for p in others if model_numbers(tokens(p)) <= numbers and must <= model_numbers(tokens(p))]
     if tight(compatible):
         return compatible, "whole pool (prices are tight)"
     return [], "no comparable model"
@@ -333,7 +372,7 @@ def market_value(item: Item, pool: list[Item], min_comparables: int,
     return value, len(comps)
 
 
-SOLD_MIN = 5      # sold comparables needed before sold prices count
+SOLD_MIN = 3      # sold comparables needed before sold prices count
 SOLD_FULL = 10    # from this many on, market value is the sold median alone
 DAYS_MIN = 3      # known selling times needed for "sells in ~X days"
 FAST_DAYS, SLOW_DAYS = 7, 30   # rating +1 / -1
@@ -475,12 +514,17 @@ MISSING_PART = re.compile(
     re.I)
 
 
+HOME_COUNTRY = "IT"
+
+
 def blocked_reasons(profit: float, roi: float, rating: int, rules: Rules,
                     cost: float | None = None) -> list[str]:
     """Which rules a listing fails, worded with the thresholds from config.yaml."""
     out = []
     if rules.max_cost is not None and cost is not None and cost > rules.max_cost:
         out.append(f"cost > €{rules.max_cost:g} budget")
+    elif rules.max_price is not None and not rules.budget and cost is not None and cost > rules.max_price:
+        out.append(f"cost > €{rules.max_price:g} max price")
     if profit < rules.min_profit:
         out.append(f"profit < €{rules.min_profit:g}")
     if roi < rules.min_roi:
@@ -531,8 +575,10 @@ def assess(item: Item, pool: list[Item], rules: Rules, query: str = "",
     hard = [k for k in rules.exclude_keywords if not is_damage_word(k)]
     if is_excluded(item, hard):
         return None
-    if query and not is_relevant(item.title, query):
+    if query and not is_relevant(item.title, query, item.brand):
         return None
+    if item.country and item.country != HOME_COUNTRY and not rules.abroad:
+        return None   # ships from abroad: off unless /abroad on
     fix = None
     text = f"{item.title}\n{item.description}"
     if damaged(text) or is_excluded(item, [k for k in rules.exclude_keywords if is_damage_word(k)]):

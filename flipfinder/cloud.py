@@ -49,7 +49,8 @@ def catalog(cfg) -> dict:
         "searches": [{"query": s.query, "price_from": s.price_from, "price_to": s.price_to, "budget": s.budget,
                       "group": search_group(s), "price_to_is_budget": s.price_to_is_budget} for s in cfg.searches],
         "rules": {"min_profit": cfg.rules.min_profit, "min_roi": cfg.rules.min_roi,
-                  "min_rating": cfg.rules.min_rating, "max_roi": cfg.rules.max_roi},
+                  "min_rating": cfg.rules.min_rating, "max_roi": cfg.rules.max_roi,
+                  **({"max_price": cfg.rules.max_price} if cfg.rules.max_price is not None else {})},
         "budget_rules": cfg.budget_rules, "budget": cfg.budget_setting,
         "ebay": cfg.ebay.enabled, "subito": cfg.subito.enabled,
     }

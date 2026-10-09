@@ -1258,10 +1258,10 @@ def test_sold_prices_pull_market_value_towards_what_sold(tmp_path: Path):
     rules = Rules(min_profit=1, min_roi=1, max_roi=500)
     base = assess(item, pool, rules)
     assert base.market_value == 60 and base.sold_count == 0 and base.sell_days is None
-    four = assess(item, pool, dc_replace(rules, sold=_sold(4, "Boss DS-1 distortion", 40)))
-    assert four.market_value == 60 and four.sold_count == 0                 # too few sold to count
-    five = assess(item, pool, dc_replace(rules, sold=_sold(5, "Boss DS-1 distortion", 40)))
-    assert five.market_value == 50 and five.sold_count == 5 and five.asking_value == 60   # half and half
+    two = assess(item, pool, dc_replace(rules, sold=_sold(2, "Boss DS-1 distortion", 40)))
+    assert two.market_value == 60 and two.sold_count == 0                   # too few sold to count
+    three = assess(item, pool, dc_replace(rules, sold=_sold(3, "Boss DS-1 distortion", 40)))
+    assert three.market_value == 50 and three.sold_count == 3 and three.asking_value == 60   # half and half
     ten = assess(item, pool, dc_replace(rules, sold=_sold(10, "Boss DS-1 distortion", 40)))
     assert ten.market_value == 40                                           # sold only
     other = assess(item, pool, dc_replace(rules, sold=_sold(10, "Boss DS-2 turbo distortion", 40)))
@@ -1282,7 +1282,7 @@ def test_selling_speed_shows_and_moves_the_rating_one_point(tmp_path: Path):
     assert slow.rating == max(1, base.rating - 1) and mid.rating == base.rating
     assert assess(item, pool, dc_replace(rules, sold=_sold(2, "Boss DS-1 distortion", 60, days=4.0))).sell_days is None
     msg = format_deal(fast)
-    assert "⏱ sells in ~4 days" in msg and "🏷 Original price" in msg       # 3 sold: speed yes, value not yet
+    assert "⏱ sells in ~4 days" in msg and "🏷 Market value" in msg         # 3 sold: speed, and sold prices count
     ten = assess(item, pool, dc_replace(rules, sold=_sold(10, "Boss DS-1 distortion", 40, days=1.2)))
     msg = format_deal(ten)
     assert "🏷 Market value: <b>€40.00</b> (10 sold · asking €60.00, median of 12)" in msg
@@ -1685,3 +1685,55 @@ def test_ebay_photos_at_1000px_not_thumbnails():
            "additionalImages": [{"imageUrl": "https://i.ebayimg.com/images/g/BBB/s-l225.jpg"}]}
     assert item_from_ebay(raw).photos == ["https://i.ebayimg.com/images/g/AAA/s-l1000.jpg",
                                           "https://i.ebayimg.com/images/g/BBB/s-l1000.jpg"]
+
+
+def test_consoles_playstation_5_is_ps5_and_disc_digital_slim_are_kept_apart():
+    assert is_relevant("Sony Playstation 5 Disc Edition", "ps5")
+    assert is_relevant("PS 5 slim", "ps5")
+    pool = ([titled(10 + i, "PS5 Slim lettore disco", 380 + i, "Sony") for i in range(9)] +
+            [titled(30 + i, "PS5 Slim Digital", 300 + i, "Sony") for i in range(9)] +
+            [titled(50 + i, "Playstation 5 standard", 320 + i, "Sony") for i in range(9)])
+    slim = market_value(titled(1, "Ps5 slim versione con lettore", 250, "Sony"), pool, 8, "ps5")[0]
+    digital = market_value(titled(2, "ps5 slim digitale", 200, "Sony"), pool, 8, "ps5")[0]
+    fat = market_value(titled(3, "PS5 disco", 220, "Sony"), pool, 8, "ps5")[0]
+    assert 380 <= slim < 390 and 300 <= digital < 310 and 320 <= fat < 330
+
+
+def test_bundles_and_wishful_asking_prices_dont_lift_the_value():
+    plain = [titled(10 + i, "PS5 Slim", 350, "Sony") for i in range(8)]
+    bundles = [titled(30 + i, "PS5 Slim + 2 controller + 3 giochi", 480, "Sony") for i in range(6)]
+    assert market_value(titled(1, "PS5 Slim", 250, "Sony"), plain + bundles, 8, "ps5")[0] == 350
+    # over 1.3x the median is dropped even when the IQR would keep it
+    assert max(remove_outliers([100, 100, 105, 110, 110, 120, 125, 140])) == 140
+    assert max(remove_outliers([100, 100, 100, 100, 100, 100, 131, 131])) == 100
+
+
+def test_a_pro_is_never_valued_like_the_plain_model():
+    pool = [titled(10 + i, "iPhone 13 128GB", 220 + i, "Apple") for i in range(10)]
+    assert market_value(titled(1, "iPhone 13 Pro 128GB", 180, "Apple"), pool, 8, "iphone 13")[0] is None
+
+
+def test_abroad_listings_are_skipped_unless_turned_on_and_then_marked():
+    from dataclasses import replace as dc_replace
+    from flipfinder.vinted import parse_profile_page
+    page = 'self.__next_f.push([1,"{\\"given_item_count\\":3,\\"country_iso_code\\":\\"ES\\",\\"country_title\\":\\"Spagna\\"}"])'
+    assert parse_profile_page(page)["country"] == "ES"
+    item = titled(1, "Boss DS-1 distortion", 25, "Boss")
+    pool = [titled(10 + i, "Boss DS-1 distortion", 60, "Boss") for i in range(10)]
+    rules = Rules(min_profit=1, min_roi=1, max_roi=500)
+    item.country = "ES"
+    assert assess(item, pool, rules) is None                                  # Italy only by default
+    deal = assess(item, pool, dc_replace(rules, abroad=True))
+    assert deal and "🌍 <b>Ships from Spain</b> · usually 5-8 days to arrive" in format_deal(deal)
+    item.country = "IT"
+    assert assess(item, pool, rules) is not None and "🌍" not in format_deal(assess(item, pool, rules))
+
+
+def test_max_price_blocks_main_deals_over_it_and_caps_the_search():
+    from dataclasses import replace as dc_replace
+    item = titled(1, "Boss DS-1 distortion", 150, "Boss")
+    pool = [titled(10 + i, "Boss DS-1 distortion", 300, "Boss") for i in range(10)]
+    rules = Rules(min_profit=1, min_roi=1, max_roi=500, max_price=120)
+    assert any(b.startswith("cost > €120 max price") for b in assess(item, pool, rules).blocked)
+    assert not assess(item, pool, dc_replace(rules, max_price=300)).blocked
+    assert not is_near_miss(assess(item, pool, rules))

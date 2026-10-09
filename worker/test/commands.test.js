@@ -212,3 +212,16 @@ test("/demand finds the search and the model asked for", async () => {
   assert.match(none, /No search like "zzz"/);
   assert.match(empty, /Which model\?/);
 });
+
+test("/abroad on|off (owner only, off by default) and max_price in /rules and /setrule", async () => {
+  const t = await setup({ settings: { allowed_users: [MARCO] } });
+  await t.updates(msg("/rules"), msg("/abroad", { user: MARCO }), msg("/abroad"), msg("/abroad on"), msg("/setrule max_price 150"), msg("/rules"));
+  const r = t.tg.texts();
+  assert.match(r[0], /max_price: €200 \(the most a main deal may cost, all in\)\nabroad: off \(Vinted: Italy only\)/);
+  assert.match(r[1], /Only the owner/);
+  assert.match(r[2], /Listings from abroad are off/);
+  assert.match(r[3], /from other countries are back/);
+  assert.equal((await t.settings()).abroad, true);
+  assert.match(r[5], /max_price: €150[\s\S]*abroad: on/);
+  assert.equal((await t.settings()).rules.max_price, 150);
+});

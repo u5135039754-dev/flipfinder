@@ -37,6 +37,8 @@ def format_deal(deal: Deal) -> str:
     platform = PLATFORMS.get(it.source, it.source)
     where = html.escape(it.location) + (f" ({it.distance_km:.0f} km)" if it.distance_km is not None else "")
     lines.append(f"🛒 <b>{platform}</b>" + (f" · {where}" if it.location else ""))
+    if it.country and it.country != "IT":
+        lines.append(abroad_line(it.country))
     if it.negotiable:
         lines.append("💬 Negotiable")
     if deal.pickup_only:
@@ -72,6 +74,20 @@ def format_deal(deal: Deal) -> str:
         f'<a href="{html.escape(it.url)}">Open on {platform}</a>',
     ]
     return "\n".join(lines)
+
+
+# where vinted.it listings come from, and how long Vinted's cross-border parcels usually take
+# to reach Italy (typical, not a promise: Vinted only shows the estimate at checkout)
+COUNTRIES = {"ES": ("Spain", "5-8"), "FR": ("France", "4-7"), "DE": ("Germany", "4-7"), "NL": ("Netherlands", "4-7"),
+             "BE": ("Belgium", "4-7"), "AT": ("Austria", "4-7"), "LU": ("Luxembourg", "4-7"), "PT": ("Portugal", "6-9"),
+             "PL": ("Poland", "6-9"), "CZ": ("Czechia", "6-9"), "SK": ("Slovakia", "6-9"), "LT": ("Lithuania", "7-10"),
+             "HU": ("Hungary", "6-9"), "RO": ("Romania", "7-10"), "SE": ("Sweden", "7-10"), "DK": ("Denmark", "6-9"),
+             "FI": ("Finland", "7-10"), "IE": ("Ireland", "7-10"), "GR": ("Greece", "7-10"), "HR": ("Croatia", "6-9")}
+
+
+def abroad_line(country: str) -> str:
+    name, days = COUNTRIES.get(country, (country, "7-10"))
+    return f"🌍 <b>Ships from {name}</b> · usually {days} days to arrive"
 
 
 def seller_line(seller: dict | None) -> str:

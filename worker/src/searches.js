@@ -5,6 +5,7 @@ export const RULES = {   // name: [type, min, max] for /setrule
   min_roi: ["float", 0, 1_000],
   min_rating: ["int", 1, 10],
   max_roi: ["float", 1, 10_000],
+  max_price: ["float", 1, 10_000],   // main deals: the most we pay all in (budget deals use /budget)
 };
 
 /** Short stable id for button data (Telegram allows 64 bytes). */
@@ -53,7 +54,7 @@ export function applySettings(catalog, settings, pool = null) {
       s.price_to_is_budget = false;   // set by hand: the budget only caps it
     }
   }
-  const rules = { min_profit: 25, min_roi: 30, min_rating: 5, max_roi: 120, ...(catalog.rules || {}) };
+  const rules = { min_profit: 25, min_roi: 30, min_rating: 5, max_roi: 120, max_price: 200, ...(catalog.rules || {}) };
   for (const [name, value] of Object.entries(settings.rules || {})) {
     if (name in RULES) rules[name] = value;
   }

@@ -15,7 +15,7 @@ import { DEFAULT_WATCH, MAX_WATCH, findCoin, watchlist } from "./crypto.js";
 import { hhmm, rome, romeTs } from "./util.js";
 import { UserError, closeMatches, esc, euro, g, parseNumber, queryAndRange, splitArgs } from "./util.js";
 
-export const COMMANDS_VERSION = 19;   // bump when the list below changes, so it's registered again
+export const COMMANDS_VERSION = 20;   // bump when the list below changes, so it's registered again
 export const COMMANDS = [
   ["help", "List all commands"],
   ["app", "Open the flipFinder app: deals, stock, pot and settings"],
@@ -52,6 +52,7 @@ export const COMMANDS = [
   ["setrole", "Owner only: /setrole Anna seller (manager, buyer, seller, or none to remove it)"],
   ["removerole", "Owner only: /removerole Anna (blocks them right away)"],
   ["repairs", "Owner only: repair deals (damaged but fixable): /repairs on or /repairs off"],
+  ["abroad", "Owner only: Vinted listings from other countries: /abroad on or /abroad off (Italy only)"],
   ["remind", "Owner only: the \"not claimed yet\" digest: /remind on or /remind off"],
   ["setname", "Owner only: the name the bot uses for someone: /setname 123456789 Anna"],
   ["ledger", "Every money action, newest last: /ledger or /ledger 30"],
@@ -63,7 +64,7 @@ export const COMMANDS = [
   ["allow", "Owner only: first step for a new member: /allow 123456789, then /setrole"],
   ["intro", "Owner only: post or update the pinned intro in every topic"],
 ];
-const OWNER_ONLY = new Set(["allow", "intro", "deposit", "withdraw", "fix", "undo", "split", "setrole", "removerole", "delnote", "setname", "remind", "repairs"]);
+const OWNER_ONLY = new Set(["allow", "intro", "deposit", "withdraw", "fix", "undo", "split", "setrole", "removerole", "delnote", "setname", "remind", "repairs", "abroad"]);
 export const LOCKED = "🔒 You're not a member of FLIP MAFIA";
 const IN_GROUP = new Set(["member", "administrator", "creator", "restricted"]);
 // the fast lane's settings (the scanner has the same defaults in flipfinder/fastlane.py)
@@ -360,6 +361,20 @@ Add one with /watch link, remove with /unwatch sol`);
     this.changed = true;
     await this.reply(chat, a === "on" ? "🔧 Repair deals on: damaged but fixable, still a deal after the part (from the next scan)"
       : "🔧 Repair deals off: damaged listings are skipped again (from the next scan)");
+  }
+
+  async cmd_abroad(chat, args, user) {
+    if (user !== this.ownerId) throw new UserError("Only the owner can use /abroad");
+    const a = (args[0] || "").toLowerCase();
+    const on = this.settings.abroad === true;
+    if (a !== "on" && a !== "off") {
+      return this.reply(chat, `🌍 Listings from abroad are ${on ? "on" : "off (Vinted: Italy only)"}. /abroad on or /abroad off`);
+    }
+    this.settings.abroad = a === "on";
+    this.changed = true;
+    await this.reply(chat, a === "on"
+      ? "🌍 Vinted listings from other countries are back, marked 🌍 with the usual delivery time (from the next scan)"
+      : "🇮🇹 Vinted: Italy only from the next scan");
   }
 
   async cmd_remind(chat, args, user) {
@@ -933,7 +948,8 @@ Add one with /watch link, remove with /unwatch sol`);
     await this.reply(chat, [
       "<b>Deal rules</b>",
       `min_profit: €${g(r.min_profit)}`, `min_roi: ${g(r.min_roi)}%`, `min_rating: ${r.min_rating}`,
-      `max_roi: ${g(r.max_roi)}%`,
+      `max_roi: ${g(r.max_roi)}%`, `max_price: €${g(r.max_price)} (the most a main deal may cost, all in)`,
+      `abroad: ${this.settings.abroad === true ? "on (🌍 listings from other countries too)" : "off (Vinted: Italy only)"}`,
       "", `<i>Budget mode (€${g(view.budget)}): min_profit €${g(br.min_profit)}, ` +
         `min_roi ${g(br.min_roi)}%, max_roi ${g(br.max_roi)}%</i>`,
     ].join("\n"));

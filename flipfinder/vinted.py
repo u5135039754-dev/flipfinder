@@ -49,6 +49,7 @@ class Item:
     seller: dict | None = None        # trust: reviews, rating, items sold... (seller_line in telegram.py)
     photos: list = field(default_factory=list)   # up to 4 photo URLs, for the AI check (not kept in the pools)
     description: str = ""             # the seller's text (Vinted: from the item page), for the AI check
+    country: str = ""                 # where it ships from, ISO code ("IT", "ES"): Vinted, from the seller's profile
 
     @property
     def key(self) -> str:
@@ -348,6 +349,9 @@ def parse_profile_page(html: str) -> dict:
         m = re.search(r'"%s"\s*:\s*(\d+)' % key, data)
         if m:
             out[name] = int(m.group(1))
+    m = re.search(r'"country_iso_code"\s*:\s*"([A-Z]{2})"', data)   # vinted.it also lists other countries' items
+    if m:
+        out["country"] = m.group(1)
     return out
 
 

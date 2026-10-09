@@ -42,6 +42,7 @@ rules:
   min_rating: 5        # out of 10 (6 blocked cheap items: full profit points need €50+)
   min_comparables: 8   # need this many similar listings to trust the market value
   max_roi: 120         # way cheaper than this usually means a different model, fake, broken or a toy
+  max_price: 200       # the most a main deal may cost all in (the pot is small); budget deals use `budget`
   resell_costs: 10     # your packaging when you resell (the buyer pays shipping on Vinted)
   shipping_cost: 15    # what you pay for delivery, only used when the item page doesn't say
                        # (searches below override both per item type)
