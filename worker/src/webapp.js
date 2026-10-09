@@ -3,6 +3,7 @@
 // Actions run through the same Bot code as the chat buttons, so deal messages, money posts
 // and the €50 approval rule behave exactly the same.
 
+import { dailyStats } from "./stats.js";
 import { forApp } from "./handbook.js";
 import { UserError, nowSeconds, parseNumber } from "./util.js";
 import { shares } from "./pot.js";
@@ -53,6 +54,8 @@ export async function snapshot(bot, user) {
     down: Object.values(d.votes || {}).filter((v) => v === "down").length,
     voted: (d.votes || {})[String(user.id)] || "",
     verdict: d.ai?.verdict || "", ai: d.ai?.lines || [],
+    kit: d.kit ? { prices: d.kit.prices, platform: d.kit.platform, why: d.kit.why, title: d.kit.title, description: d.kit.description,
+      photos: d.kit.photos, shipping: d.kit.shipping } : null, list_price: d.list_price ?? null,
     request: d.request ? { amount: d.request.amount, by: d.request.by } : null,
   });
   const open = deals.filter(([, d]) => (d.status === "new" && !d.hidden && (d.sent || 0) >= now - 7 * 86400) || d.status === "claimed");
@@ -73,6 +76,7 @@ export async function snapshot(bot, user) {
     me: { id: user.id, name: [user.first_name, user.last_name].filter(Boolean).join(" "), owner: user.id === bot.ownerId,
       manager: bot.team.isManager(user.id), team: bot.team.active },
     schedule: await bot.team.grid(),
+    stats: await dailyStats(bot, { days: 30 }),
     handbook: forApp(await bot.handbook.load()),
     deals: open.map(card).sort((a, b) => b.sent - a.sent),
     stock: stockList.map(card),

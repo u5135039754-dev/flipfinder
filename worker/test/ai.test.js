@@ -98,6 +98,9 @@ test("the bot decides YES/NO from the profit after the part; only a red flag tur
     "✅ YES. €33 profit.");
   assert.equal(await verdict("RISK: Stock photos only\nIF: none\nRED FLAG: likely a replica, wrong logo font\nPARTS: 0 | DIFFICULTY: none | PART: none"),
     "❌ NO. Likely a replica, wrong logo font.");
+  // a question isn't a condition
+  assert.equal(await verdict("RISK: x\nIF: Which Pencil model? iCloud off?\nRED FLAG: none\nPARTS: 0 | DIFFICULTY: none | PART: none"),
+    "✅ YES. €33 profit.");
   // long answers are cut between words, never mid-word or inside brackets
   assert.equal(await verdict("RISK: x\nIF: iCloud is off and the phone is not locked to an account (Find My off)\nRED FLAG: none\n" +
     "PARTS: 0 | DIFFICULTY: none | PART: none"),

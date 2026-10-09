@@ -126,6 +126,14 @@
   .bar { height: 6px; border-radius: 6px; background: var(--soft); overflow: hidden; margin-top: 8px; }
   .bar > i { display: block; height: 100%; border-radius: 6px; }
   .chart { position: relative; touch-action: pan-y; }
+  .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; }
+  .stats-grid b { display: block; font-size: 20px; font-weight: 750; margin-top: 2px; }
+  .tbl-wrap { overflow-x: auto; margin: 0 -4px; }
+  .tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .tbl th { color: var(--muted); font-weight: 600; text-align: right; padding: 4px 6px; }
+  .tbl td { text-align: right; padding: 7px 6px; border-top: 1px solid var(--line); }
+  .tbl th:first-child, .tbl td:first-child { text-align: left; }
+  .tbl tr.total td { font-weight: 700; }
   .chart svg { display: block; width: 100%; height: auto; overflow: visible; }
   .tip { position: absolute; top: -6px; transform: translateX(-50%); background: var(--text); color: var(--bg); border-radius: 8px;
     padding: 4px 8px; font-size: 12px; font-weight: 600; pointer-events: none; white-space: nowrap; }
@@ -202,12 +210,12 @@
   .q > div:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 
   /* tab bar */
-  nav { position: fixed; bottom: 0; left: 0; right: 0; z-index: 6; display: grid; grid-template-columns: repeat(5, 1fr);
+  nav { position: fixed; bottom: 0; left: 0; right: 0; z-index: 6; display: grid; grid-template-columns: repeat(6, 1fr);
     padding: 6px 8px calc(8px + env(safe-area-inset-bottom));
     background: color-mix(in srgb, var(--card) 88%, transparent); backdrop-filter: blur(16px); border-top: 1px solid var(--line); }
   nav button { border: 0; background: none; color: var(--muted); display: flex; flex-direction: column; align-items: center; gap: 3px;
     font-size: 11px; font-weight: 600; padding: 4px 0; }
-  nav svg { width: 24px; height: 24px; padding: 3px 14px; box-sizing: content-box; border-radius: 999px; transition: background 0.2s; }
+  nav svg { width: 24px; height: 24px; padding: 3px 10px; box-sizing: content-box; border-radius: 999px; transition: background 0.2s; }
   nav button.on { color: var(--accent); }
   nav button.on svg { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 
@@ -240,10 +248,11 @@ const ICONS = {
   deals: '<path d="M12 3c2 3.5 5.5 5.2 5.5 9.5a5.5 5.5 0 0 1-11 0c0-2.2 1-3.6 2.2-4.8.2 1.6 1 2.6 2.2 3C10.3 8.6 10.7 5.6 12 3z"/>',
   stock: '<path d="M3.5 7.5 12 3l8.5 4.5v9L12 21l-8.5-4.5z"/><path d="M3.5 7.5 12 12l8.5-4.5M12 12v9"/>',
   pot: '<rect x="3" y="6" width="18" height="13" rx="3"/><path d="M16 12.5h2M3 9.5h18"/>',
+  stats: '<path d="M4 20V10M10 20V4M16 20v-7M21 20H3"/>',
   schedule: '<rect x="3.5" y="5" width="17" height="15" rx="3"/><path d="M8 3v4M16 3v4M3.5 10h17"/>',
   settings: '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
 };
-const TABS = [["deals", "Deals"], ["stock", "Stock"], ["pot", "Pot"], ["schedule", "Schedule"], ["settings", "Settings"]];
+const TABS = [["deals", "Deals"], ["stock", "Stock"], ["pot", "Pot"], ["stats", "Stats"], ["schedule", "Schedule"], ["settings", "Settings"]];
 const PLATFORMS = { vinted: "Vinted", ebay: "eBay", subito: "Subito" };
 // one colour per person: the validated categorical palette, in its fixed order (red stays for empty hours)
 const PEOPLE = { dark: ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#9085e9"],
@@ -375,7 +384,7 @@ function render(animate = true) {
   }));
   document.getElementById("cash").textContent = d?.pot?.started ? `Pot ${euro0(d.pot.cash)}` : "";
   const main = document.getElementById("main");
-  main.replaceChildren(...(d ? ({ deals: dealsTab, stock: stockTab, pot: potTab, schedule: scheduleTab, settings: settingsTab,
+  main.replaceChildren(...(d ? ({ deals: dealsTab, stock: stockTab, pot: potTab, stats: statsTab, schedule: scheduleTab, settings: settingsTab,
     handbook: handbookPage })[state.tab](d) : skeleton()));
   if (state.tab === "handbook") tg?.BackButton?.show(); else tg?.BackButton?.hide();
   if (animate) { main.classList.remove("enter"); void main.offsetWidth; main.classList.add("enter"); }
@@ -476,7 +485,35 @@ function stockTab(d) {
   const listed = d.stock.filter((x) => x.status === "listed").length;
   return [h("div", { class: "card" }, h("div", { class: "label" }, "Tied up in stock"), h("div", { class: "hero" }, euro(tied)),
     h("div", { class: "label" }, `${d.stock.length} item${d.stock.length === 1 ? "" : "s"} · ${listed} listed · ${d.stock.length - listed} to list`)),
-  ...d.stock.map((x) => dealCard(x, d))];
+  ...d.stock.flatMap((x) => [dealCard(x, d), x.kit ? kitCard(x) : null])];
+}
+
+// the listing kit under a stock item: prices at a glance, everything else in a sheet with copy buttons
+async function copy(text) {
+  try { await navigator.clipboard.writeText(text); toast("Copied ✓"); } catch { showText("Copy", text); }
+}
+function kitCard(x) {
+  const k = x.kit, p = k.prices;
+  return h("div", { class: "card", style: "margin-top:-6px" },
+    h("div", { style: "display:flex;justify-content:space-between;align-items:center;gap:10px" },
+      h("div", {}, h("b", {}, "📦 Listing kit"), h("div", { class: "label" },
+        `${k.platform} · list at ${euro0(p.price)} · lowest ${euro0(p.lowest)}${x.list_price ? ` · listed at ${euro0(x.list_price)}` : ""}`)),
+      h("button", { class: "btn", onclick: () => kitSheet(x) }, "Open")));
+}
+function kitSheet(x) {
+  const k = x.kit, p = k.prices;
+  const block = (label, text) => h("div", { style: "margin-bottom:12px" }, h("div", { class: "label", style: "margin-bottom:4px" }, label),
+    h("div", { style: "white-space:pre-wrap" }, text));
+  sheet(`Listing kit · #${x.n}`, [], null, h("div", {},
+    block("💶 Price", `List at ${euro0(p.price)} · lowest to accept ${euro0(p.lowest)}${p.short ? "" : ` · quick sale ${euro0(p.quick)}`}`),
+    block("🛒 Where", `${k.platform}${k.why ? `: ${k.why}` : ""}`),
+    block("🏷 Title", k.title),
+    block("📝 Description", k.description),
+    k.photos?.length ? block("📸 Photos", k.photos.join(" · ")) : null,
+    k.shipping ? block("📦 Shipping", k.shipping) : null,
+    h("div", { class: "actions", style: "margin:0 0 10px" },
+      h("button", { class: "btn primary grow", onclick: () => copy(k.title) }, "📋 Title"),
+      h("button", { class: "btn primary grow", onclick: () => copy(k.description) }, "📋 Description"))));
 }
 
 // --- Pot: a ring meter (cash vs stock, labelled) and a single-series profit line
@@ -582,6 +619,55 @@ function potTab(d) {
         h("div", { class: "label" }, `${day(e.at)}, ${hhmm(e.at)}${e.note ? " · " + e.note : ""}`))),
     h("b", { class: e.amount >= 0 ? "money-pos" : "", style: "white-space:nowrap" }, `${e.amount >= 0 ? "+" : "−"}${euro(Math.abs(e.amount))}`))))
     : empty("📒", "No money moves yet", ""));
+  return out;
+}
+
+// --- Stats: the last 30 days, one row a day; profit counts sold items only
+function weeklyBars(weeks) {
+  if (!weeks.length) return h("div", { class: "label", style: "padding:8px 0" }, "Bars appear after the first sales");
+  const W = 320, H = 120, P = { l: 4, r: 4, t: 18, b: 18 };
+  const max = Math.max(1, ...weeks.map((w) => Math.abs(w.profit)));
+  const bw = Math.min(36, (W - P.l - P.r) / weeks.length - 8);
+  const step = (W - P.l - P.r) / weeks.length;
+  const base = H - P.b;
+  const s = svg("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Profit per week" });
+  s.append(svg("line", { x1: P.l, x2: W - P.r, y1: base, y2: base, stroke: "var(--line)", "stroke-width": 1 }));
+  weeks.forEach((w, i) => {
+    const x = P.l + i * step + (step - bw) / 2;
+    const hgt = Math.max(2, (Math.abs(w.profit) / max) * (base - P.t));
+    s.append(svg("rect", { x, y: base - hgt, width: bw, height: hgt, rx: 4,
+      fill: w.profit >= 0 ? "var(--line-profit)" : "var(--bad)" }));
+    s.append(svg("text", { x: x + bw / 2, y: base - hgt - 5, "font-size": "10", "font-weight": "700", fill: "var(--text)", "text-anchor": "middle" },
+      euro0(w.profit)));
+    s.append(svg("text", { x: x + bw / 2, y: H - 4, "font-size": "10", fill: "var(--muted)", "text-anchor": "middle" },
+      new Date(`${w.week}T12:00:00Z`).toLocaleDateString("en-GB", { day: "2-digit", month: "short" })));
+  });
+  return h("div", { class: "chart" }, s);
+}
+
+function statsTab(d) {
+  const st = d.stats;
+  if (!st) return [empty("📊", "No stats yet", "")];
+  const t = st.totals;
+  const cell = (label, value, cls = "") => h("div", {}, h("div", { class: "label" }, label), h("b", { class: cls }, value));
+  const out = [h("div", { class: "card" }, h("div", { class: "label", style: "margin-bottom:10px" }, "Last 30 days"),
+    h("div", { class: "stats-grid" },
+      cell("Spent", euro0(t.spent)), cell("Made", euro0(t.made)),
+      cell("Profit (sold items)", euro0(t.profit), t.profit > 0 ? "money-pos" : ""), cell("ROI", t.roi == null ? "–" : `${t.roi}%`),
+      cell("In stock", euro0(st.in_stock)), cell("AI cost", `€${t.ai.toFixed(2)}`)))];
+  out.push(h("h2", {}, "Profit per week"), h("div", { class: "card" }, weeklyBars(st.weekly || [])));
+  const rows = [...st.rows].reverse();
+  const num = (count, eur) => count ? `${count} · ${euro0(eur)}` : "–";
+  out.push(h("h2", {}, "Day by day"), h("div", { class: "card" }, h("div", { class: "tbl-wrap" }, h("table", { class: "tbl" },
+    h("thead", {}, h("tr", {}, ["Day", "Sent", "✅", "❌", "✋", "Bought", "Sold", "Profit", "AI"].map((x) => h("th", {}, x)))),
+    h("tbody", {},
+      h("tr", { class: "total" }, h("td", {}, "Total"), h("td", {}, t.sent), h("td", {}, t.yes), h("td", {}, t.no), h("td", {}, t.claimed),
+        h("td", {}, num(t.bought, t.spent)), h("td", {}, num(t.sold, t.made)), h("td", { class: t.profit > 0 ? "money-pos" : "" }, euro0(t.profit)),
+        h("td", {}, `€${t.ai.toFixed(2)}`)),
+      rows.map((r) => h("tr", {}, h("td", {}, day(Date.parse(`${r.date}T12:00:00Z`) / 1000)), h("td", {}, r.sent), h("td", {}, r.yes || "–"),
+        h("td", {}, r.no || "–"), h("td", {}, r.claimed || "–"), h("td", {}, num(r.bought, r.spent)), h("td", {}, num(r.sold, r.made)),
+        h("td", { class: r.profit > 0 ? "money-pos" : "" }, r.profit ? euro0(r.profit) : "–"), h("td", {}, r.ai ? `€${r.ai.toFixed(2)}` : "–"))))))),
+    h("div", { class: "label", style: "margin:-6px 4px 0" }, "✅/❌ = the AI's answer · ✋ = claimed · profit counts sold items only"));
   return out;
 }
 

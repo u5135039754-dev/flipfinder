@@ -80,6 +80,23 @@ export class Telegram {
     return r.ok ? r.result : null;
   }
 
+  /** A file (e.g. a CSV) to one chat; the message, or null. */
+  async sendDocument(chat, filename, content, { caption, type = "text/csv" } = {}) {
+    chat = this.migrations[String(chat)] || String(chat);
+    if (this.callsLeft <= 0) return null;
+    this.callsLeft--;
+    const form = new FormData();
+    form.append("chat_id", chat);
+    if (caption) form.append("caption", caption);
+    form.append("document", new Blob([content], { type }), filename);
+    try {
+      const data = await (await this.fetch(`${this.base}/sendDocument`, { method: "POST", body: form })).json();
+      return data.ok ? data.result : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** To every chat (or the given ones); true if at least one got it. */
   async sendText(text, { chats, buttons, topic } = {}) {
     let sent = false;

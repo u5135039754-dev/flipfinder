@@ -77,7 +77,7 @@ export function dueReminders(deals, now) {
       else if (now - since >= DAY && (d.pinged_at || 0) < since) out.push(["ping", key]);
     } else if (d.status === "bought" && now - (d.bought_at ?? now) >= 3 * DAY && now - (d.nudged_at || 0) >= 3 * DAY) {
       out.push(["list", key]);
-    } else if (d.status === "listed" && now - (d.listed_at ?? now) >= 14 * DAY && now - (d.cut_at || 0) >= 7 * DAY) {
+    } else if (d.status === "listed" && now - (d.listed_at ?? now) >= 7 * DAY && now - (d.cut_at || 0) >= 7 * DAY) {
       out.push(["cut", key]);
     }
   }

@@ -28,7 +28,7 @@ export const DOWN_TEXT = "🧠 The AI isn't available right now. Everything else
 const THREAD_DAYS = 14;
 const MAX_PHOTOS = 4;
 const MAX_TOOL_ROUNDS = 4;
-const CACHE_SIZE = 300;        // quick-check answers kept (one per listing and price)
+const CACHE_SIZE = 1000;       // quick-check answers kept (one per listing and price): more than a week of deals
 const REPAIR_TOOLS = 5;        // small tools and adhesive on top of the part (same as the scanner)
 const IPHONE_DROP = 0.15;      // iOS's "unknown part" message: an iPhone with a non-original part sells ~15% lower
 
@@ -74,6 +74,15 @@ PARTS: 0 | DIFFICULTY: none | PART: none
 Seller questions format: 2 or 3 short questions to send the seller, the ones that would change our answer. One per line, each as "IT: <the question in Italian> | EN: <the same in English>". Nothing else.
 
 Deep check format: start with the bot's ✅ YES / ❌ NO line from the quick check in <thread>, exactly as it is (you may only turn a YES into a NO for a red flag, and say which), then go further in at most 10 short lines: what in the photos or text points to each risk, how the price compares with the comparables, the repair if any, and what would change the answer. End with the same PARTS line.
+
+Listing kit format (to sell an item we bought), exactly these lines. The description is written as us, the private seller, with the item in hand: never mention the old listing, its seller or its photos (no "nelle foto", "dalle foto", "come in foto", "secondo il venditore"). Only state what the listing or photos show (condition, defects, what's included); never invent accessories, a factory reset, battery health or anything else. If it isn't known, leave it out. Everything is in English except TITLE and DESCRIPTION, which are in Italian.
+PLATFORM: Vinted, Subito or eBay | why, in English, at most 12 words (where this kind of item sells best and fastest for the price)
+TITLE: the Italian title buyers would search for, at most 60 characters: brand, model and the key spec (size, storage, colour), no emoji, no capitals for effect
+DESCRIPTION:
+3 to 5 short lines in Italian, each under 15 words: what it is, honest condition with any defect or wear (and the repair if we did one, in one plain sentence), what's included if the listing shows it, shipping or pickup in the city given. Natural, like a private seller writes. No prices.
+END
+PHOTOS: 4 to 7 shots to take for this kind of item, in English, separated by ; (e.g. a guitar: front; back; headstock front and back; neck and frets; serial number; any wear close up)
+PACKAGE: box size and weight, e.g. "40x30x15 cm, about 2 kg" | the shipping option to pick: Vinted piccolo, medio or grande, and the Subito size
 
 Questions: answer in at most 5 short lines using the listing, the thread so far and the tools. If the data doesn't answer it, say so.`;
 
@@ -178,6 +187,10 @@ export class AI {
     u.day_calls += 1;
     u.month_calls += 1;
     await this.bot.store.put("ai_usage", u);
+    // and per day, for /stats (kept for a year)
+    const daily = await this.bot.store.get("ai_daily", {});
+    daily[u.day] = u.day_usd;
+    await this.bot.store.put("ai_daily", Object.fromEntries(Object.entries(daily).sort().slice(-366)));
     this.spent = (this.spent || 0) + usd;
     return usd;
   }
@@ -369,7 +382,8 @@ export class AI {
     const profit = computed ?? (d.profit != null ? Math.round(d.profit) : null);
     const icon = { easy: "🟢", medium: "🟡", hard: "🔴" }[difficulty] || "";
     const flag = clip(field("RED FLAG"), 90);
-    const cond = clip(field("IF").replace(/^if\s+/i, ""), 50);
+    // a question isn't a condition ("Which Pencil model?"): left out
+    const cond = /\?/.test(field("IF")) ? "" : clip(field("IF").replace(/^if\s+/i, ""), 50);
     const afterPart = fixed ? ` after the ~€${Math.round(parts)} part` : "";
     let first;
     if (flag) first = `❌ NO. ${flag[0].toUpperCase()}${flag.slice(1)}.`;

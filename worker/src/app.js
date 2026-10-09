@@ -14,6 +14,8 @@ import { DAY, UserError, inQuietHours, nowSeconds, rome } from "./util.js";
 import { action, snapshot, verifyInitData } from "./webapp.js";
 import { runCrypto } from "./crypto.js";
 import { recordRun } from "./team.js";
+import { dailyStats, freezeDays, statsText, weekLine } from "./stats.js";
+import { kitText } from "./kit.js";
 
 export const MENU_VERSION = 1;   // bump to set the "📱 Open app" menu button again
 export const WEBHOOK_VERSION = 1;   // bump when the update types below change
@@ -226,6 +228,31 @@ const API = {
     return { status: "ok", done };
   },
 
+  /**
+   * The owner's look at listing kits for past deals: made with the real prompt, returned here, posted
+   * and saved nowhere. `as`: {n: {paid, repair: {part, cost}}} to try a deal as if bought (and repaired).
+   */
+  async "POST /api/kit/test"(ctx, body) {
+    const { bot, store } = ctx;
+    const wanted = (body?.deals || []).map(Number).slice(0, 3);
+    const results = [];
+    for (const [key, d] of (await store.deals()).filter(([, x]) => wanted.includes(x.n))) {
+      const as = body?.as?.[d.n] || {};
+      const deal = { ...d, paid: as.paid ?? d.paid ?? d.cost, ...(as.repair ? { repair: as.repair, repaired_at: bot.now } : {}) };
+      const before = bot.ai.spent || 0;
+      const [, kit] = await bot.kits.make(key, deal, "auto", { save: false });
+      results.push({ n: d.n, text: kitText(deal, kit), cost_usd: Math.round(((bot.ai.spent || 0) - before) * 1e6) / 1e6 });
+    }
+    return { results };
+  },
+
+  /** /stats as text, for the owner to look at without Telegram. */
+  async "POST /api/stats"(ctx, body) {
+    const days = Math.min(Math.max(Math.round(Number(body?.days) || 7), 1), 90);
+    const s = await dailyStats(ctx.bot, { days });
+    return { text: statsText(s, days), stats: s };
+  },
+
   /** A fast-lane pass: its numbers (/fast), and a back-off if Vinted blocked it. */
   async "POST /api/fast"(ctx, body) {
     const r = await ctx.bot.fastReport(body || {});
@@ -249,6 +276,10 @@ const API = {
       const r = await bot.ai.check(key, d, { user: "auto", post: false, fresh: body?.cached !== true });
       // the deal message as it would look with these lines
       const preview = r.result ? fullText({ ...d, ai: { ...r.result, text: r.text } }) : null;
+      if (body?.save && r.verdict) {
+        const fresh = await store.deal(key);
+        if (fresh && !fresh.ai) await store.saveDeal(key, { ...fresh, ai_verdict: r.verdict });
+      }
       results.push({ n: d.n, title: d.title, rating: d.rating, text: r.text || r.error, preview,
         cost_usd: Math.round(((bot.ai.spent || 0) - before) * 1e6) / 1e6, calls: (bot.ai.calls || []).slice(calls) });
     }
@@ -362,11 +393,13 @@ export async function runCron(env, opts = {}) {
   if (today.hour >= MEMBER_CHECK_HOUR && (await store.get("member_check")) !== today.date) {
     await store.put("member_check", today.date);
     await bot.memberCheck();
+    await freezeDays(bot);   // /stats: deal counts of older days kept before untouched deals are dropped
   }
   // weekly report, Sunday 20:00 Italy time
   if (weeklyDue(await store.get("last_weekly"), now)) {
     const all = await store.deals();
-    const text = weeklyReport(all, await store.feedbackSince(now - 7 * DAY), now) + (await bot.team.weekly(all, now));
+    const text = weeklyReport(all, await store.feedbackSince(now - 7 * DAY), now) + (await bot.team.weekly(all, now)) +
+      weekLine(await dailyStats(bot, { days: 7 }));
     if (await tg.sendText(text, { topic: "summary" })) {
       await store.put("last_weekly", new Date(now * 1000).toLocaleDateString("en-CA", { timeZone: "Europe/Rome" }));
       await bot.fastWeekly();   // and the owner's one-line fast-lane week, in private

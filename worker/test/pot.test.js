@@ -64,8 +64,8 @@ test("only a manager approves; a rejection keeps the claim; the seller is asked 
   assert.ok(d.status === "bought" && d.paid === 58);
   assert.equal(summarize(await t.store.ledger(), await t.store.deals()).cash, 242);
   const texts = t.tg.texts();
-  assert.ok(texts.some((x) => x.includes('tg://user?id=777">Luca</a>, #1') && x.includes("please list it")));
-  assert.ok(t.tg.sent().some((p) => String(p.chat_id) === String(LUCA) && p.text.includes("please list it")));
+  assert.ok(texts.includes("📦 Listing kit sent to Luca"));                                // a note in the deal's thread
+  assert.ok(t.tg.sent().some((p) => String(p.chat_id) === String(LUCA) && p.text.startsWith("📦 <b>Listing kit · #1</b>")));
   assert.ok(t.tg.sent().some((p) => String(p.chat_id) === String(MARCO) && p.text.includes("Approved: #1 at €58.00")));
   assert.match(t.tg.sent("answerCallbackQuery").at(-1).text, /already decided/);
 });

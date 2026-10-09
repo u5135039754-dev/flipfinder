@@ -63,10 +63,14 @@ export function fakeTelegram() {
         return new Response(new Uint8Array([255, 216, 255, 224, 1, 2, 3]));
       }
       const method = url.split("/").pop();
-      const payload = JSON.parse(init.body);
+      let payload;
+      if (init.body instanceof FormData) {   // a file upload (sendDocument): the file as {name, type, text}
+        payload = {};
+        for (const [k, v] of init.body.entries()) payload[k] = typeof v === "string" ? v : { name: v.name, type: v.type, text: await v.text() };
+      } else payload = JSON.parse(init.body);
       calls.push({ method, payload });
       const failure = t.fail(method, payload);
-      const data = failure || { ok: true, result: method === "sendMessage" || method === "sendPhoto"
+      const data = failure || { ok: true, result: method === "sendMessage" || method === "sendPhoto" || method === "sendDocument"
         ? { message_id: ++nextId, chat: { id: Number(payload.chat_id) }, ...(method === "sendPhoto" ? { photo: [{}] } : {}),
           ...(payload.message_thread_id ? { message_thread_id: payload.message_thread_id } : {}) }
         : true };

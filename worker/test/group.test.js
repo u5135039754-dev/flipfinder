@@ -30,8 +30,8 @@ test("reminder schedule", () => {
   assert.deepEqual(due(t0 + 2 * 86400), []);
   assert.deepEqual(due(t0 + 3 * 86400), [["list", "k"]]);
   Object.assign(d, { status: "listed", listed_at: t0 });
-  assert.deepEqual(due(t0 + 13 * 86400), []);
-  assert.deepEqual(due(t0 + 14 * 86400), [["cut", "k"]]);
+  assert.deepEqual(due(t0 + 6 * 86400), []);
+  assert.deepEqual(due(t0 + 7 * 86400), [["cut", "k"]]);                // a week listed: a lower price
   d.cut_at = t0 + 14 * 86400;
   assert.deepEqual(due(t0 + 18 * 86400), []);
   assert.deepEqual(due(t0 + 21 * 86400), [["cut", "k"]]);
@@ -70,8 +70,10 @@ test("reminders: ping, keep, release, list nudge and price cut", async () => {
   await t.api("POST", "/api/run", { values: { [key]: 52.0 } });  // the scanner's current market value
   t.tg.clear();
   await t.cron(now);
-  const cut = t.tg.texts()[0];
-  assert.ok(cut.includes("listed for 15 days") && cut.includes("€52") && cut.includes("<b>€50</b>"));
+  // to the seller (nobody has the role here: whoever bought it), ~10% under €50 but never under 30 paid + 12 min profit
+  const cut = t.tg.sent().find((p) => String(p.chat_id) === String(MARCO));
+  assert.ok(cut.text.includes("listed for 15 days at €50") && cut.text.includes("Try <b>€45</b>") && cut.text.includes("Lowest that keeps our profit: €45"));
+  assert.deepEqual(cut.reply_markup.inline_keyboard[0][0], { text: "🏷 New price", callback_data: `kl:${key}` });
 });
 
 test("/sell by number or name in three languages, pickup town from the private area", async () => {

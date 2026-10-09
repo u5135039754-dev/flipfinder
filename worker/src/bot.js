@@ -7,13 +7,15 @@ import { SELLER_MESSAGE, fitCaption, fullText, keyboard, stock, profit, findDeal
 import { allocate, entryLine, memberKey, potText, reverse, shares, summarize } from "./pot.js";
 import { ROLES, Team } from "./team.js";
 import { Handbook } from "./handbook.js";
+import { Kits, kitButtons, kitText } from "./kit.js";
 import { AI, PRICES } from "./ai.js";
+import { dailyStats, daysSinceStart, statsCsv, statsText } from "./stats.js";
 import { INTROS, TOPIC_FOR_GROUP, TOPIC_NAMES, dealTopic, mention, pricesFor, sellListing } from "./group.js";
 import { DEFAULT_WATCH, MAX_WATCH, findCoin, watchlist } from "./crypto.js";
 import { hhmm, rome, romeTs } from "./util.js";
 import { UserError, closeMatches, esc, euro, g, parseNumber, queryAndRange, splitArgs } from "./util.js";
 
-export const COMMANDS_VERSION = 18;   // bump when the list below changes, so it's registered again
+export const COMMANDS_VERSION = 19;   // bump when the list below changes, so it's registered again
 export const COMMANDS = [
   ["help", "List all commands"],
   ["app", "Open the flipFinder app: deals, stock, pot and settings"],
@@ -45,6 +47,7 @@ export const COMMANDS = [
   ["delnote", "Owner only: remove a note: /delnote 3"],
   ["ai", "AI status; owner: /ai on|off, /ai auto on|off, /ai hide-no on|off"],
   ["aiusage", "AI spend and calls today and this month"],
+  ["stats", "Daily numbers: deals, YES/NO, claims, buys, sales, profit, AI cost; /stats 30, /stats csv"],
   ["fast", "Fast lane (newest listings every few minutes); owner: /fast 2, /fast off"],
   ["setrole", "Owner only: /setrole Anna seller (manager, buyer, seller, or none to remove it)"],
   ["removerole", "Owner only: /removerole Anna (blocks them right away)"],
@@ -86,6 +89,7 @@ export class Bot {
     this.team = new Team(this);
     this.handbook = new Handbook(this);
     this.ai = new AI(this, aiKey);
+    this.kits = new Kits(this);
     this.cleanup = [];   // {chat, id}: commands and replies in the Rules topic, deleted 10 s later
     this.rules = null;   // {chat, thread} while answering a message in the Rules topic
     this._deals = null;
@@ -560,6 +564,22 @@ Add one with /watch link, remove with /unwatch sol`);
       return this.reply(chat, `🧠 Up to ${this.ai.config.user_daily} AI questions per person a day`);
     }
     throw new UserError("Use /ai on|off, /ai auto on|off, /ai hide-no on|off, /ai cap 0.5, /ai limit 20, /ai model <id>, /ai deepmodel <id>");
+  }
+
+  /** /stats (7 days), /stats 30, /stats csv (owner: every day since the start, as a file). */
+  async cmd_stats(chat, args, user) {
+    const a = (args[0] || "").toLowerCase();
+    if (a === "csv") {
+      this.ownerOnly(user, "stats csv");
+      const s = await dailyStats(this, { days: daysSinceStart(this.now) });
+      const sent = await this.tg.sendDocument(chat, `flipfinder-stats-${s.rows.at(-1).date}.csv`, statsCsv(s),
+        { caption: "📊 Daily stats since the start, opens in Excel or Google Sheets" });
+      if (!sent) await this.reply(chat, "⚠️ Couldn't send the file, try again");
+      return;
+    }
+    const days = a ? Math.round(Number(a)) : 7;
+    if (!Number.isFinite(days) || days < 1 || days > 90) throw new UserError("Use /stats, /stats 30 (up to 90 days) or /stats csv");
+    await this.reply(chat, statsText(await dailyStats(this, { days }), days));
   }
 
   async cmd_aiusage(chat) {
@@ -1243,8 +1263,16 @@ Add one with /watch link, remove with /unwatch sol`);
     }
     // the next steps belong to whoever claimed it (or the owner)
     if (user !== d.who_id && user !== this.ownerId) return this.answer(cq, `${d.who || "Someone else"} has this one`);
-    const expected = { b: "claimed", l: "bought", s: "listed" }[kind];
+    const expected = { b: "claimed", l: "bought", s: "listed", rp: "bought" }[kind];
     if (d.status !== expected) return this.answer(cq, "That step is already done");
+    if (kind === "rp") {
+      d.repaired_at = this.now;
+      await this.store.saveDeal(key, d);
+      await this.refreshDeal(key, d);
+      await this.answer(cq, "🔧 Repaired: the listing kit is on its way");
+      await this.kits.send(key, d);
+      return;
+    }
     if (kind === "l") {
       Object.assign(d, { status: "listed", listed_at: this.now });
       await this.store.saveDeal(key, d);
@@ -1327,6 +1355,16 @@ Add one with /watch link, remove with /unwatch sol`);
     }
     const d = await this.store.deal(pending.key);
     if (!d) return;
+    if (pending.ask === "list_price") {
+      const again = d.status === "listed";
+      Object.assign(d, { status: "listed", list_price: amount, listed_at: again ? d.listed_at : this.now });
+      if (again) d.cut_at = this.now;   // a new price: the next drop is a week from now
+      await this.store.saveDeal(pending.key, d);
+      await this.refreshDeal(pending.key, d);
+      const lowest = d.kit?.prices?.lowest;
+      return this.reply(chat, `🏷 #${d.n ?? "?"} ${again ? "now" : "listed"} at ${euro(amount)}` +
+        (lowest && amount < lowest ? `. ⚠️ That's under €${g(lowest)}, the lowest that keeps our min profit.` : ""));
+    }
     if (pending.ask === "paid" && !this.team.isManager(user)) return this.requestBuy(chat, user, pending.key, d, amount);
     let done;
     let entry;
@@ -1345,7 +1383,7 @@ Add one with /watch link, remove with /unwatch sol`);
     await this.refreshDeal(pending.key, d);
     await this.reply(chat, done);
     await this.money(entry, chat);
-    if (entry.kind === "buy") await this.pingSellers(d);
+    if (entry.kind === "buy") await this.pingSellers(pending.key, d);
   }
 
   // --- 🙋 Request buy -> ✅ Approve / ❌ Reject (a manager pays every buy)
@@ -1404,18 +1442,46 @@ Add one with /watch link, remove with /unwatch sol`);
     await this.team.dm(req.by_id, `✅ Approved: #${n} at ${euro(req.amount)}. ${this.payNote(d, req.amount, req.by)}`);
     this.capture?.push(`✅ Approved #${n} at ${euro(req.amount)}`);
     await this.money({ kind: "buy", amount: -req.amount, n: d.n, deal: key }, undefined);
-    await this.pingSellers(d);
+    await this.pingSellers(key, d);
     return this.answer(cq, "Approved");
   }
 
   /** Something was bought: the sellers list it. */
-  async pingSellers(d) {
-    const sellers = this.team.withRole("seller");
-    if (!sellers.length) return;
-    const n = d.n ?? "?";
-    const tag = sellers.map((m) => `<a href="tg://user?id=${m.id}">${esc(m.name)}</a>`).join(" ");
-    await this.postAbout(d, `📦 ${tag}, #${n} ${esc(d.title.slice(0, 50))} is bought: please list it. /sell ${n} writes the listing.`);
-    for (const m of sellers) await this.team.dm(m.id, `📦 #${n} ${esc(d.title.slice(0, 50))} is bought: please list it. /sell ${n} writes the listing.`);
+  /** Bought: the listing kit to the seller(s); a repair deal waits for 🔧 Repaired. */
+  async pingSellers(key, d) {
+    if (d.repair && !d.repaired_at) return this.kits.repairFirst(d);
+    await this.kits.send(key, d);
+  }
+
+  /** The kit's buttons: copy (long texts as a message), 🔄 Rewrite, 🏷 Mark as listed (asks the price). */
+  async onKitButton(cq, chat, msg, user, kind, key) {
+    const d = await this.store.deal(key);
+    if (!d) return this.answer(cq, "That deal is gone");
+    if (kind === "kt" || kind === "kd") {
+      await this.answer(cq, "Copy it from the message below");
+      return this.reply(chat, `<code>${esc(kind === "kt" ? d.kit?.title || d.title : d.kit?.description || "", false)}</code>`);
+    }
+    const seller = this.team.withRole("seller").some((m) => m.id === user);
+    if (!seller && user !== d.who_id && user !== this.ownerId) return this.answer(cq, "That's for the seller");
+    if (kind === "kr") {
+      if (d.kit_busy && this.now - d.kit_busy < 60) return this.answer(cq, "Already on it, one moment");
+      await this.store.saveDeal(key, { ...d, kit_busy: this.now });
+      await this.answer(cq, "🔄 Rewriting… a few seconds");
+      const [latest, kit] = await this.kits.make(key, { ...d, kit_busy: 0 }, user);
+      await this.tg.call("editMessageText", { chat_id: chat, message_id: msg.message_id, text: kitText(latest, kit),
+        parse_mode: "HTML", reply_markup: kitButtons(key, kit), disable_web_page_preview: true });
+      return;
+    }
+    if (!["bought", "listed"].includes(d.status)) return this.answer(cq, d.status === "sold" ? "It's sold already" : "It isn't bought yet");
+    const suggested = d.kit?.prices?.price;
+    const sent = await this.tg.call("sendMessage", { chat_id: chat, parse_mode: "HTML",
+      text: `🏷 What price did you list <b>${esc(d.title.slice(0, 60))}</b> at?` + (suggested ? ` (suggested €${g(suggested)})` : "") +
+        " Reply with the amount, e.g. 60",
+      reply_markup: { force_reply: true, input_field_placeholder: "listing price in €" } });
+    const pending = await this.store.get("pending", {});
+    pending[String(user)] = { key, ask: "list_price", chat, ask_msg: sent?.message_id ?? null };
+    await this.store.put("pending", pending);
+    return this.answer(cq, "Reply with the price");
   }
 
   // --- reminders' buttons
@@ -1473,10 +1539,7 @@ Add one with /watch link, remove with /unwatch sol`);
           `${Math.round((this.now - d.bought_at) / 86400)} days ago. Time to list it? /sell ${n} writes the listing.`);
       } else if (kind === "cut") {
         d.cut_at = this.now;
-        const [value, price, quick] = pricesFor(d, d.value_now);
-        await this.postAbout(d, `🏷 #${n} ${title} has been listed for ${Math.round((this.now - d.listed_at) / 86400)} ` +
-          `days. Market value now about €${Math.round(value).toLocaleString("en-US")}: try <b>€${g(price)}</b>, ` +
-          `or <b>€${g(quick)}</b> to sell it quickly.`);
+        d.drop_to = await this.kits.drop(key, d);
       }
       await this.store.saveDeal(key, d);
     }
@@ -1532,7 +1595,8 @@ Add one with /watch link, remove with /unwatch sol`);
     }
     if (kind === "swt") return this.answer(cq, await this.team.takeSwap(Number(rest), user));
     if (kind === "keep" || kind === "rel") return this.onKeepRelease(cq, user, kind, rest);
-    if (["c", "b", "l", "s", "up", "dn", "m"].includes(kind)) return this.onDealButton(cq, chat, user, kind, rest);
+    if (["c", "b", "l", "s", "up", "dn", "m", "rp"].includes(kind)) return this.onDealButton(cq, chat, user, kind, rest);
+    if (["kt", "kd", "kr", "kl"].includes(kind)) return this.onKitButton(cq, chat, msg, user, kind, rest);
     const view = await this.view();
     const byId = {};
     for (const s of view.searches) byId[await searchId(s.query)] = s;

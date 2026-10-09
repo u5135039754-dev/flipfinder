@@ -23,6 +23,8 @@ export function keyboard(key, d, ai = false) {
   if (d.status === "new") first.push({ text: "✋ Claim", callback_data: `c:${key}` });
   else if (d.status === "claimed" && d.request) {
     first.push({ text: `⏳ Waiting for OK: ${euro(d.request.amount)} (${d.request.by})`, callback_data: `wait:${key}` });
+  } else if (d.status === "bought" && d.repair && !d.repaired_at) {
+    first.push({ text: `🔧 Repaired (${d.who})`, callback_data: `rp:${key}` });   // a repair deal: fixed before it's listed
   } else if (NEXT[d.status]) {
     const [code, label] = NEXT[d.status];
     first.push({ text: `${label} (${d.who})`, callback_data: `${code}:${key}` });
