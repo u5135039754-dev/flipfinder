@@ -61,6 +61,7 @@ export function applySettings(catalog, settings, pool = null) {
   const view = {
     searches, rules,
     budget_rules: { min_profit: 12, min_roi: 35, max_roi: 150, ...(catalog.budget_rules || {}) },
+    music_rules: { min_profit: 20, min_roi: 35, ...(catalog.music_rules || {}) },
     budget_setting: settings.budget ?? catalog.budget ?? 72,
     ebay: Boolean(catalog.ebay), subito: Boolean(catalog.subito),
   };

@@ -26,7 +26,7 @@ Python 3.10+ app that finds underpriced Vinted listings and sends Telegram alert
 
 ## Notes
 - Keep `request_delay` >= 2s. Handle 401/403 by refreshing the cookie, 429 by backing off.
-- Market value: asking prices, blended with likely-sold prices once 3+ sold comparables exist (sold.py). Music searches (Guitars/Amps/Pedals) need 5 comparables, others 8.
+- Market value: asking prices, blended with likely-sold prices once 3+ sold comparables exist (sold.py). Music searches (Guitars/Amps/Pedals, not budget) need 5 comparables (others 8) and use config `music_rules` (min_profit 20, min_roi 35; max_price, max_roi, min_rating stay the main ones); budget pedals keep budget_rules.
 
 ## Plan decisions (agreed with the owner; keep until done)
 Working rules: the owner doesn't code. Build, test, dry run, show results in plain language, and ask before every push. Manual steps one at a time in simple words. Never ask for secrets in chat. Everything stays free (€0).

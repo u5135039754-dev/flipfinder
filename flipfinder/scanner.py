@@ -335,6 +335,9 @@ class Scanner:
         if search_group(s) in MUSIC:
             # one search ("boss", "marshall amplificatore") covers dozens of models: fewer of each
             rules = replace(rules, min_comparables=min(rules.min_comparables, MUSIC_MIN_COMPARABLES))
+            if not s.budget:   # music gear's own minimums (config music_rules); budget pedals keep budget_rules
+                mr = self.cfg.music_rules
+                rules = replace(rules, min_profit=float(mr["min_profit"]), min_roi=float(mr["min_roi"]))
         now = time.time()
         tracked, scale = self.sold.coverage(_key(s), now)
         return replace(rules, match_brand=s.match_brand, check=s.check, missing_part_cost=s.missing_part_cost,

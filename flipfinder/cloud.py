@@ -51,7 +51,7 @@ def catalog(cfg) -> dict:
         "rules": {"min_profit": cfg.rules.min_profit, "min_roi": cfg.rules.min_roi,
                   "min_rating": cfg.rules.min_rating, "max_roi": cfg.rules.max_roi,
                   **({"max_price": cfg.rules.max_price} if cfg.rules.max_price is not None else {})},
-        "budget_rules": cfg.budget_rules, "budget": cfg.budget_setting,
+        "budget_rules": cfg.budget_rules, "music_rules": cfg.music_rules, "budget": cfg.budget_setting,
         "ebay": cfg.ebay.enabled, "subito": cfg.subito.enabled,
     }
 

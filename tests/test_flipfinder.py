@@ -544,7 +544,7 @@ def _fake_scanner(tmp_path, n_searches, known_keys):
     cfg = type("C", (), {})()
     cfg.rules, cfg.seen_file, cfg.pool_refresh_minutes, cfg.comparable_pages = Rules(), seen, 60, 1
     cfg.stagger = False
-    cfg.searches = [Search(f"thing {n}") for n in range(n_searches)]
+    cfg.searches = [Search(f"thing {n}", group="Other") for n in range(n_searches)]   # not music: main rules
     cfg.ebay = type("E", (), {"enabled": False})()
     (tmp_path / "searches.json").write_text(json.dumps(known_keys(cfg.searches)))
     s = sc_mod.Scanner.__new__(sc_mod.Scanner)
@@ -1389,7 +1389,7 @@ def test_demand_table_per_search_and_model(tmp_path: Path):
     import flipfinder.scanner as sc_mod
     from flipfinder.config import Search
     s = _fake_scanner(tmp_path, 0, lambda searches: [])
-    q = Search("iphone 13")
+    q = Search("iphone 13", group="Electronics")
     s.cfg.searches = [q]
     key = sc_mod._key(q)
     pool = ([titled(100 + i, "iPhone 13 128GB blu", 400, "Apple") for i in range(6)]
@@ -1737,3 +1737,18 @@ def test_max_price_blocks_main_deals_over_it_and_caps_the_search():
     assert any(b.startswith("cost > €120 max price") for b in assess(item, pool, rules).blocked)
     assert not assess(item, pool, dc_replace(rules, max_price=300)).blocked
     assert not is_near_miss(assess(item, pool, rules))
+
+
+def test_music_searches_use_the_music_rules_and_budget_pedals_keep_theirs(tmp_path: Path):
+    from flipfinder import config as cm
+    from flipfinder.scanner import Scanner
+    cfg = cm.load("config.yaml")
+    cfg.seen_file = tmp_path / "seen.json"
+    cfg.rules.min_profit, cfg.rules.min_roi = 50, 40          # the main rules, as set from Telegram
+    sc = Scanner(cfg)
+    by = {s.query: s for s in cfg.searches}
+    amp = sc._rules(by["marshall amplificatore"])
+    assert (amp.min_profit, amp.min_roi, amp.min_comparables, amp.max_price) == (20, 35, 5, 200)
+    assert (sc._rules(by["boss"]).min_profit, sc._rules(by["yamaha chitarra"]).min_roi) == (20, 35)
+    assert sc._rules(by["boss ds 1"]).min_profit == 12         # a budget pedal: budget rules
+    assert (sc._rules(by["iphone 13"]).min_profit, sc._rules(by["iphone 13"]).min_roi) == (50, 40)

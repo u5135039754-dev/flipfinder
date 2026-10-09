@@ -975,7 +975,9 @@ Add one with /watch link, remove with /unwatch sol`);
       `min_profit: €${g(r.min_profit)}`, `min_roi: ${g(r.min_roi)}%`, `min_rating: ${r.min_rating}`,
       `max_roi: ${g(r.max_roi)}%`, `max_price: €${g(r.max_price)} (the most a main deal may cost, all in)`,
       `abroad: ${this.settings.abroad === true ? "on (🌍 listings from other countries too)" : "off (Vinted: Italy only)"}`,
-      "", `<i>Budget mode (€${g(view.budget)}): min_profit €${g(br.min_profit)}, ` +
+      "", `<i>Music gear (amps, pedals, guitars): min_profit €${g(view.music_rules.min_profit)}, ` +
+        `min_roi ${g(view.music_rules.min_roi)}%</i>`,
+      `<i>Budget mode (€${g(view.budget)}): min_profit €${g(br.min_profit)}, ` +
         `min_roi ${g(br.min_roi)}%, max_roi ${g(br.max_roi)}%</i>`,
     ].join("\n"));
   }

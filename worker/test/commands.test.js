@@ -225,3 +225,10 @@ test("/abroad on|off (owner only, off by default) and max_price in /rules and /s
   assert.match(r[5], /max_price: €150[\s\S]*abroad: on/);
   assert.equal((await t.settings()).rules.max_price, 150);
 });
+
+test("/rules shows the music gear rules", async () => {
+  const t = await setup();
+  await t.store.put("catalog", { ...(await t.store.get("catalog")), music_rules: { min_profit: 20, min_roi: 35 } });
+  await t.update(msg("/rules"));
+  assert.match(t.tg.texts().at(-1), /Music gear \(amps, pedals, guitars\): min_profit €20, min_roi 35%/);
+});

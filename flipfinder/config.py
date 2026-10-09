@@ -88,6 +88,7 @@ class Config:
     budget: float = 72                   # max total cost for budget-mode searches (in effect)
     budget_setting: float = 72           # the configured /budget value (the pool can lower it)
     budget_rules: dict = field(default_factory=lambda: {"min_profit": 12, "min_roi": 35, "max_roi": 150})
+    music_rules: dict = field(default_factory=lambda: {"min_profit": 20, "min_roi": 35})
     ebay: EbaySettings = field(default_factory=EbaySettings)
     subito: SubitoSettings = field(default_factory=SubitoSettings)
 
@@ -175,6 +176,7 @@ def load(path: str | Path = "config.yaml") -> Config:
         budget=float(raw.get("budget", 72)),
         budget_setting=float(raw.get("budget", 72)),
         budget_rules={"min_profit": 12, "min_roi": 35, "max_roi": 150, **(raw.get("budget_rules") or {})},
+        music_rules={"min_profit": 20, "min_roi": 35, **(raw.get("music_rules") or {})},
         ebay=EbaySettings(
             client_id=os.getenv("EBAY_CLIENT_ID", ""),
             client_secret=os.getenv("EBAY_CLIENT_SECRET", ""),

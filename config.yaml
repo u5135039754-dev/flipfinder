@@ -30,6 +30,13 @@ budget_rules:
   min_roi: 35
   max_roi: 150               # far cheaper than this is usually a fake or broken
 
+# Music gear (the Guitars, Amps and Pedals searches that aren't budget searches): priced close to
+# its market on Vinted, so the odd bargain is smaller. Their own minimums; max_price, max_roi and
+# min_rating stay the main ones.
+music_rules:
+  min_profit: 20
+  min_roi: 35
+
 # Vinted adds a buyer protection fee on top of the price.
 # If the API gives the real total we use that, otherwise this estimate.
 buyer_protection:
