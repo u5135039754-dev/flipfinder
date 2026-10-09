@@ -8,16 +8,25 @@ export const TOPIC_FOR_GROUP = {
   Audio: "electronics", Electronics: "electronics", Budget: "budget",
 };
 export const TOPIC_NAMES = { guitars: "Guitars", electronics: "Electronics", budget: "Budget", summary: "Summary",
-  crypto: "Crypto", rules: "Rules", repairs: "Repairs" };
+  crypto: "Crypto", rules: "Rules", repairs: "Repairs", rejected: "Rejected" };
 
-/** Which topic a deal goes to: repair deals to 🔧 Repairs once that topic is set up, else by category. */
+/**
+ * Which topic a deal goes to: the AI's ❌ NO deals to ❌ Rejected, repair deals to 🔧 Repairs (each once
+ * that topic is set up), else by category.
+ */
 export function dealTopic(d, topics = {}) {
+  if (d.rejected && topics.rejected) return "rejected";
   return d.repair && topics.repairs ? "repairs" : TOPIC_FOR_GROUP[d.group || ""];
 }
 
 // Pinned intro per topic ("general" = the main chat), posted when a topic is set with /topic
 // and again with /intro; an intro that's already there is edited, not posted twice
 export const INTROS = {
+  rejected: [
+    "❌ <b>Rejected</b>",
+    "Deals the AI said ❌ NO to land here quietly (no sound, no @mention), with the reason at the end.",
+    "Think the AI is wrong? Tap ↩️ Not a NO: the deal goes back to its topic and counts as a 👍.",
+  ].join("\n"),
   guitars: [
     "🎸 <b>Guitars</b>",
     "Underpriced guitars, amps, pedals and soundbars land here.",

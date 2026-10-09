@@ -41,7 +41,7 @@ async function collect(bot) {
   for (const [, d] of deals) {
     if (d.messages?.length && d.sent) {
       const r = row(rome(d.sent).date);
-      r.sent++;
+      if (!d.rejected) r.sent++;   // ❌ Rejected deals only count in the NO column
       const v = d.ai?.verdict ?? d.ai_verdict;
       if (v === "yes") r.yes++;
       if (v === "no") r.no++;
@@ -129,7 +129,7 @@ export function statsText(s, days) {
   }
   lines[lines.length - 1] += "</pre>";
   const t = s.totals;
-  lines.push("Y/N = the AI's ✅/❌ · Cl = claimed · Buy, Sold = how many · €",
+  lines.push("Sent = in the deal topics · Y/N = the AI's ✅/❌ · Cl = claimed · Buy, Sold = how many · €",
     "",
     `<b>Totals</b>: ${t.sent} deals (✅ ${t.yes} · ❌ ${t.no}) · ✋ ${t.claimed} claimed`,
     `💸 Bought ${t.bought} for ${euro(t.spent)} · ✅ Sold ${t.sold} for ${euro(t.made)}`,

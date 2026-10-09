@@ -58,7 +58,7 @@ export async function snapshot(bot, user) {
       photos: d.kit.photos, shipping: d.kit.shipping } : null, list_price: d.list_price ?? null,
     request: d.request ? { amount: d.request.amount, by: d.request.by } : null,
   });
-  const open = deals.filter(([, d]) => (d.status === "new" && !d.hidden && (d.sent || 0) >= now - 7 * 86400) || d.status === "claimed");
+  const open = deals.filter(([, d]) => (d.status === "new" && !d.hidden && !d.rejected && (d.sent || 0) >= now - 7 * 86400) || d.status === "claimed");
   const stockList = deals.filter(([, d]) => ["bought", "listed"].includes(d.status));
   const pot = await bot.pot();
   const ledger = await bot.store.ledger();

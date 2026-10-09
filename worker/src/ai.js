@@ -13,7 +13,7 @@ import { shownPrice } from "./deals.js";
 export const AI_DEFAULTS = {
   enabled: false,             // /ai on|off
   auto: true,                 // /ai auto on|off: every new deal gets its YES/NO lines without a tap
-  hide_no: false,             // /ai hide-no on|off: a ❌ NO deal is taken down instead of staying (muted)
+  hide_no: true,              // /ai hide-no on|off: ❌ NO deals go to the Rejected topic (on) or stay muted in theirs
   model: "claude-haiku-5-5",  // quick checks and questions
   deep_model: "claude-sonnet-5-5",   // 🧠 Deep analysis
   daily_cap_eur: 0.5,
@@ -451,6 +451,11 @@ export class AI {
     return { r, text: AI.render(r) };
   }
 
+  /** ❌ NO deals go to the Rejected topic: /ai hide-no on (the default) and the topic is set up. */
+  rejects() {
+    return this.config.hide_no && Boolean(this.bot.settings.topics?.rejected);
+  }
+
   /** What a deal keeps of the check. */
   record(a) {
     return { ...a.r, text: a.text, at: this.bot.now, model: this.config.model };
@@ -463,10 +468,8 @@ export class AI {
     const r = a.r;
     fresh.ai = this.record(a);
     delete fresh.ai_busy;
-    if (r.verdict === "no" && this.config.hide_no && fresh.status === "new") {
-      for (const m of fresh.messages || []) await this.bot.tg.call("deleteMessage", { chat_id: m.chat, message_id: m.id });
-      fresh.hidden = true;
-      await this.bot.store.saveDeal(key, fresh);
+    if (r.verdict === "no" && this.rejects() && fresh.status === "new") {
+      await this.bot.moveDeal(key, fresh, true);   // the NO came after it was posted: to ❌ Rejected, quietly
     } else {
       await this.bot.store.saveDeal(key, fresh);
       await this.bot.refreshDeal(key, fresh);
@@ -604,7 +607,7 @@ export class AI {
     const lines = ["🧠 <b>AI usage</b>",
       `Today: ${eur(u.day_usd)} of ${euro(cfg.daily_cap_eur)} · ${u.day_calls} call(s)`,
       `This month: ${eur(u.month_usd)} · ${u.month_calls} call(s)`,
-      `AI ${cfg.enabled ? "on" : "off"} · YES/NO on every deal ${cfg.auto ? "on" : "off"} · ❌ NO deals ${cfg.hide_no ? "hidden" : "muted"} · up to ${cfg.user_daily} questions per person a day`,
+      `AI ${cfg.enabled ? "on" : "off"} · YES/NO on every deal ${cfg.auto ? "on" : "off"} · ❌ NO deals ${this.rejects() ? "to the Rejected topic" : cfg.hide_no ? "muted (no Rejected topic yet)" : "muted in their topic"} · up to ${cfg.user_daily} questions per person a day`,
       `Models: ${cfg.model} (checks, questions), ${cfg.deep_model} (deep analysis)`];
     if (u.last_error && this.bot.now - u.last_error.at < 86400) {
       lines.push(`Last problem: ${esc(String(u.last_error.status ?? ""))} ${esc(u.last_error.message)}`);

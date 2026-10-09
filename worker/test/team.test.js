@@ -355,3 +355,19 @@ test("the digest is off unless the owner turns it on with /remind on", async () 
   await t.update(msg("/remind off"));
   assert.equal((await t.settings()).remind, false);
 });
+
+test("the not-claimed digest leaves out ❌ NO deals, unless someone tapped ↩️ Not a NO", async () => {
+  const t = await setup({ settings: { ...team, remind: true } });
+  await tapAt(t, "duty:on", MARCO, at(10));
+  for (const n of [1, 2, 3]) await postDeal(t, n, 7, at(10, n));
+  const mark = async (n, extra) => {
+    const d = await t.store.deal(`vinted:${n}`);
+    await t.store.saveDeal(`vinted:${n}`, { ...d, ai: { verdict: "no", lines: ["❌ NO. x", "⚠️ y"] }, ...extra });
+  };
+  await mark(1, { rejected: true });                                     // in ❌ Rejected
+  await mark(2, { ai_overruled: { by: MARCO, at: at(10, 5) } });         // ↩️ Not a NO
+  t.tg.clear();
+  await t.cron(at(10, 14));
+  const [digest] = digests(t);
+  assert.match(digest.text, /^⏰ 2 deals not claimed yet: <a [^>]+>#2<\/a>, <a [^>]+>#3<\/a>\n/);
+});

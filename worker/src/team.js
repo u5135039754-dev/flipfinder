@@ -601,7 +601,7 @@ export class Team {
     if (minute < DIGEST_FROM || minute >= DIGEST_TO) return null;
     const d = await this.duty();
     if (this.now - (d.last_digest || 0) < DIGEST_EVERY) return null;
-    const due = deals.filter(([, x]) => x.status === "new" && x.alerted_at && !x.escalated && x.ai?.verdict !== "no" &&
+    const due = deals.filter(([, x]) => x.status === "new" && x.alerted_at && !x.escalated && !x.rejected && (x.ai?.verdict !== "no" || x.ai_overruled) &&
       (x.rating ?? 0) >= DIGEST_MIN_RATING && this.now - x.alerted_at >= UNCLAIMED_AFTER && this.now - x.alerted_at <= DIGEST_MAX_AGE)
       .sort((a, b) => (a[1].n ?? 0) - (b[1].n ?? 0));
     const group = this.bot.tg.groups[0];

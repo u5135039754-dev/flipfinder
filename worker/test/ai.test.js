@@ -52,15 +52,11 @@ test("buttons: Claim and Open; with the AI on, ❓ Seller questions and 🧠 Dee
   assert.ok(!JSON.stringify(keyboard("k", d, true)).match(/Check with AI|Numbers/));
 });
 
-test("a new deal goes out at once with all its numbers; the AI's 🤖 and ⚠️ lines are added at the end", async () => {
+test("a new deal waits up to 10 s for the AI, then goes out once with all its numbers and the 🤖/⚠️ lines", async () => {
   const { t } = await withAI();
   t.tg.clear();
   const r = await t.api("POST", "/api/deal", scannerDeal(2));
   assert.deepEqual(r.body, { status: "sent", n: 2 });
-  // posted first, the full message, before the AI was asked
-  const order = t.tg.calls.map((c) => c.method);
-  assert.ok(order.indexOf("sendPhoto") < order.indexOf("editMessageCaption"));
-  assert.equal(t.tg.sent("sendPhoto")[0].caption, `${FULL(2)}\n🔢 #2`);
   // the request: photos + listing to Haiku, the fixed instructions cached, only read-only tools
   const req = t.tg.claude[0].body;
   assert.equal(req.model, "claude-haiku-5-5");
@@ -71,13 +67,26 @@ test("a new deal goes out at once with all its numbers; the AI's 🤖 and ⚠️
   assert.deepEqual(req.tools.map((x) => x.name), ["get_deal", "get_comparables", "get_sold_history", "get_stock", "get_pot", "get_schedule"]);
   // the AI gets the price the message shows (💶 Item price: €22.50), not the bare listed price
   assert.match(req.messages[0].content.at(-1).text, /\nprice: €22\.50 \(what we pay the seller, buyer fee included\)\n/);
-  // every copy edited: the AI's two lines at the very end (60 - 5 - 22.5 = €33 profit)
-  const edited = t.tg.sent("editMessageCaption");
-  assert.equal(edited.length, 2);
-  assert.equal(edited[0].caption, `${FULL(2)}\n🔢 #2\n\n🤖 ✅ YES, if the jack works. €33 profit.\n⚠️ Stock photo, ask for a real one`);
+  // one post per chat, with the sound, the AI's two lines already at the end (60 - 5 - 22.5 = €33 profit)
+  const posts = t.tg.sent("sendPhoto");
+  assert.equal(posts.length, 2);
+  assert.equal(posts[0].caption, `${FULL(2)}\n🔢 #2\n\n🤖 ✅ YES, if the jack works. €33 profit.\n⚠️ Stock photo, ask for a real one`);
+  assert.ok(!("disable_notification" in posts[0]));
+  assert.equal(edits(t).length, 0);
   const d = await t.store.deal("vinted:2");
-  assert.equal(d.ai.verdict, "yes");
-  assert.equal(d.ai_busy, undefined);
+  assert.ok(d.ai.verdict === "yes" && !d.rejected && d.ai_busy === undefined);
+});
+
+test("an AI slower than the wait: out at once in its topic, the 🤖/⚠️ lines edited in when it answers", async () => {
+  const { t } = await withAI();
+  t.tg.answerClaude = () => new Promise((resolve) => setTimeout(() => resolve(text(CHECK)), 60));
+  t.tg.clear();
+  assert.equal((await t.api("POST", "/api/deal", scannerDeal(2), { aiHoldMs: 5 })).body.status, "sent");
+  const order = t.tg.calls.map((c) => c.method);
+  assert.ok(order.indexOf("sendPhoto") < order.indexOf("editMessageCaption"));
+  assert.equal(t.tg.sent("sendPhoto")[0].caption, `${FULL(2)}\n🔢 #2`);
+  assert.match(t.tg.sent("editMessageCaption")[0].caption, /\n\n🤖 ✅ YES, if the jack works\. €33 profit\./);
+  assert.equal((await t.store.deal("vinted:2")).ai_busy, undefined);
 });
 
 test("the bot decides YES/NO from the profit after the part; only a red flag turns a YES into a NO", async () => {
@@ -360,26 +369,84 @@ test("📊 Numbers: the full breakdown and the max offer, under the deal", async
   assert.equal(post.reply_parameters.message_id, 8);
 });
 
-test("❌ NO: the deal stays, muted (no duty ping, no reminders); /ai hide-no on takes it down", async () => {
-  const { t } = await withAI({ settings: { roles: { [MARCO]: "buyer" }, team: true } });
-  const NO = "RISK: Crack by the footswitch\nIF: none\nRED FLAG: cracked casing, it won't sell\nPARTS: 0 | DIFFICULTY: none | PART: none";
+const NO = "RISK: Crack by the footswitch\nIF: none\nRED FLAG: cracked casing, it won't sell\nPARTS: 0 | DIFFICULTY: none | PART: none";
+const REJECTED = 77;
+const withRejected = () => withAI({ settings: { roles: { [MARCO]: "buyer" }, team: true, topics: { guitars: 11, rejected: REJECTED } } });
+
+test("❌ NO: straight to the Rejected topic, quietly (no sound, no @mention), with the reason and ↩️ Not a NO", async () => {
+  const { t } = await withRejected();
   t.tg.answerClaude = () => text(NO);
   t.tg.clear();
-  assert.equal((await t.api("POST", "/api/deal", scannerDeal(2))).body.status, "sent");
-  const d = await t.store.deal("vinted:2");
-  assert.equal(d.ai.verdict, "no");
-  const group = t.tg.sent("editMessageCaption").find((p) => String(p.chat_id) === GROUP);
+  assert.deepEqual((await t.api("POST", "/api/deal", scannerDeal(2))).body, { status: "rejected", n: 2 });
+  const posts = t.tg.sent("sendPhoto");
+  assert.ok(posts.length === 2 && posts.every((p) => p.disable_notification === true));
+  const group = posts.find((p) => String(p.chat_id) === GROUP);
+  assert.equal(group.message_thread_id, REJECTED);
   assert.ok(group.caption.endsWith("\n\n🤖 ❌ NO. Cracked casing, it won't sell.\n⚠️ Crack by the footswitch"));
   assert.ok(!group.caption.includes("👮"));
-  // taken down instead
-  await t.update(msg("/ai hide-no on"));
-  assert.match(t.tg.texts().at(-1), /taken down/);
+  assert.deepEqual(group.reply_markup.inline_keyboard.at(-1).at(-1), { text: "↩️ Not a NO", callback_data: "unrej:vinted:2" });
+  assert.ok((await t.store.deal("vinted:2")).rejected);
+});
+
+test("a NO that comes after the deal was posted: deleted from its topic and posted again in Rejected, quietly", async () => {
+  const { t } = await withRejected();
+  t.tg.answerClaude = () => new Promise((resolve) => setTimeout(() => resolve(text(NO)), 60));
   t.tg.clear();
+  await t.api("POST", "/api/deal", scannerDeal(2), { aiHoldMs: 5 });
+  const [first, again] = [t.tg.sent("sendPhoto").slice(0, 2), t.tg.sent("sendPhoto").slice(2)];
+  assert.equal(first.find((p) => String(p.chat_id) === GROUP).message_thread_id, 11);          // its topic first
+  assert.equal(t.tg.sent("deleteMessage").length, 2);
+  assert.equal(again.find((p) => String(p.chat_id) === GROUP).message_thread_id, REJECTED);
+  assert.ok(again.every((p) => p.disable_notification === true));
+  const d = await t.store.deal("vinted:2");
+  assert.ok(d.rejected && d.messages.every((m) => !first.some((f) => f.message_id === m.id)));
+});
+
+test("↩️ Not a NO: back to its topic, a 👍 and a note that the AI was wrong", async () => {
+  const { t } = await withRejected();
+  t.tg.answerClaude = () => text(NO);
+  await t.api("POST", "/api/deal", scannerDeal(2));
+  t.tg.clear();
+  await t.update(tap("unrej:vinted:2", { user: MARCO, chat: -100 }));
+  const d = await t.store.deal("vinted:2");
+  assert.ok(!d.rejected && d.votes[String(MARCO)] === "up" && d.ai_overruled.by === MARCO);
+  assert.equal(t.tg.sent("deleteMessage").length, 2);
+  const back = t.tg.sent("sendPhoto").find((p) => String(p.chat_id) === GROUP);
+  assert.equal(back.message_thread_id, 11);
+  assert.ok(!back.reply_markup.inline_keyboard.flat().some((b) => b.text === "↩️ Not a NO"));
+  await t.update(tap("unrej:vinted:2", { user: MARCO, chat: -100 }));
+  assert.match(t.tg.sent("answerCallbackQuery").at(-1).text, /already back/);
+});
+
+test("rejected deals don't count: /stats sent (only the NO column), the Mini App deal list", async () => {
+  const { t } = await withRejected();
+  t.tg.answerClaude = () => text(NO);
+  await t.api("POST", "/api/deal", scannerDeal(2));
+  t.tg.answerClaude = () => text(CHECK);
   await t.api("POST", "/api/deal", scannerDeal(3));
-  const hidden = await t.store.deal("vinted:3");
-  assert.ok(hidden.hidden);
-  assert.deepEqual(t.tg.sent("deleteMessage").map((p) => p.message_id), hidden.messages.map((m) => m.id));
-  assert.equal(t.tg.sent("editMessageCaption").length, 0);
+  const { open } = await import("../src/app.js");
+  const { dailyStats } = await import("../src/stats.js");
+  const { snapshot } = await import("../src/webapp.js");
+  const { bot } = await open(t.env, { fetchFn: t.tg.fetch, now: t.now });
+  const today = (await dailyStats(bot, { days: 1 })).rows[0];
+  assert.deepEqual([today.sent, today.yes, today.no], [2, 1, 1]);   // sent: the test deal and #3 (✅); #2 only as a ❌
+  const list = (await snapshot(bot, { id: MARCO })).deals.map((x) => x.key);
+  assert.ok(list.includes("vinted:3") && !list.includes("vinted:2"));
+});
+
+test("without the Rejected topic, or with /ai hide-no off, a NO stays in its topic, muted", async () => {
+  const { t } = await withAI({ settings: { roles: { [MARCO]: "buyer" }, team: true } });
+  t.tg.answerClaude = () => text(NO);
+  assert.equal((await t.api("POST", "/api/deal", scannerDeal(2))).body.status, "sent");
+  assert.ok(!(await t.store.deal("vinted:2")).rejected);
+  await t.update(msg("/ai hide-no on"));
+  assert.match(t.tg.texts().at(-1), /once it's set up: \/topic rejected in it/);
+  const r = await withRejected();
+  r.t.tg.answerClaude = () => text(NO);
+  await r.t.update(msg("/ai hide-no off"));
+  assert.match(r.t.tg.texts().at(-1), /stay in their topic, muted/);
+  assert.equal((await r.t.api("POST", "/api/deal", scannerDeal(2))).body.status, "sent");
+  assert.ok(!(await r.t.store.deal("vinted:2")).rejected);
 });
 
 test("notes go into every prompt; /notes lists them; only the owner deletes", async () => {

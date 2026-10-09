@@ -23,6 +23,7 @@ export const UPDATE_TYPES = ["message", "callback_query", "chat_join_request", "
 export const MEMBER_CHECK_HOUR = 10;   // the daily "in the group without a role" check, Italy time
 
 export const MAX_QUEUE_FLUSH = 15;
+export const AI_HOLD_MS = 10_000;   // a new deal waits this long for the AI's YES/NO before it goes out without it
 export const CLEANUP_DELAY = 10;   // seconds a command and its answer stay in the Rules topic
 
 /** Deletes the Rules topic leftovers that are due (all of them with now = Infinity). */
@@ -106,7 +107,7 @@ export async function handleRequest(request, env, opts = {}) {
     const handler = API[route];
     if (!handler) return json({ error: "not found" }, 404);
     const body = request.method === "GET" ? null : await request.json();
-    return json(await handler({ ...(await open(env, opts)), waitUntil: opts.waitUntil }, body));
+    return json(await handler({ ...(await open(env, opts)), waitUntil: opts.waitUntil, aiHoldMs: opts.aiHoldMs }, body));
   }
   return new Response("flipFinder", { status: 404 });
 }
@@ -190,20 +191,32 @@ const API = {
     if (!d) return { status: "exists" };
     if (quiet) return { status: "queued", n: d.n };
     const cfg = bot.ai.config;
-    d.mention = await bot.team.dealMention(now);
+    // wait up to 10 s for the AI, so a ❌ NO never flashes up in the deal topics
+    let late = null;
+    if (cfg.enabled && cfg.auto && bot.ai.apiKey) {
+      const job = bot.ai.assess(d, "auto", body.key).catch((e) => ({ error: String(e?.message || e) }));
+      let timer;
+      const first = await Promise.race([job,
+        new Promise((r) => { timer = setTimeout(() => r(null), ctx.aiHoldMs ?? AI_HOLD_MS); })]);
+      clearTimeout(timer);
+      if (first?.r) d.ai = bot.ai.record(first);
+      else if (!first) late = job;   // still thinking: out now in its topic, moved if the answer is NO
+    }
+    d.rejected = d.ai?.verdict === "no" && bot.ai.rejects();
+    d.mention = d.rejected ? "" : await bot.team.dealMention(now);
     d.messages = await tg.sendAlert(fullText(d), d.photo, keyboard(body.key, d, cfg.enabled), dealTopic(d, ctx.settings.topics),
-      d.mention);
+      d.mention, { silent: d.rejected });
     d.alerted_at = now;
-    const check = cfg.enabled && cfg.auto && d.messages.length && bot.ai.apiKey;
-    if (check) d.ai_busy = now;   // so /api/analyze doesn't check it a second time meanwhile
+    if (late && d.messages.length) d.ai_busy = now;   // so /api/analyze doesn't check it a second time meanwhile
     await store.saveDeal(body.key, d);
     await bot.save();
-    if (check) {
-      const job = bot.ai.check(body.key, d, { user: "auto" }).catch((e) => console.error("AI check failed", e?.stack || e));
-      if (ctx.waitUntil) ctx.waitUntil(job);   // the scanner gets its answer now, the edit follows
-      else await job;
+    if (late && d.messages.length) {
+      const edit = late.then((a) => (a?.r ? bot.ai.apply(body.key, d, a) : null))
+        .catch((e) => console.error("AI check failed", e?.stack || e));
+      if (ctx.waitUntil) ctx.waitUntil(edit);   // the scanner gets its answer now, the edit or move follows
+      else await edit;
     }
-    return { status: d.messages.length ? "sent" : "failed", n: d.n };
+    return { status: d.messages.length ? (d.rejected ? "rejected" : "sent") : "failed", n: d.n };
   },
 
   /**

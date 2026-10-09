@@ -472,6 +472,30 @@ Add one with /watch link, remove with /unwatch sol`);
     }
   }
 
+  /**
+   * Moves a deal between its topic and ❌ Rejected: every copy deleted and posted again (quietly, without
+   * the duty @mention, when it goes to Rejected).
+   */
+  async moveDeal(key, d, toRejected) {
+    for (const m of d.messages || []) await this.tg.call("deleteMessage", { chat_id: m.chat, message_id: m.id });
+    d.rejected = toRejected;
+    d.mention = toRejected ? "" : d.mention || "";
+    d.messages = await this.tg.sendAlert(fullText(d), d.photo, keyboard(key, d, this.ai.config.enabled),
+      dealTopic(d, this.settings.topics), d.mention, { silent: toRejected });
+    await this.store.saveDeal(key, d);
+    return d;
+  }
+
+  /** ↩️ Not a NO: back to its topic, counted as a 👍 and noted, to see where the AI is wrong. */
+  async onNotANo(cq, user, key) {
+    const d = await this.store.deal(key);
+    if (!d?.rejected) return this.answer(cq, "It's already back in its topic");
+    d.votes = { ...(d.votes || {}), [String(user)]: "up" };
+    d.ai_overruled = { by: user, at: this.now };
+    await this.answer(cq, "↩️ Moved back, noted as a 👍");
+    await this.moveDeal(key, d, false);
+  }
+
   /** 📊 Numbers (messages from the short layout): the full breakdown and the AI's max offer. */
   async onNumbers(cq, chat, msg, key) {
     const d = await this.store.deal(key);
@@ -562,8 +586,9 @@ Add one with /watch link, remove with /unwatch sol`);
     }
     if ((a === "hide-no" || a === "hideno") && (b === "on" || b === "off")) {
       this.ai.set({ hide_no: b === "on" });
-      return this.reply(chat, b === "on" ? "🧠 ❌ NO deals are taken down once the AI answers"
-        : "🧠 ❌ NO deals stay, muted (no duty ping, no reminders)");
+      return this.reply(chat, b === "on"
+        ? "🧠 ❌ NO deals go to the Rejected topic, quietly" + (this.settings.topics?.rejected ? "" : " (once it's set up: /topic rejected in it)")
+        : "🧠 ❌ NO deals stay in their topic, muted (no duty ping, no reminders)");
     }
     if (a === "model" || a === "deepmodel") {
       if (!PRICES[b]) throw new UserError(`Models I know the prices of: ${Object.keys(PRICES).join(", ")}`);
@@ -1593,6 +1618,7 @@ Add one with /watch link, remove with /unwatch sol`);
     if (kind === "kick") return this.onKick(cq, chat, msg, user, rest);
     if (kind === "ai" || kind === "aq" || kind === "aid") return this.onAiButton(cq, chat, msg, user, kind, rest);
     if (kind === "num") return this.onNumbers(cq, chat, msg, rest);
+    if (kind === "unrej") return this.onNotANo(cq, user, rest);
     if (kind === "ap" || kind === "rj") return this.decideBuy(cq, user, rest, kind === "ap");
     if (kind === "wait") return this.answer(cq, "Waiting for the manager's OK");
     if (kind === "duty") {

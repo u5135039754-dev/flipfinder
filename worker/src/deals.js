@@ -38,6 +38,7 @@ export function keyboard(key, d, ai = false) {
     rows.push([
       { text: up ? `👍 ${up}` : "👍", callback_data: `up:${key}` },
       { text: down ? `👎 ${down}` : "👎", callback_data: `dn:${key}` },
+      ...(d.rejected ? [{ text: "↩️ Not a NO", callback_data: `unrej:${key}` }] : []),
     ]);
   }
   return { inline_keyboard: rows };
