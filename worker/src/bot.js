@@ -9,6 +9,7 @@ import { ROLES, Team } from "./team.js";
 import { Handbook } from "./handbook.js";
 import { Kits, kitButtons, kitText } from "./kit.js";
 import { Reports } from "./reports.js";
+import { Meeting, parseDay } from "./meeting.js";
 import { AI, PRICES } from "./ai.js";
 import { dailyStats, daysSinceStart, statsCsv, statsText } from "./stats.js";
 import { INTROS, TOPIC_FOR_GROUP, TOPIC_NAMES, dealTopic, mention, pricesFor, sellListing } from "./group.js";
@@ -16,7 +17,7 @@ import { DEFAULT_WATCH, MAX_WATCH, findCoin, watchlist } from "./crypto.js";
 import { hhmm, rome, romeTs } from "./util.js";
 import { UserError, closeMatches, esc, euro, g, parseNumber, queryAndRange, splitArgs } from "./util.js";
 
-export const COMMANDS_VERSION = 21;   // bump when the list below changes, so it's registered again
+export const COMMANDS_VERSION = 23;   // bump when the list below changes, so it's registered again
 export const COMMANDS = [
   ["help", "List all commands"],
   ["app", "Open the flipFinder app: deals, stock, pot and settings"],
@@ -50,6 +51,8 @@ export const COMMANDS = [
   ["aiusage", "AI spend and calls today and this month"],
   ["stats", "Daily numbers: deals, YES/NO, claims, buys, sales, profit, AI cost; /stats 30, /stats csv"],
   ["reports", "Owner only: the weekly and monthly report files (Excel), tap one to get it again"],
+  ["meeting", "The weekly team meeting: when and where; /meeting time sun 20:30, /meeting link <url>, /meeting off"],
+  ["minutes", "After the meeting: /minutes <notes> saves them, posts them in Summary and in the next weekly report"],
   ["fast", "Fast lane (newest listings every few minutes); owner: /fast 2, /fast off"],
   ["setrole", "Owner only: /setrole Anna seller (manager, buyer, seller, or none to remove it)"],
   ["removerole", "Owner only: /removerole Anna (blocks them right away)"],
@@ -61,12 +64,14 @@ export const COMMANDS = [
   ["deposit", "Owner only: money put in: /deposit Marco 100"],
   ["withdraw", "Owner only: money taken out: /withdraw Marco 50"],
   ["fix", "Owner only: correct a price: /fix 12 paid 45 or /fix 12 sold 80"],
+  ["paidby", "Owner only: a buy paid with a member's own money: /paidby Marco 12 (the pot owes them)"],
+  ["refund", "Owner only: the pot pays a member back: /refund Marco 58 12"],
   ["undo", "Owner only: cancel a deposit, withdrawal or fix with a new entry: /undo 7"],
   ["split", "Owner only: how profit is shared: /split contribution or /split equal"],
   ["allow", "Owner only: first step for a new member: /allow 123456789, then /setrole"],
   ["intro", "Owner only: post or update the pinned intro in every topic"],
 ];
-const OWNER_ONLY = new Set(["allow", "intro", "deposit", "withdraw", "fix", "undo", "split", "setrole", "removerole", "delnote", "setname", "remind", "repairs", "abroad", "reports"]);
+const OWNER_ONLY = new Set(["allow", "intro", "deposit", "withdraw", "fix", "undo", "split", "setrole", "removerole", "delnote", "setname", "remind", "repairs", "abroad", "reports", "paidby", "refund"]);
 export const LOCKED = "🔒 You're not a member of FLIP MAFIA";
 const IN_GROUP = new Set(["member", "administrator", "creator", "restricted"]);
 // the fast lane's settings (the scanner has the same defaults in flipfinder/fastlane.py)
@@ -94,6 +99,7 @@ export class Bot {
     this.ai = new AI(this, aiKey);
     this.kits = new Kits(this);
     this.reports = new Reports(this);
+    this.meeting = new Meeting(this);
     this.cleanup = [];   // {chat, id}: commands and replies in the Rules topic, deleted 10 s later
     this.rules = null;   // {chat, thread} while answering a message in the Rules topic
     this._deals = null;
@@ -625,6 +631,43 @@ Add one with /watch link, remove with /unwatch sol`);
     await this.reply(chat, statsText(await dailyStats(this, { days }), days));
   }
 
+  /** /meeting: when and where; the owner or a manager changes it. */
+  async cmd_meeting(chat, args, user) {
+    const [a = "", b = "", c = ""] = args;
+    if (!a) return this.reply(chat, this.meeting.status());
+    if (user !== this.ownerId && !this.team.isManager(user)) throw new UserError("Only the owner or a manager changes the meeting");
+    const what = a.toLowerCase();
+    if (what === "off" || what === "on") {
+      this.meeting.set({ on: what === "on" });
+      return this.reply(chat, what === "on" ? this.meeting.status() : "👥 Weekly meeting off: no more reminders. /meeting on brings it back");
+    }
+    if (what === "time") {
+      const day = parseDay(b);
+      const m = String(c).match(/^([01]?\d|2[0-3])[:.]([0-5]\d)$/);
+      if (!day || !m) throw new UserError("Use /meeting time <day> <HH:MM>, e.g. /meeting time sun 20:30");
+      this.meeting.set({ day, time: `${m[1].padStart(2, "0")}:${m[2]}`, on: true });
+      return this.reply(chat, this.meeting.status());
+    }
+    if (what === "link") {
+      if (b.toLowerCase() === "off") {
+        this.meeting.set({ link: null });
+        return this.reply(chat, "📹 Back to the Telegram video chat in the group");
+      }
+      if (!/^https:\/\/\S+$/.test(b)) throw new UserError("Use /meeting link https://meet.google.com/... or /meeting link off");
+      this.meeting.set({ link: b });
+      return this.reply(chat, `🔗 The meeting is now at ${esc(b)}: the reminders show a Join button`);
+    }
+    throw new UserError("Use /meeting, /meeting time sun 20:30, /meeting link <url>, /meeting link off, /meeting off");
+  }
+
+  /** /minutes <notes>: after the meeting. */
+  async cmd_minutes(chat, args, user, msg) {
+    const text = (msg?.text || args.join(" ")).replace(/^\/minutes(@\S+)?\s*/i, "").trim();
+    if (!text) throw new UserError("Write the notes after the command, e.g. /minutes Marco lists the amps by Wednesday");
+    await this.meeting.minutes(text, user);
+    if (!Telegram.isGroup(chat)) await this.reply(chat, "📝 Saved and posted in Summary; they'll be in the next weekly report");
+  }
+
   /** /reports: the latest report files, a button each to get it again. */
   async cmd_reports(chat, args, user) {
     this.ownerOnly(user, "reports");
@@ -1129,7 +1172,7 @@ Add one with /watch link, remove with /unwatch sol`);
     const all = await this.store.ledger();
     const e = all.find((x) => x.id === id);
     if (!e) throw new UserError("Which entry? /ledger shows the numbers, e.g. /undo 7");
-    if (!["deposit", "withdraw", "fix"].includes(e.kind)) {
+    if (!["deposit", "withdraw", "fix", "personal", "refund"].includes(e.kind)) {
       throw new UserError("Buys and sales follow the deal: correct them with /fix <deal number> paid|sold <amount>");
     }
     if (all.some((x) => x.kind === "undo" && x.ref === id)) throw new UserError(`Entry ${id} was already undone`);
@@ -1437,7 +1480,7 @@ Add one with /watch link, remove with /unwatch sol`);
     }
     await this.store.saveDeal(pending.key, d);
     await this.refreshDeal(pending.key, d);
-    await this.reply(chat, done);
+    await this.reply(chat, done, entry.kind === "buy" ? this.ownMoneyButton(pending.key) : undefined);
     await this.money(entry, chat);
     if (entry.kind === "buy") await this.pingSellers(pending.key, d);
   }
@@ -1495,11 +1538,140 @@ Add one with /watch link, remove with /unwatch sol`);
     await this.store.saveDeal(key, d);
     await this.refreshDeal(key, d);
     await this.postAbout(d, `✅ ${esc(boss)} approved #${n} at ${euro(req.amount)}. ${this.payNote(d, req.amount, req.by)}`);
-    await this.team.dm(req.by_id, `✅ Approved: #${n} at ${euro(req.amount)}. ${this.payNote(d, req.amount, req.by)}`);
+    await this.team.dm(req.by_id, `✅ Approved: #${n} at ${euro(req.amount)}. ${this.payNote(d, req.amount, req.by)}`,
+      { inline_keyboard: this.ownMoneyButton(key) });
     this.capture?.push(`✅ Approved #${n} at ${euro(req.amount)}`);
     await this.money({ kind: "buy", amount: -req.amount, n: d.n, deal: key }, undefined);
     await this.pingSellers(key, d);
     return this.answer(cq, "Approved");
+  }
+
+  /** 👛 under a purchase: tap it if you paid with your own money (the pot owes you until /refund). */
+  ownMoneyButton(key) {
+    return [[{ text: "👛 I paid with my own money", callback_data: `own:${key}` }]];
+  }
+
+  /** The pot didn't pay for this one: the price goes back into the cash, and the pot owes `name` until /refund. */
+  async paidPersonally(chat, key, d, name, amount) {
+    const ledger = await this.store.ledger();
+    if (ledger.some((e) => e.kind === "personal" && e.deal === key && !ledger.some((u) => u.kind === "undo" && u.ref === e.id))) {
+      throw new UserError(`#${d.n} is already down as paid with someone's own money`);
+    }
+    await this.money({ kind: "personal", amount, member: name, n: d.n, deal: key, owed: { [name]: amount } }, chat);
+  }
+
+  async onOwnMoney(cq, chat, user, key) {
+    const d = await this.store.deal(key);
+    if (!d || !["bought", "listed", "sold"].includes(d.status)) return this.answer(cq, "That deal isn't bought");
+    if (user !== d.who_id && user !== this.ownerId) return this.answer(cq, `That's for ${d.who || "whoever bought it"}`);
+    try {
+      await this.paidPersonally(chat, key, d, d.who || this.team.member(user)?.name || "owner", d.paid || 0);
+    } catch (e) {
+      if (e instanceof UserError) return this.answer(cq, e.message);
+      throw e;
+    }
+    return this.answer(cq, "👛 Noted: the pot owes you this, the owner pays it back with /refund");
+  }
+
+  /** /paidby <name> <deal#> [amount]: someone paid for a deal with their own money (owner, after the fact). */
+  async cmd_paidby(chat, args, user) {
+    this.ownerOnly(user, "paidby");
+    const [name, ref, raw] = args;
+    if (!name || !ref) throw new UserError("Use /paidby <name> <deal#> [amount], e.g. /paidby Marco 12");
+    const found = /^#?\d+$/.test(ref) ? findDeal(await this.allDeals(), ref) : null;
+    if (!found || !["bought", "listed", "sold"].includes(found[1].status)) throw new UserError(`No bought deal #${ref.replace(/^#/, "")}`);
+    const amount = raw ? this.amountArg(raw) : found[1].paid || 0;
+    await this.paidPersonally(chat, found[0], found[1], name, amount);
+  }
+
+  /** /refund <name> <amount> <deal#>: the pot pays a member back for a buy with their own money. */
+  async cmd_refund(chat, args, user) {
+    this.ownerOnly(user, "refund");
+    const [name, raw, ref] = args;
+    if (!name || !raw || !ref) throw new UserError("Use /refund <name> <amount> <deal#>, e.g. /refund Marco 58 12");
+    const amount = this.amountArg(raw);
+    const found = /^#?\d+$/.test(ref) ? findDeal(await this.allDeals(), ref) : null;
+    if (!found) throw new UserError(`No deal #${ref.replace(/^#/, "")}`);
+    const [key, d] = found;
+    const ledger = await this.store.ledger();
+    const undone = new Set(ledger.filter((e) => e.kind === "undo").map((e) => e.ref));
+    const owed = ledger.filter((e) => e.deal === key && !undone.has(e.id) && ["personal", "refund"].includes(e.kind))
+      .reduce((s, e) => s + Object.entries(e.owed || {}).filter(([k]) => k.toLowerCase() === name.toLowerCase())
+        .reduce((a, [, v]) => a + v, 0), 0);
+    if (owed <= 0.004) {
+      throw new UserError(`The pot doesn't owe ${name} anything for #${d.n}. If they paid with their own money: /paidby ${name} ${d.n}`);
+    }
+    if (amount > owed + 0.004) throw new UserError(`The pot owes ${name} ${euro(owed)} for #${d.n}, not more`);
+    const member = Object.keys(ledger.find((e) => e.deal === key && e.kind === "personal")?.owed || {})[0] || name;
+    await this.money({ kind: "refund", amount: -amount, member, n: d.n, deal: key, owed: { [member]: -amount } }, chat);
+  }
+
+  // --- 🚨 Buy now: a member wants it bought right away
+  async onBuyNow(cq, user, key) {
+    const d = await this.store.deal(key);
+    if (!d || !["new", "claimed"].includes(d.status)) return this.answer(cq, "That one's already bought or gone");
+    const bn = d.buy_now;
+    if (bn && !bn.on_it && this.now - bn.at < 30 * 60) return this.answer(cq, `Already sent (${bn.by_name}), waiting for someone`);
+    const name = this.team.member(user)?.name || claimerName(cq.from || {});
+    const duty = await this.team.duty();
+    const ids = new Set([...this.team.withRole("buyer").map((m) => m.id), ...(duty.on ? [duty.on.id] : [])]);
+    ids.delete(user);
+    if (!ids.size) for (const m of [...this.team.withRole("manager"), { id: this.ownerId }]) if (m.id !== user) ids.add(m.id);
+    d.buy_now = { by: user, by_name: name, at: this.now, alerted: [], msgs: [], on_it: null, escalated: false };
+    const sent = await this.sendBuyNow(key, d, [...ids]);
+    await this.store.saveDeal(key, d);
+    return this.answer(cq, sent.length ? `🚨 Sent to ${sent.join(", ")}` : "🚨 Nobody else could be reached in private");
+  }
+
+  /** The private alert (with sound) to these people; who got it. */
+  async sendBuyNow(key, d, ids, late = false) {
+    const price = d.item?.total_price ?? d.item?.price ?? d.cost;
+    const offer = d.ai?.offer ?? this.ai.maxOffer(d, await this.ai.minProfit(d));
+    const text = (late ? "⏰ Nobody answered in 5 minutes\n" : "") +
+      `🚨 <b>${esc(d.buy_now.by_name)} wants this, buy now</b>\n#${d.n ?? "?"} ${esc((d.title || "").slice(0, 60))}\n` +
+      `💶 Price: <b>${euro(price)}</b>` + (offer !== null ? ` · 💬 Max offer: <b>€${offer}</b>` : "");
+    const buttons = { inline_keyboard: [[{ text: "✋ On it", callback_data: `bon:${key}` }],
+      ...(/^https:\/\//.test(d.url || "") ? [[{ text: "Open the listing", url: d.url }]] : [])] };
+    const names = [];
+    for (const id of ids) {
+      const msg = await this.tg.sendTo(String(id), text, { buttons, preview: false });
+      if (!msg) continue;
+      d.buy_now.alerted.push(id);
+      d.buy_now.msgs.push({ chat: String(id), id: msg.message_id });
+      names.push(this.team.member(id)?.name || "the owner");
+    }
+    return names;
+  }
+
+  /** ✋ On it: they take it (claimed for them if nobody had it); the others and whoever asked are told. */
+  async onBuyNowOnIt(cq, user, key) {
+    const d = await this.store.deal(key);
+    if (!d?.buy_now) return this.answer(cq, "That's sorted");
+    if (d.buy_now.on_it) return this.answer(cq, `${d.buy_now.on_it.name} is already on it`);
+    const name = this.team.member(user)?.name || claimerName(cq.from || {});
+    d.buy_now.on_it = { id: user, name, at: this.now };
+    if (d.status === "new") Object.assign(d, { status: "claimed", who: name, who_id: user, claimed_at: this.now });
+    await this.store.saveDeal(key, d);
+    await this.refreshDeal(key, d);
+    for (const m of d.buy_now.msgs) {
+      await this.tg.call("editMessageReplyMarkup", { chat_id: m.chat, message_id: m.id,
+        reply_markup: { inline_keyboard: [[{ text: `✋ ${name} is on it`, callback_data: "noop" }]] } });
+    }
+    if (d.buy_now.by !== user) await this.team.dm(d.buy_now.by, `✋ ${esc(name)} is on #${d.n ?? "?"} ${esc((d.title || "").slice(0, 50))}`);
+    return this.answer(cq, d.who_id === user ? "It's yours, go buy it" : "On it");
+  }
+
+  /** The 5-minute cron: alerts nobody answered within 5 minutes go to everyone else with a role. */
+  async buyNowEscalate(deals) {
+    for (const [key, d] of deals) {
+      const bn = d.buy_now;
+      if (!bn || bn.on_it || bn.escalated || this.now - bn.at < 5 * 60 || this.tg.callsLeft < 8) continue;
+      bn.escalated = true;
+      const others = this.team.members().filter((m) => m.role || m.id === this.ownerId).map((m) => m.id)
+        .filter((id) => id !== bn.by && !bn.alerted.includes(id));
+      if (others.length) await this.sendBuyNow(key, d, others, true);
+      await this.store.saveDeal(key, d);
+    }
   }
 
   /** Something was bought: the sellers list it. */
@@ -1634,6 +1806,14 @@ Add one with /watch link, remove with /unwatch sol`);
     if (kind === "ai" || kind === "aq" || kind === "aid") return this.onAiButton(cq, chat, msg, user, kind, rest);
     if (kind === "num") return this.onNumbers(cq, chat, msg, rest);
     if (kind === "unrej") return this.onNotANo(cq, user, rest);
+    if (kind === "own") return this.onOwnMoney(cq, chat, user, rest);
+    if (kind === "mt") {
+      const [value, date] = rest.split(":");
+      return this.meeting.answer(cq, user, value === "in" ? "in" : "out", date);
+    }
+    if (kind === "bn") return this.onBuyNow(cq, user, rest);
+    if (kind === "bon") return this.onBuyNowOnIt(cq, user, rest);
+    if (kind === "noop") return this.answer(cq, "");
     if (kind === "rep") {
       if (user !== this.ownerId) return this.answer(cq, "Only the owner");
       await this.answer(cq, "📊 Sending it");

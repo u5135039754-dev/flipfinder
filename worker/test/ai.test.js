@@ -40,14 +40,14 @@ const scannerDeal = (n, extra = {}) => ({ key: `vinted:${n}`, text: FULL(n),
     source: "vinted", cost: 27, value: 60, profit: 25, rating: 7, sell_days: 3.6, query: "boss ds 1",
     item: { id: n, price: 22, total_price: 22.5, photos: ["https://img/a.jpg"] }, ...extra } });
 
-test("buttons: Claim and Open; with the AI on, ❓ Seller questions and 🧠 Deep analysis; votes", async () => {
+test("buttons: Claim, 🚨 Buy now and Open; with the AI on, ❓ Seller questions and 🧠 Deep analysis; votes", async () => {
   const { keyboard } = await import("../src/deals.js");
   const d = { status: "new", url: "https://www.vinted.it/items/1", source: "vinted" };
   const labels = (kb) => kb.inline_keyboard.map((r) => r.map((b) => b.text));
-  assert.deepEqual(labels(keyboard("k", d)), [["✋ Claim", "Open on Vinted"], ["👍", "👎"]]);
-  assert.deepEqual(labels(keyboard("k", d, true)), [["✋ Claim", "Open on Vinted"], ["❓ Seller questions", "🧠 Deep analysis"],
-    ["👍", "👎"]]);
-  assert.deepEqual(keyboard("k", d, true).inline_keyboard[1].map((b) => b.callback_data), ["aq:k", "aid:k"]);
+  assert.deepEqual(labels(keyboard("k", d)), [["✋ Claim", "🚨 Buy now"], ["Open on Vinted"], ["👍", "👎"]]);
+  assert.deepEqual(labels(keyboard("k", d, true)), [["✋ Claim", "🚨 Buy now"], ["Open on Vinted"],
+    ["❓ Seller questions", "🧠 Deep analysis"], ["👍", "👎"]]);
+  assert.deepEqual(keyboard("k", d, true).inline_keyboard[2].map((b) => b.callback_data), ["aq:k", "aid:k"]);
   assert.ok(!JSON.stringify(keyboard("k", { status: "sold" }, true)).includes("Seller questions"));
   assert.ok(!JSON.stringify(keyboard("k", d, true)).match(/Check with AI|Numbers/));
 });

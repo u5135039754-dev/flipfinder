@@ -8,6 +8,7 @@ import { dailyStats } from "./stats.js";
 import { RULES } from "./searches.js";
 import { workbook, toBase64, fromBase64, XLSX_TYPE } from "./xlsx.js";
 import { esc, euro, rome } from "./util.js";
+import { summarize } from "./pot.js";
 
 const DAY = 86400;
 export const MIN_SALES = 3;          // sales needed before the AI suggests anything
@@ -83,11 +84,17 @@ export class Reports {
     const inPeriod = (ts) => ts && day(ts) >= from && day(ts) <= to;
     const ledger = await bot.store.ledger();
     const stats = await dailyStats(bot, { from, to });
+    const undone = new Set(ledger.filter((e) => e.kind === "undo").map((e) => e.ref));
+    const own = Object.fromEntries(ledger.filter((e) => e.kind === "personal" && !undone.has(e.id)).map((e) => [e.deal, e.member]));
     const buys = ledger.filter((e) => e.kind === "buy" && inPeriod(e.at)).map((e) => {
       const d = byKey[e.deal] || {};
       return { n: e.n, title: d.title || "", group: d.group || "", at: e.at, paid: -e.amount, value: d.value ?? null,
-        predicted: d.profit ?? null };
+        predicted: d.profit ?? null, own: own[e.deal] || "" };
     });
+    // bought with members' own money: paid back in the period, and still owed now
+    const refunds = ledger.filter((e) => e.kind === "refund" && !undone.has(e.id) && inPeriod(e.at))
+      .reduce((s, e) => s - e.amount, 0);
+    const owed = summarize(ledger, deals).owed;
     const sales = ledger.filter((e) => e.kind === "sale" && inPeriod(e.at)).map((e) => {
       const d = byKey[e.deal] || {};
       const profit = sum(e.profit);
@@ -122,7 +129,8 @@ export class Reports {
     const ai = { checked: checked.length, yes: checked.length - nos.length, no: nos.length, rejected: nos.filter((d) => d.rejected).length,
       overruled: overruled.length, overruled_list: overruled.map((d) => ({ n: d.n, title: d.title, why: d.ai?.lines?.[0] || "" })),
       cost: stats.totals.ai };
-    return { kind, from, to, stats, buys, sales, stock, prediction, ai, in_stock: stats.in_stock };
+    const notes = await bot.meeting.notesBetween(from, to);
+    return { kind, from, to, stats, buys, sales, stock, prediction, ai, in_stock: stats.in_stock, refunds: r2(refunds), owed, notes };
   }
 
   /** The AI's suggestions from the numbers (only with MIN_SALES+ sales); each with a checked action. */
@@ -171,11 +179,14 @@ export class Reports {
       ["💸 Bought", t.bought], ["Money spent", eur(t.spent)], ["✅ Sold", t.sold], ["Money made", eur(t.made)],
       ["💰 Profit (sold items only)", eur(t.profit)], ["ROI on sold items", pct(t.roi === null ? null : t.roi / 100)],
       ["📦 In stock (at cost)", eur(r.in_stock)], ["🧠 AI cost", eur(t.ai)],
+      ["👛 Refunds paid (bought with own money)", eur(r.refunds)], ["👛 Still owed to members", eur(r.owed)],
       ["❌ NOs sent back (↩️ Not a NO)", `${r.ai.overruled} of ${r.ai.no}`], [],
       [{ v: "Predicted vs real profit, per category", s: "bold" }],
       ["Category", "Sales", "Predicted profit (avg)", "Real profit (avg)", "Sold vs predicted price", "Days to sell (avg)"],
       ...(r.prediction.length ? r.prediction.map((p) => [p.group, p.sales, eur(p.predicted), eur(p.real), pct(p.price_off), p.days])
         : [["No sales in this period"]]),
+      ...(r.notes?.length ? [[], [{ v: "Meeting notes", s: "bold" }],
+        ...r.notes.map((x) => [{ v: `${day(x.at)} (${x.by}): ${x.text}`, s: "wrap" }])] : []),
       [], [{ v: "Suggestions", s: "bold" }],
       ...(sug.note ? [[{ v: sug.note, s: "wrap" }]] : []),
       ...sug.items.map((x, i) => [{ v: `${i + 1}. ${x.text}${x.action ? ` (✅ Apply: ${actionText(x.action)})` : ""}`, s: "wrap" }]),
@@ -187,9 +198,9 @@ export class Reports {
           ...r.stats.rows.map((x) => [{ v: x.date, s: "date" }, x.sent, x.yes, x.no, x.claimed, x.bought, eur(x.spent), x.sold,
             eur(x.made), eur(x.profit), eur(x.ai)]),
           ["Total", t.sent, t.yes, t.no, t.claimed, t.bought, eur(t.spent), t.sold, eur(t.made), eur(t.profit), eur(t.ai)]] },
-      { name: "Buys", head: 0, widths: [7, 40, 13, 13, 11, 14, 17],
-        rows: [["#", "Item", "Category", "Date", "Paid", "Market value", "Predicted profit"],
-          ...r.buys.map((b) => [b.n, b.title, b.group, date(b.at), eur(b.paid), eur(b.value), eur(b.predicted)])] },
+      { name: "Buys", head: 0, widths: [7, 40, 13, 13, 11, 14, 17, 20],
+        rows: [["#", "Item", "Category", "Date", "Paid", "Market value", "Predicted profit", "Paid with own money"],
+          ...r.buys.map((b) => [b.n, b.title, b.group, date(b.at), eur(b.paid), eur(b.value), eur(b.predicted), b.own])] },
       { name: "Sales", head: 0, widths: [7, 36, 13, 13, 13, 9, 10, 10, 10, 8, 16, 16],
         rows: [["#", "Item", "Category", "Bought", "Sold", "Days", "Paid", "Sold for", "Profit", "ROI", "Predicted profit", "Off vs predicted price"],
           ...r.sales.map((s) => [s.n, s.title, s.group, date(s.bought), date(s.at), s.days, eur(s.paid), eur(s.sold), eur(s.profit),

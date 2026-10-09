@@ -29,8 +29,9 @@ export function keyboard(key, d, ai = false) {
     const [code, label] = NEXT[d.status];
     first.push({ text: `${label} (${d.who})`, callback_data: `${code}:${key}` });
   }
-  if (/^https:\/\//.test(d.url || "")) first.push({ text: `Open on ${PLATFORMS[d.source] || "the site"}`, url: d.url });
+  if (["new", "claimed"].includes(d.status)) first.push({ text: "🚨 Buy now", callback_data: `bn:${key}` });
   if (first.length) rows.push(first);
+  if (/^https:\/\//.test(d.url || "")) rows.push([{ text: `Open on ${PLATFORMS[d.source] || "the site"}`, url: d.url }]);
   if (d.status !== "sold") {
     if (ai) {
       rows.push([{ text: "❓ Seller questions", callback_data: `aq:${key}` }, { text: "🧠 Deep analysis", callback_data: `aid:${key}` }]);

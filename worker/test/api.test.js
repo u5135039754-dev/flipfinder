@@ -23,8 +23,8 @@ test("deals go to every chat with lifecycle buttons, in their topic, numbered", 
   assert.deepEqual(photos.map((p) => String(p.chat_id)), [String(OWNER), GROUP]);
   assert.ok(!("message_thread_id" in photos[0]) && photos[1].message_thread_id === 11);   // topic only in the group
   assert.equal(photos[0].caption, "🔥 <b>Deal 1</b>\n🔢 #1");   // the scanner's full message
-  assert.deepEqual(photos[0].reply_markup.inline_keyboard[0], [{ text: "✋ Claim", callback_data: "c:vinted:1" },
-    { text: "Open on Vinted", url: "https://www.vinted.it/items/1" }]);
+  assert.deepEqual(photos[0].reply_markup.inline_keyboard.slice(0, 2), [[{ text: "✋ Claim", callback_data: "c:vinted:1" },
+    { text: "🚨 Buy now", callback_data: "bn:vinted:1" }], [{ text: "Open on Vinted", url: "https://www.vinted.it/items/1" }]]);
   const d = await t.store.deal("vinted:1");
   assert.deepEqual(d.messages.map((m) => [m.chat, m.photo, m.thread]), [[String(OWNER), true, null], [GROUP, true, 11]]);
   assert.deepEqual((await t.api("POST", "/api/deal", deal(1, 40))).body, { status: "exists" });   // never twice

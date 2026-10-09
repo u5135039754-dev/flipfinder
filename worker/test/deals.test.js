@@ -67,7 +67,7 @@ test("votes, feedback and the seller message", async () => {
   const key = await addDeal(t.store);
   await t.updates(tap(`up:${key}`, { user: MARCO }), tap(`dn:${key}`), tap(`m:${key}`, { user: MARCO }));
   const d = await t.store.deal(key);
-  assert.deepEqual(keyboard(key, d).inline_keyboard[1].map((b) => b.text), ["👍 1", "👎 1"]);
+  assert.deepEqual(keyboard(key, d).inline_keyboard[2].map((b) => b.text), ["👍 1", "👎 1"]);
   const fb = await t.store.feedbackSince(0);
   assert.ok(fb.length === 1 && fb[0].title === "Boss DS-1 distortion" && fb[0].url.endsWith("/items/1"));
   const seller = t.tg.texts()[0];

@@ -627,10 +627,9 @@ export class Team {
   }
 
   // --- the Sunday report
-  async weekly(deals, now) {
-    const since = now - 7 * DAY;
+  /** Hours each member was on duty (08:00-22:00) in the 7 days up to `now`, and the shifts. */
+  async dutyHours(now) {
     const d = await this.duty();
-    const lines = ["", "👥 <b>Team</b>"];
     const per = {};
     const shifts = [...d.log, ...(d.on ? [{ id: d.on.id, start: d.on.since, end: now }] : [])];
     for (let i = 0; i < 7; i++) {
@@ -642,6 +641,13 @@ export class Team {
         per[e.id] = (per[e.id] || 0) + x / 3600;
       }
     }
+    return { per, shifts };
+  }
+
+  async weekly(deals, now) {
+    const since = now - 7 * DAY;
+    const lines = ["", "👥 <b>Team</b>"];
+    const { per, shifts } = await this.dutyHours(now);
     for (const m of this.members().filter((x) => x.role)) {
       const lim = this.limit(m);
       const caught = deals.filter(([, x]) => x.claimed_at >= since && shifts.some((e) => e.id === m.id &&

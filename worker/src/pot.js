@@ -4,6 +4,8 @@
 //   deposited / withdrawn / profit: {member name: euros}
 // A sale's profit is split when it happens (by contribution or equally), so later deposits and
 // withdrawals never change how earlier profit was shared.
+// Bought with a member's own money: a "personal" entry puts the price back into the cash and the pot
+// owes them (owed: {name: euros}); /refund pays it back (cash out, owed down).
 
 import { esc, euro } from "./util.js";
 
@@ -18,7 +20,7 @@ export function memberKey(name) {
 /** Cash, stock at cost, profit and every member's account from the ledger and the deals. */
 export function summarize(entries, deals) {
   const members = {};
-  const member = (name) => (members[memberKey(name)] ??= { name, deposited: 0, withdrawn: 0, profit: 0 });
+  const member = (name) => (members[memberKey(name)] ??= { name, deposited: 0, withdrawn: 0, profit: 0, owed: 0 });
   let cash = 0;
   let profit = 0;
   for (const e of entries) {
@@ -29,14 +31,16 @@ export function summarize(entries, deals) {
       member(name).profit += x;
       profit += x;
     }
+    for (const [name, x] of Object.entries(e.owed || {})) member(name).owed += x;
   }
   const stock = deals.filter(([, d]) => ["bought", "listed"].includes(d.status))
     .reduce((s, [, d]) => s + (d.paid || 0), 0);
   const list = Object.values(members).map((m) => ({
-    ...m, net: round2(m.deposited - m.withdrawn), account: round2(m.deposited - m.withdrawn + m.profit),
-    deposited: round2(m.deposited), withdrawn: round2(m.withdrawn), profit: round2(m.profit),
+    ...m, net: round2(m.deposited - m.withdrawn), account: round2(m.deposited - m.withdrawn + m.profit + m.owed),
+    deposited: round2(m.deposited), withdrawn: round2(m.withdrawn), profit: round2(m.profit), owed: round2(m.owed),
   }));
-  return { cash: round2(cash), stock: round2(stock), profit: round2(profit), members: list, started: entries.length > 0 };
+  const owed = round2(list.reduce((s, m) => s + m.owed, 0));
+  return { cash: round2(cash), stock: round2(stock), profit: round2(profit), owed, members: list, started: entries.length > 0 };
 }
 
 /** Who gets what share of profit now: by net contribution, or equally among members with money in. */
@@ -65,7 +69,7 @@ export function allocate(amount, shareMap) {
 /** Negates everything an entry did (for /undo). */
 export function reverse(e) {
   const neg = (m) => (m ? Object.fromEntries(Object.entries(m).map(([k, v]) => [k, -v])) : undefined);
-  return { amount: -e.amount, deposited: neg(e.deposited), withdrawn: neg(e.withdrawn), profit: neg(e.profit) };
+  return { amount: -e.amount, deposited: neg(e.deposited), withdrawn: neg(e.withdrawn), profit: neg(e.profit), owed: neg(e.owed) };
 }
 
 export function potText(summary, mode, budget) {
@@ -76,6 +80,11 @@ export function potText(summary, mode, budget) {
     `Profit so far: ${euro(s.profit)} · split ${mode === "equal" ? "equally" : "by contribution"}`,
   ];
   if (budget !== undefined) lines.push(`Budget-mode limit: ${euro(budget)} (the smaller of /budget and the cash)`);
+  const owing = s.members.filter((m) => m.owed > 0.004);
+  if (owing.length) {
+    lines.push(`👛 <b>Owed to members: ${euro(s.owed)}</b> (bought with their own money, not paid back yet: ` +
+      `${owing.map((m) => `${esc(m.name)} ${euro(m.owed)}`).join(", ")}). /refund name amount deal# when paid`);
+  }
   const sh = shares(s, mode);
   if (s.members.length) {
     lines.push("", "<b>Members</b> · put in · profit share · back if we stopped today");
@@ -98,6 +107,7 @@ export function entryLine(e) {
   const what = {
     deposit: `deposit from${who}`, withdraw: `withdrawal to${who}`, buy: `bought${deal}`, sale: `sold${deal}`,
     fix: `correction${deal}`, undo: `undo of entry ${e.ref}`,
+    personal: `${deal.trim()} paid with${who}'s own money (the pot owes it)`, refund: `refund to${who}${deal ? ` for${deal}` : ""}`,
   }[e.kind] || e.kind;
   return `${e.id ? `${e.id}. ` : ""}${sign}${euro(Math.abs(e.amount))} ${what}${e.note ? ` (${esc(e.note)})` : ""}`;
 }
