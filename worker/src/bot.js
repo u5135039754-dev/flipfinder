@@ -18,6 +18,8 @@ import { hhmm, rome, romeTs } from "./util.js";
 import { UserError, closeMatches, esc, euro, g, parseNumber, queryAndRange, splitArgs } from "./util.js";
 
 export const COMMANDS_VERSION = 24;   // bump when the list below changes, so it's registered again
+export const UNDOABLE = ["deposit", "withdraw", "fix", "personal", "refund"];   // /undo; buys and sales: /fix
+export const TREASURER_CMDS = new Set(["deposit", "withdraw", "paidby", "refund"]);
 export const POT_CHECK_MIN = 19 * 60 + 30;   // Sunday 19:30: the treasurer's pot balance screenshot
 export const COMMANDS = [
   ["help", "List all commands"],
@@ -62,12 +64,12 @@ export const COMMANDS = [
   ["remind", "Owner only: the \"not claimed yet\" digest: /remind on or /remind off"],
   ["setname", "Owner only: the name the bot uses for someone: /setname 123456789 Anna"],
   ["ledger", "Every money action, newest last: /ledger or /ledger 30"],
-  ["deposit", "Owner only: money put in: /deposit Marco 100"],
-  ["withdraw", "Owner only: money taken out: /withdraw Marco 50"],
+  ["deposit", "Owner or treasurer: money put in: /deposit Marco 100"],
+  ["withdraw", "Owner or treasurer: money taken out: /withdraw Marco 50"],
   ["fix", "Owner only: correct a price: /fix 12 paid 45 or /fix 12 sold 80"],
-  ["paidby", "Owner only: a buy paid with a member's own money: /paidby Marco 12 (the pot owes them)"],
+  ["paidby", "Owner or treasurer: a buy paid with a member's own money: /paidby Marco 12 (the pot owes them)"],
   ["settreasurer", "Owner only: who holds the pot's money: /settreasurer <member> [as <name>]"],
-  ["refund", "Owner only: the pot pays a member back: /refund Marco 58 12"],
+  ["refund", "Owner or treasurer: the pot pays a member back: /refund Marco 58 12"],
   ["undo", "Owner only: cancel a deposit, withdrawal or fix with a new entry: /undo 7"],
   ["split", "Owner only: how profit is shared: /split contribution or /split equal"],
   ["allow", "Owner only: first step for a new member: /allow 123456789, then /setrole"],
@@ -140,7 +142,8 @@ export class Bot {
 
   /** Records a money action and posts it in the group (Summary topic); the private chat gets a reply. */
   async money(entry, chat) {
-    const saved = await this.store.addEntry({ at: this.now, ...entry });
+    const by = this.actor && this.actor !== this.ownerId ? this.actor : null;   // recorded by someone else (the treasurer...)
+    const saved = await this.store.addEntry({ at: this.now, ...entry, ...(by ? { by } : {}) });
     this._pot = null;
     this._deals = null;
     const p = await this.pot();
@@ -150,7 +153,20 @@ export class Bot {
     if (chat !== undefined && !groups.includes(String(chat)) && (groups.length || String(chat) !== String(this.ownerId))) {
       await this.reply(chat, text);
     }
+    if (by && groups.length && String(chat) !== String(this.ownerId)) {
+      // a copy for the owner, who can take back a mistake
+      const fix = UNDOABLE.includes(saved.kind) ? `/undo ${saved.id} if it's a mistake` : `/fix ${saved.n ?? "#"} paid|sold <amount> if it's wrong`;
+      const who = by === this.treasurer().id ? this.treasurer().name : this.team.nameOf(by);
+      await this.tg.sendTo(String(this.ownerId), `${text}\n<i>Recorded by ${esc(who)} · ${fix}</i>`);
+    }
     return saved;
+  }
+
+  /** The owner, or the treasurer: who may record money in and out (/deposit, /withdraw, /refund, /paidby). */
+  moneyOnly(user, cmd) {
+    if (user !== this.ownerId && user !== this.treasurer().id) {
+      throw new UserError(`Only the owner or the treasurer can use /${cmd}`);
+    }
   }
 
   findMember(p, name) {
@@ -227,6 +243,7 @@ export class Bot {
   }
 
   async handle(update) {
+    this.actor = Number(update.message?.from?.id ?? update.callback_query?.from?.id ?? 0) || null;
     try {
       const m = update.message;
       if (m) await this.seeInGroup(m);
@@ -277,7 +294,10 @@ export class Bot {
   // --- commands
   async cmd_help(chat, args, user) {
     const lines = ["<b>flipFinder commands</b>", ""];
-    for (const [c, d] of COMMANDS) if (!OWNER_ONLY.has(c) || user === this.ownerId) lines.push(`/${c} – ${esc(d)}`);
+    const treasurer = user === this.treasurer().id;
+    for (const [c, d] of COMMANDS) {
+      if (!OWNER_ONLY.has(c) || user === this.ownerId || (treasurer && TREASURER_CMDS.has(c))) lines.push(`/${c} – ${esc(d)}`);
+    }
     lines.push("", "Search and price changes apply from the next run (every ~5 min).");
     await this.reply(chat, lines.join("\n"));
   }
@@ -1135,7 +1155,7 @@ Add one with /watch link, remove with /unwatch sol`);
   }
 
   async cmd_deposit(chat, args, user) {
-    this.ownerOnly(user, "deposit");
+    this.moneyOnly(user, "deposit");
     if (args.length < 2) throw new UserError("Who and how much? e.g. /deposit Marco 100");
     const amount = this.amountArg(args.at(-1));
     const typed = args.slice(0, -1).join(" ");
@@ -1144,7 +1164,7 @@ Add one with /watch link, remove with /unwatch sol`);
   }
 
   async cmd_withdraw(chat, args, user) {
-    this.ownerOnly(user, "withdraw");
+    this.moneyOnly(user, "withdraw");
     if (args.length < 2) throw new UserError("Who and how much? e.g. /withdraw Marco 50");
     const amount = this.amountArg(args.at(-1));
     const p = await this.pot();
@@ -1174,7 +1194,7 @@ Add one with /watch link, remove with /unwatch sol`);
     const all = await this.store.ledger();
     const e = all.find((x) => x.id === id);
     if (!e) throw new UserError("Which entry? /ledger shows the numbers, e.g. /undo 7");
-    if (!["deposit", "withdraw", "fix", "personal", "refund"].includes(e.kind)) {
+    if (!UNDOABLE.includes(e.kind)) {
       throw new UserError("Buys and sales follow the deal: correct them with /fix <deal number> paid|sold <amount>");
     }
     if (all.some((x) => x.kind === "undo" && x.ref === id)) throw new UserError(`Entry ${id} was already undone`);
@@ -1572,7 +1592,7 @@ Add one with /watch link, remove with /unwatch sol`);
       if (e instanceof UserError) return this.answer(cq, e.message);
       throw e;
     }
-    return this.answer(cq, `👛 Noted: the pot owes you this, ${this.treasurer().name} pays it back (then the owner records /refund)`.slice(0, 190));
+    return this.answer(cq, `👛 Noted: the pot owes you this, ${this.treasurer().name} pays it back with /refund`.slice(0, 190));
   }
 
   /** Who holds the pot's money: settings.treasurer {id, name}, the owner until it's set. */
@@ -1622,7 +1642,7 @@ Add one with /watch link, remove with /unwatch sol`);
 
   /** /paidby <name> <deal#> [amount]: someone paid for a deal with their own money (owner, after the fact). */
   async cmd_paidby(chat, args, user) {
-    this.ownerOnly(user, "paidby");
+    this.moneyOnly(user, "paidby");
     const [name, ref, raw] = args;
     if (!name || !ref) throw new UserError("Use /paidby <name> <deal#> [amount], e.g. /paidby Marco 12");
     const found = /^#?\d+$/.test(ref) ? findDeal(await this.allDeals(), ref) : null;
@@ -1633,7 +1653,7 @@ Add one with /watch link, remove with /unwatch sol`);
 
   /** /refund <name> <amount> <deal#>: the pot pays a member back for a buy with their own money. */
   async cmd_refund(chat, args, user) {
-    this.ownerOnly(user, "refund");
+    this.moneyOnly(user, "refund");
     const [name, raw, ref] = args;
     if (!name || !raw || !ref) throw new UserError("Use /refund <name> <amount> <deal#>, e.g. /refund Marco 58 12");
     const amount = this.amountArg(raw);

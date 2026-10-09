@@ -26,7 +26,7 @@ test("deposits: owner only, posted in the group's Summary topic, /pot shows ever
   assert.match(posts[2].text, /deposit from luca · cash now <b>€300\.00<\/b>/);
   const replies = sent.filter((p) => String(p.chat_id) === "111").map((p) => p.text);
   assert.equal(replies.filter((x) => x.startsWith("💶")).length, 3);       // the private chat gets a copy
-  assert.ok(replies.some((x) => x.includes("Only the owner can use /deposit")));
+  assert.ok(replies.some((x) => x.includes("Only the owner or the treasurer can use /deposit")));
   assert.ok(replies.some((x) => x.includes("Who and how much?")) && replies.some((x) => x.includes("between €0.01")));
   t.tg.clear();
   await t.update(msg("/pot", { user: MARCO }));
@@ -185,4 +185,30 @@ test("Sunday 19:30: the treasurer is asked for a screenshot of the balance, once
   const post = t.tg.sent().find((p) => p.text?.includes("Weekly pot check") && String(p.chat_id) === GROUP);
   assert.equal(post.message_thread_id, 44);
   assert.ok(post.text.startsWith('<a href="tg://user?id=555">Marcello</a>, 📸'));
+});
+
+test("the treasurer records money in, out, refunds and own-money buys; the owner gets a copy to /undo; /fix and /undo stay owner-only", async () => {
+  const t = await setup({ settings: { ...members, roles: { [OWNER]: "manager", [MARCO]: "buyer", [LUCA]: "seller" },
+    people: { [MARCO]: "Marco", [LUCA]: "Luca" }, treasurer: { id: MARCO, name: "Marcello" } } });
+  await t.update(msg("/deposit Marco 100", { user: MARCO, chat: MARCO }));
+  const entry = (await t.store.ledger()).at(-1);
+  assert.deepEqual([entry.kind, entry.amount, entry.by], ["deposit", 100, MARCO]);
+  const toOwner = t.tg.sent().filter((p) => String(p.chat_id) === String(OWNER));
+  assert.equal(toOwner.length, 1);
+  assert.match(toOwner[0].text, /^💶 <b>Pot<\/b> · 1\. \+€100\.00 deposit from Marco · cash now <b>€100\.00<\/b>\n<i>Recorded by Marcello · \/undo 1 if it's a mistake<\/i>$/);
+  assert.ok(t.tg.sent().some((p) => String(p.chat_id) === GROUP && p.text.includes("deposit from Marco")));   // the group, as always
+  await t.updates(msg("/withdraw Marco 20", { user: MARCO, chat: MARCO }), msg("/deposit Luca 50", { user: LUCA, chat: LUCA }),
+    msg("/undo 1", { user: MARCO, chat: MARCO }), msg("/fix 1 paid 10", { user: MARCO, chat: MARCO }));
+  const r = t.tg.texts();
+  assert.ok(r.some((x) => x.includes("withdrawal to Marco")));
+  assert.ok(r.some((x) => x.includes("Only the owner or the treasurer can use /deposit")));   // Luca isn't the treasurer
+  assert.ok(r.some((x) => x.includes("Only the owner can use /undo")) && r.some((x) => x.includes("Only the owner can use /fix")));
+  t.tg.clear();
+  await t.update(msg("/deposit Boss 10"));                                                // the owner's own moves: no copy
+  assert.equal(t.tg.sent().filter((p) => String(p.chat_id) === String(OWNER) && p.text.includes("Recorded by")).length, 0);
+  t.tg.clear();
+  await t.updates(msg("/help", { user: MARCO, chat: MARCO }), msg("/help", { user: LUCA, chat: LUCA }));
+  const [mine, luca] = t.tg.texts();
+  assert.ok(mine.includes("/deposit") && mine.includes("/refund") && !mine.includes("/fix "));
+  assert.ok(!luca.includes("/deposit"));
 });
