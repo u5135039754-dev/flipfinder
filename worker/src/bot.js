@@ -13,7 +13,7 @@ import { DEFAULT_WATCH, MAX_WATCH, findCoin, watchlist } from "./crypto.js";
 import { hhmm, rome, romeTs } from "./util.js";
 import { UserError, closeMatches, esc, euro, g, parseNumber, queryAndRange, splitArgs } from "./util.js";
 
-export const COMMANDS_VERSION = 17;   // bump when the list below changes, so it's registered again
+export const COMMANDS_VERSION = 18;   // bump when the list below changes, so it's registered again
 export const COMMANDS = [
   ["help", "List all commands"],
   ["app", "Open the flipFinder app: deals, stock, pot and settings"],
@@ -43,7 +43,7 @@ export const COMMANDS = [
   ["note", "Teach the AI a lesson: /note amps need a tube check"],
   ["notes", "The team's notes for the AI"],
   ["delnote", "Owner only: remove a note: /delnote 3"],
-  ["ai", "AI status; owner: /ai on|off, /ai auto on|off"],
+  ["ai", "AI status; owner: /ai on|off, /ai auto on|off, /ai hide-no on|off"],
   ["aiusage", "AI spend and calls today and this month"],
   ["fast", "Fast lane (newest listings every few minutes); owner: /fast 2, /fast off"],
   ["setrole", "Owner only: /setrole Anna seller (manager, buyer, seller, or none to remove it)"],
@@ -431,25 +431,42 @@ Add one with /watch link, remove with /unwatch sol`);
     if (!this.ai.config.enabled) return this.answer(cq, "🧠 The AI is switched off");
     const d = await this.store.deal(key);
     if (!d) return this.answer(cq, "That deal is gone");
-    const deep = kind === "aid";
-    if (deep ? d.ai_deep : d.ai) return this.answer(cq, deep ? "Deep analysis done: see the reply" : "Already checked: see the 🧠 reply under the deal");
-    const busy = deep ? "ai_deep_busy" : "ai_busy";
-    if (d[busy] && this.now - d[busy] < 90) return this.answer(cq, "Already on it, one moment");
-    d[busy] = this.now;
-    await this.store.saveDeal(key, d);
-    await this.answer(cq, deep ? "🧠 Deep analysis… up to a minute" : "🔍 Checking… a few seconds");
-    const r = deep ? await this.ai.deep(key, d, user) : await this.ai.check(key, d, { user });
-    if (r.error) {
-      d[busy] = 0;
+    // ai: the quick check (older messages' 🔍 button), aq: ❓ Seller questions, aid: 🧠 Deep analysis
+    if (kind === "ai" && d.ai) return this.answer(cq, "Already checked: it's in the deal message");
+    const busy = { ai: "ai_busy", aq: "ai_q_busy", aid: "ai_deep_busy" }[kind];
+    const cached = kind === "aq" ? d.ai_questions : kind === "aid" ? d.ai_deep?.text : null;
+    if (!cached) {
+      if (d[busy] && this.now - d[busy] < 90) return this.answer(cq, "Already on it, one moment");
+      d[busy] = this.now;
       await this.store.saveDeal(key, d);
+    }
+    await this.answer(cq, cached ? "Here it is" : { ai: "🔍 Checking… a few seconds", aq: "❓ Writing questions… a few seconds",
+      aid: "🧠 Deep analysis… up to a minute" }[kind]);
+    const where = { chat, replyTo: msg.message_id };
+    const r = kind === "aid" ? await this.ai.deep(key, d, user, where)
+      : kind === "aq" ? await this.ai.questions(key, d, user, where) : await this.ai.check(key, d, { user });
+    if (r.error) {
+      const fresh = (await this.store.deal(key)) || d;
+      fresh[busy] = 0;
+      await this.store.saveDeal(key, fresh);
       await this.tg.sendTo(chat, r.error, { replyTo: msg.message_id });
     }
+  }
+
+  /** 📊 Numbers: the full breakdown behind the short deal message, and the AI's max offer. */
+  async onNumbers(cq, chat, msg, key) {
+    const d = await this.store.deal(key);
+    if (!d) return this.answer(cq, "That deal is gone");
+    await this.answer(cq, "📊 Numbers below");
+    const offer = d.ai?.offer_line ? `\n${esc(d.ai.offer_line, false)}` : "";
+    await this.tg.sendTo(chat, `📊 <b>Numbers${d.n ? ` #${d.n}` : ""}</b>\n${d.text}${offer}`,
+      { replyTo: msg.message_id, preview: false });
   }
 
   /** The deal a message belongs to (the alert or its AI check), if any. */
   async dealByMessage(chat, id) {
     const same = (m) => String(m.chat) === String(chat) && m.id === id;
-    return (await this.allDeals()).find(([, d]) => (d.messages || []).some(same) || (d.ai?.msgs || []).some(same)) || null;
+    return (await this.allDeals()).find(([, d]) => [...(d.messages || []), ...(d.ai?.msgs || []), ...(d.ai_msgs || [])].some(same)) || null;
   }
 
   async botUsername() {
@@ -517,12 +534,17 @@ Add one with /watch link, remove with /unwatch sol`);
     if (a === "on" || a === "off") {
       this.ai.set({ enabled: a === "on" });
       return this.reply(chat, `🧠 AI is now ${a}` + (a === "on" && !this.ai.apiKey ? " (but no API key is set up yet)" : "") +
-        (a === "on" ? ". New deals get a 🔍 Check with AI button." : ". Deals go out exactly as before."));
+        (a === "on" ? ". New deals get a ✅ YES / ❌ NO line and the AI buttons." : ". Deals go out without the AI lines."));
     }
     if (a === "auto" && (b === "on" || b === "off")) {
       this.ai.set({ auto: b === "on" });
-      return this.reply(chat, b === "on" ? `🧠 New deals rated ${this.ai.config.min_rating}+ are checked automatically`
-        : "🧠 Checks run only when someone taps 🔍 Check with AI");
+      return this.reply(chat, b === "on" ? "🧠 Every new deal gets its ✅ YES / ❌ NO lines automatically"
+        : "🧠 New deals go out without the YES / NO lines");
+    }
+    if ((a === "hide-no" || a === "hideno") && (b === "on" || b === "off")) {
+      this.ai.set({ hide_no: b === "on" });
+      return this.reply(chat, b === "on" ? "🧠 ❌ NO deals are taken down once the AI answers"
+        : "🧠 ❌ NO deals stay, muted (no duty ping, no reminders)");
     }
     if (a === "model" || a === "deepmodel") {
       if (!PRICES[b]) throw new UserError(`Models I know the prices of: ${Object.keys(PRICES).join(", ")}`);
@@ -537,11 +559,7 @@ Add one with /watch link, remove with /unwatch sol`);
       this.ai.set({ user_daily: Math.round(number(1, 500)) });
       return this.reply(chat, `🧠 Up to ${this.ai.config.user_daily} AI questions per person a day`);
     }
-    if (a === "minrating") {
-      this.ai.set({ min_rating: Math.round(number(1, 10)) });
-      return this.reply(chat, `🧠 Automatic checks for deals rated ${this.ai.config.min_rating}+`);
-    }
-    throw new UserError("Use /ai on|off, /ai auto on|off, /ai cap 0.5, /ai limit 20, /ai minrating 6, /ai model <id>, /ai deepmodel <id>");
+    throw new UserError("Use /ai on|off, /ai auto on|off, /ai hide-no on|off, /ai cap 0.5, /ai limit 20, /ai model <id>, /ai deepmodel <id>");
   }
 
   async cmd_aiusage(chat) {
@@ -1182,9 +1200,10 @@ Add one with /watch link, remove with /unwatch sol`);
   // --- deal lifecycle: ✋ Claim -> 💸 Bought -> 🏷 Listed -> ✅ Sold
   /** Edit every copy of the deal (private chat and group) to the current status. */
   async refreshDeal(key, d) {
-    const text = fullText(d);
     const kb = keyboard(key, d, this.ai.config.enabled);
     for (const m of d.messages || []) {
+      const ping = d.mention && d.status === "new" && d.ai?.verdict !== "no" && Telegram.isGroup(m.chat);
+      const text = fullText(d) + (ping ? `\n${d.mention}` : "");
       if (m.photo) {
         await this.tg.call("editMessageCaption", { chat_id: m.chat, message_id: m.id, caption: text.slice(0, 1024),
           parse_mode: "HTML", reply_markup: kb });
@@ -1493,7 +1512,8 @@ Add one with /watch link, remove with /unwatch sol`);
     const rest = colon < 0 ? "" : data.slice(colon + 1);
     if (kind === "pay") return this.onUseCost(cq, chat, user, rest);
     if (kind === "kick") return this.onKick(cq, chat, msg, user, rest);
-    if (kind === "ai" || kind === "aid") return this.onAiButton(cq, chat, msg, user, kind, rest);
+    if (kind === "ai" || kind === "aq" || kind === "aid") return this.onAiButton(cq, chat, msg, user, kind, rest);
+    if (kind === "num") return this.onNumbers(cq, chat, msg, rest);
     if (kind === "ap" || kind === "rj") return this.decideBuy(cq, user, rest, kind === "ap");
     if (kind === "wait") return this.answer(cq, "Waiting for the manager's OK");
     if (kind === "duty") {

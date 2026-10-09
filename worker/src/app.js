@@ -8,7 +8,7 @@
 import { Store } from "./store.js";
 import { Telegram } from "./telegram.js";
 import { Bot, COMMANDS, COMMANDS_VERSION } from "./bot.js";
-import { compare, findRepost, keyboard } from "./deals.js";
+import { compare, findRepost, fullText, keyboard, shortText } from "./deals.js";
 import { TOPIC_FOR_GROUP, dealTopic, dueReminders, weeklyDue, weeklyReport } from "./group.js";
 import { DAY, UserError, inQuietHours, nowSeconds, rome } from "./util.js";
 import { action, snapshot, verifyInitData } from "./webapp.js";
@@ -21,6 +21,7 @@ export const UPDATE_TYPES = ["message", "callback_query", "chat_join_request", "
 export const MEMBER_CHECK_HOUR = 10;   // the daily "in the group without a role" check, Italy time
 
 export const MAX_QUEUE_FLUSH = 15;
+export const AI_HOLD_MS = 10_000;   // a new deal waits this long for its ✅ YES / ❌ NO before going out without it
 export const CLEANUP_DELAY = 10;   // seconds a command and its answer stay in the Rules topic
 
 /** Deletes the Rules topic leftovers that are due (all of them with now = Infinity). */
@@ -104,7 +105,7 @@ export async function handleRequest(request, env, opts = {}) {
     const handler = API[route];
     if (!handler) return json({ error: "not found" }, 404);
     const body = request.method === "GET" ? null : await request.json();
-    return json(await handler(await open(env, opts), body));
+    return json(await handler({ ...(await open(env, opts)), waitUntil: opts.waitUntil, aiHoldMs: opts.aiHoldMs }, body));
   }
   return new Response("flipFinder", { status: 404 });
 }
@@ -171,7 +172,11 @@ const API = {
     return { ok: true };
   },
 
-  /** A deal found by the scanner: numbered, sent to every chat (or kept for 08:00 in quiet hours). */
+  /**
+   * A deal found by the scanner: numbered, sent to every chat (or kept for 08:00 in quiet hours) as the
+   * short message. It waits up to 10 s for the AI: a ❌ NO goes out silently (or not at all with
+   * /ai hide-no on), a ✅ YES with the usual sound. A slower answer is edited in afterwards.
+   */
   async "POST /api/deal"(ctx, body) {
     const { store, tg, now, bot } = ctx;
     const quiet = inQuietHours(now);
@@ -180,20 +185,46 @@ const API = {
     const repost = record.item?.seller ? findRepost(record, await store.deals("WHERE sent >= ?", now - 7 * DAY), now) : null;
     if (repost && repost[0] !== body.key) return { status: "repost", of: repost[1].n ?? null };
     const d = await store.addDeal(body.key, { ...body.record, text: body.text, photo: body.photo || "",
-      group: body.group || "", sent: now, queued: quiet });
+      group: body.group || "", sent: now, queued: quiet, short: true });
     if (!d) return { status: "exists" };
     if (quiet) return { status: "queued", n: d.n };
-    d.messages = await tg.sendAlert(d.text, d.photo, keyboard(body.key, d, bot.ai.config.enabled), dealTopic(d, ctx.settings.topics),
-      await bot.team.dealMention(now));
+    const cfg = bot.ai.config;
+    let late = null;
+    if (cfg.enabled && cfg.auto && bot.ai.apiKey) {
+      const job = bot.ai.assess(d).catch((e) => ({ error: String(e?.message || e) }));
+      let timer;
+      const first = await Promise.race([job,
+        new Promise((r) => { timer = setTimeout(() => r(null), ctx.aiHoldMs ?? AI_HOLD_MS); })]);
+      clearTimeout(timer);
+      if (first?.r) d.ai = bot.ai.record(first);
+      else if (!first) late = job;   // still thinking: the deal goes out now, its lines follow
+    }
+    const no = d.ai?.verdict === "no";
     d.alerted_at = now;
+    if (no && cfg.hide_no) {
+      d.hidden = true;
+      await store.saveDeal(body.key, d);
+      await bot.save();
+      return { status: "hidden", n: d.n };
+    }
+    d.mention = no ? "" : await bot.team.dealMention(now);
+    d.messages = await tg.sendAlert(fullText(d), d.photo, keyboard(body.key, d, cfg.enabled), dealTopic(d, ctx.settings.topics),
+      d.mention, { silent: no });
+    if (late && d.messages.length) d.ai_busy = now;   // so /api/analyze doesn't check it a second time meanwhile
     await store.saveDeal(body.key, d);
     await bot.save();
+    if (late && d.messages.length) {
+      const edit = late.then((a) => (a?.r ? bot.ai.apply(body.key, d, a) : null))
+        .catch((e) => console.error("AI check failed", e?.stack || e));
+      if (ctx.waitUntil) ctx.waitUntil(edit);   // the scanner gets its answer now, the edit follows
+      else await edit;
+    }
     return { status: d.messages.length ? "sent" : "failed", n: d.n };
   },
 
   /**
-   * After each run: AI checks of the new deals, only when the owner turned on /ai auto. Also picks up
-   * deals posted since (the overnight queue), at most 3 per run. Never posts anything else.
+   * After each run: the AI lines for deals that don't have them yet (the overnight queue, or a check that
+   * didn't finish), at most 5 per run, only with /ai auto on. Never posts anything else.
    */
   async "POST /api/analyze"(ctx, body) {
     const { bot, store, now } = ctx;
@@ -201,8 +232,9 @@ const API = {
     if (!cfg.enabled || !cfg.auto) return { status: "off" };
     const keys = new Set(body?.keys || []);
     const todo = (await store.deals("WHERE sent >= ?", now - 3 * 3600))
-      .filter(([k, d]) => (keys.has(k) || d.alerted_at) && d.messages?.length && !d.ai && (d.rating ?? 0) >= cfg.min_rating)
-      .slice(0, 3);
+      .filter(([k, d]) => (keys.has(k) || d.alerted_at) && d.messages?.length && !d.ai && !d.hidden &&
+        !(d.ai_busy && now - d.ai_busy < 120))
+      .slice(0, 5);
     let done = 0;
     for (const [key, d] of todo) {
       const r = await bot.ai.check(key, d, { user: "auto" });
@@ -223,14 +255,19 @@ const API = {
   async "POST /api/ai/test"(ctx, body) {
     const { bot, store, now } = ctx;
     const n = Math.min(Math.max(Number(body?.count) || 3, 1), 5);
-    const recent = (await store.deals("WHERE sent >= ?", now - 7 * 86400)).filter(([, d]) => d.messages?.length)
-      .sort((a, b) => b[1].sent - a[1].sent).slice(0, n);
+    const picked = (body?.deals || []).map(Number);   // particular deal numbers, else the latest
+    const recent = picked.length
+      ? (await store.deals()).filter(([, d]) => picked.includes(d.n)).slice(0, 5)
+      : (await store.deals("WHERE sent >= ?", now - 7 * 86400)).filter(([, d]) => d.messages?.length)
+        .sort((a, b) => b[1].sent - a[1].sent).slice(0, n);
     const results = [];
     for (const [key, d] of recent) {
       const before = bot.ai.spent || 0;
       const calls = (bot.ai.calls || []).length;
       const r = await bot.ai.check(key, d, { user: "auto", post: false });
-      results.push({ n: d.n, title: d.title, rating: d.rating, text: r.text || r.error,
+      // the deal message as it would look with these lines
+      const preview = r.result ? shortText({ ...d, ai: { ...r.result, text: r.text } }) : null;
+      results.push({ n: d.n, title: d.title, rating: d.rating, text: r.text || r.error, preview,
         cost_usd: Math.round(((bot.ai.spent || 0) - before) * 1e6) / 1e6, calls: (bot.ai.calls || []).slice(calls) });
     }
     return { results, total_usd: Math.round((bot.ai.spent || 0) * 1e6) / 1e6, usd_to_eur: bot.ai.config.usd_to_eur };
@@ -360,8 +397,9 @@ export async function runCron(env, opts = {}) {
     let flushed = 0;
     for (const [key, d] of queued.slice(0, MAX_QUEUE_FLUSH)) {
       if (tg.callsLeft < 8) break;   // the rest go out in 5 minutes
-      d.messages = [...(d.messages || []), ...(await tg.sendAlert(d.text, d.photo, keyboard(key, d, bot.ai.config.enabled),
-        dealTopic(d, settings.topics), await bot.team.dealMention(now)))];
+      d.mention = await bot.team.dealMention(now);
+      d.messages = [...(d.messages || []), ...(await tg.sendAlert(fullText(d), d.photo, keyboard(key, d, bot.ai.config.enabled),
+        dealTopic(d, settings.topics), d.mention))];
       d.queued = false;
       d.alerted_at = now;
       await store.saveDeal(key, d);

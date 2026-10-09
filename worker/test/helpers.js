@@ -107,10 +107,10 @@ export async function setup({ settings, catalog = CATALOG, chatIds = `${OWNER},$
     if (r.status !== 200) throw new Error(`webhook ${r.status}`);
   };
   ctx.updates = async (...us) => { for (const u of us) await ctx.update(u); };
-  ctx.api = async (method, path, body, { at, key = "test-key" } = {}) => {
+  ctx.api = async (method, path, body, { at, key = "test-key", ...opts } = {}) => {
     const r = await handleRequest(new Request(`https://w${path}`, { method,
       headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body) }), env, { fetchFn: tg.fetch, now: at ?? ctx.now });
+      body: body === undefined ? undefined : JSON.stringify(body) }), env, { fetchFn: tg.fetch, now: at ?? ctx.now, ...opts });
     return { status: r.status, body: await r.json() };
   };
   ctx.cron = (at) => runCron(env, { fetchFn: tg.fetch, now: at ?? ctx.now });

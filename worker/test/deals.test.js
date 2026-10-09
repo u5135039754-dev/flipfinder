@@ -44,7 +44,8 @@ test("deal lifecycle: buys come out of the pot, sales go back in, profit is shar
   assert.ok(t.tg.texts().includes("✅ Sold for €75.00, profit €45.00"));
   assert.ok(t.tg.texts().some((x) => x.includes("+€75.00 sold #1") && x.includes("cash now <b>€345.00</b>")));
   assert.match(fullText(d), /✅ Sold by Marco · paid €30\.00 · sold for €75\.00 · profit €45\.00/);
-  assert.deepEqual(keyboard(key, d), { inline_keyboard: [] });
+  assert.deepEqual(keyboard(key, d), { inline_keyboard: [[{ text: "Open on Vinted", url: "https://www.vinted.it/items/1" }],
+    [{ text: "📊 Numbers", callback_data: `num:${key}` }]] });
   const sale = (await t.store.ledger()).at(-1);
   assert.deepEqual(sale.profit, { Owner: 15, Marco: 15, Luca: 15 });          // €100 each: equal thirds
   const p = profit(await t.store.deals(), DAYTIME);
@@ -67,7 +68,7 @@ test("votes, feedback and the seller message", async () => {
   const key = await addDeal(t.store);
   await t.updates(tap(`up:${key}`, { user: MARCO }), tap(`dn:${key}`), tap(`m:${key}`, { user: MARCO }));
   const d = await t.store.deal(key);
-  assert.deepEqual(keyboard(key, d).inline_keyboard[1].map((b) => b.text), ["👍 1", "👎 1", "📩 Message seller"]);
+  assert.deepEqual(keyboard(key, d).inline_keyboard[1].map((b) => b.text), ["📊 Numbers", "👍 1", "👎 1"]);
   const fb = await t.store.feedbackSince(0);
   assert.ok(fb.length === 1 && fb[0].title === "Boss DS-1 distortion" && fb[0].url.endsWith("/items/1"));
   const seller = t.tg.texts()[0];

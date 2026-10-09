@@ -1,34 +1,45 @@
 // Deal tracking: ✋ Claim -> 💸 Bought (price asked) -> 🏷 Listed -> ✅ Sold (price asked),
 // the shared money pool, 👍/👎 and a ready-to-copy message for the seller.
 
-import { esc, euro, rome } from "./util.js";
+import { esc, euro, num, rome } from "./util.js";
 
 export const STATUS = { new: "", claimed: "✋ Claimed", bought: "💸 Bought", listed: "🏷 Listed", sold: "✅ Sold" };
 export const NEXT = { claimed: ["b", "🙋 Request buy"], bought: ["l", "🏷 Listed"], listed: ["s", "✅ Sold"] };
+export const PLATFORMS = { vinted: "Vinted", ebay: "eBay", subito: "Subito" };
 export const SELLER_MESSAGE = (title) =>
   `Ciao! L'articolo "${title}" è ancora disponibile? Se sì, potresti mandarmi un breve video ` +
   "in cui si vede che funziona? Grazie mille!";
 
-/** A deal's buttons; `ai`: the AI is on, so it gets 🔍 Check with AI. */
+/**
+ * A deal's buttons: ✋ Claim (then the next step) and Open; with the AI on, ❓ Seller questions and
+ * 🧠 Deep analysis; 📊 Numbers (the full breakdown) and 👍/👎.
+ */
 export function keyboard(key, d, ai = false) {
   const votes = Object.values(d.votes || {});
   const up = votes.filter((v) => v === "up").length;
   const down = votes.filter((v) => v === "down").length;
   const rows = [];
-  if (d.status === "new") rows.push([{ text: "✋ Claim", callback_data: `c:${key}` }]);
+  const first = [];
+  if (d.status === "new") first.push({ text: "✋ Claim", callback_data: `c:${key}` });
   else if (d.status === "claimed" && d.request) {
-    rows.push([{ text: `⏳ Waiting for OK: ${euro(d.request.amount)} (${d.request.by})`, callback_data: `wait:${key}` }]);
+    first.push({ text: `⏳ Waiting for OK: ${euro(d.request.amount)} (${d.request.by})`, callback_data: `wait:${key}` });
   } else if (NEXT[d.status]) {
     const [code, label] = NEXT[d.status];
-    rows.push([{ text: `${label} (${d.who})`, callback_data: `${code}:${key}` }]);
+    first.push({ text: `${label} (${d.who})`, callback_data: `${code}:${key}` });
   }
+  if (/^https:\/\//.test(d.url || "")) first.push({ text: `Open on ${PLATFORMS[d.source] || "the site"}`, url: d.url });
+  if (first.length) rows.push(first);
   if (d.status !== "sold") {
+    if (ai) {
+      rows.push([{ text: "❓ Seller questions", callback_data: `aq:${key}` }, { text: "🧠 Deep analysis", callback_data: `aid:${key}` }]);
+    }
     rows.push([
+      { text: "📊 Numbers", callback_data: `num:${key}` },
       { text: up ? `👍 ${up}` : "👍", callback_data: `up:${key}` },
       { text: down ? `👎 ${down}` : "👎", callback_data: `dn:${key}` },
-      { text: "📩 Message seller", callback_data: `m:${key}` },
     ]);
-    if (ai) rows.push([{ text: "🔍 Check with AI", callback_data: `ai:${key}` }]);
+  } else {
+    rows.push([{ text: "📊 Numbers", callback_data: `num:${key}` }]);
   }
   return { inline_keyboard: rows };
 }
@@ -81,9 +92,41 @@ export function statusLine(d) {
   return line;
 }
 
+/**
+ * The deal message: title and price, the AI's ✅ YES / ❌ NO and main risk (once it answered), profit and
+ * how fast it sells. The full breakdown (d.text, from the scanner) is behind 📊 Numbers. Deals from before
+ * this layout keep their full text.
+ */
+/** The price the team sees in the deal message (buyer fee included), in whole euros; the AI gets the same. */
+export function shownPrice(d) {
+  const price = d.item?.total_price ?? d.item?.price ?? d.cost;
+  return price == null ? null : Math.round(price);
+}
+
+export function shortText(d) {
+  const price = shownPrice(d);
+  const no = d.ai?.verdict === "no";
+  const lines = [`${no ? "🔕" : d.repair ? "🔧" : "🔥"} <b>${esc(String(d.title || "").slice(0, 120), false)}</b> · ${eur(price)}`];
+  if (d.ai?.lines) lines.push(...d.ai.lines.map((l) => esc(l, false)));
+  const profit = d.ai?.profit ?? d.profit;
+  const after = d.ai?.profit != null ? " after the part" : "";
+  let money = profit != null && profit < 0 ? `💸 ${eur(-profit)} loss${after}` : `💰 ${eur(profit)} profit${after}`;
+  const days = d.sell_days != null ? Math.max(1, Math.round(d.sell_days)) : null;
+  if (days) money += ` · sells in ~${days} day${days === 1 ? "" : "s"}`;
+  lines.push(money + (d.n ? ` · #${d.n}` : ""));
+  return lines.join("\n");
+}
+
+/** Whole euros for the short lines: €177. */
+function eur(x) {
+  return x == null ? "€?" : `€${num(x, 0)}`;
+}
+
 export function fullText(d) {
   const line = statusLine(d);
-  return d.text + (line ? `\n\n<b>${line}</b>` : "");
+  let text = d.short ? shortText(d) : d.text;
+  if (!d.short && d.ai?.text) text += `\n\n${esc(d.ai.text, false)}`;
+  return text + (line ? `\n\n<b>${line}</b>` : "");
 }
 
 /** Shared money: starting amount - what was paid + what things sold for. */
