@@ -12,7 +12,7 @@ export const SELLER_MESSAGE = (title) =>
 
 /**
  * A deal's buttons: ✋ Claim (then the next step) and Open; with the AI on, ❓ Seller questions and
- * 🧠 Deep analysis; 📊 Numbers (the full breakdown) and 👍/👎.
+ * 🧠 Deep analysis; 👍/👎.
  */
 export function keyboard(key, d, ai = false) {
   const votes = Object.values(d.votes || {});
@@ -34,12 +34,9 @@ export function keyboard(key, d, ai = false) {
       rows.push([{ text: "❓ Seller questions", callback_data: `aq:${key}` }, { text: "🧠 Deep analysis", callback_data: `aid:${key}` }]);
     }
     rows.push([
-      { text: "📊 Numbers", callback_data: `num:${key}` },
       { text: up ? `👍 ${up}` : "👍", callback_data: `up:${key}` },
       { text: down ? `👎 ${down}` : "👎", callback_data: `dn:${key}` },
     ]);
-  } else {
-    rows.push([{ text: "📊 Numbers", callback_data: `num:${key}` }]);
   }
   return { inline_keyboard: rows };
 }
@@ -97,14 +94,15 @@ export function statusLine(d) {
  * how fast it sells. The full breakdown (d.text, from the scanner) is behind 📊 Numbers. Deals from before
  * this layout keep their full text.
  */
-/** The price the team sees in the deal message (buyer fee included), in whole euros; the AI gets the same. */
+/** The price the team sees in the deal message (buyer fee included); the AI gets the same. */
 export function shownPrice(d) {
   const price = d.item?.total_price ?? d.item?.price ?? d.cost;
-  return price == null ? null : Math.round(price);
+  if (price == null) return null;
+  return d.short ? Math.round(price) : Number(price).toFixed(2);   // the full message shows cents
 }
 
 export function shortText(d) {
-  const price = shownPrice(d);
+  const price = d.item?.total_price ?? d.item?.price ?? d.cost;
   const no = d.ai?.verdict === "no";
   const lines = [`${no ? "🔕" : d.repair ? "🔧" : "🔥"} <b>${esc(String(d.title || "").slice(0, 120), false)}</b> · ${eur(price)}`];
   if (d.ai?.lines) lines.push(...d.ai.lines.map((l) => esc(l, false)));
@@ -122,11 +120,30 @@ function eur(x) {
   return x == null ? "€?" : `€${num(x, 0)}`;
 }
 
+/**
+ * The deal message: the scanner's full text (every number), then the AI's two lines once it answered
+ * ("🤖 ✅ YES ..." and "⚠️ ..."), then the status. A few deals from the short layout keep it.
+ */
 export function fullText(d) {
   const line = statusLine(d);
   let text = d.short ? shortText(d) : d.text;
-  if (!d.short && d.ai?.text) text += `\n\n${esc(d.ai.text, false)}`;
+  if (!d.short && d.ai?.lines) text += `\n\n🤖 ${esc(d.ai.lines[0], false)}\n${esc(d.ai.lines[1] || "", false)}`;
   return text + (line ? `\n\n<b>${line}</b>` : "");
+}
+
+export const CAPTION_LIMIT = 1024;
+// lines a photo caption can do without, least useful first
+const SPARE = ["↔️", "📊 By platform", "🎯", "🏪", "💬 Negotiable", "<i>", "🔍 Before buying", "📊 Demand", "🔋"];
+
+/** A photo caption within Telegram's 1024 characters: spare lines go first, so the AI's lines at the end stay. */
+export function fitCaption(text) {
+  let lines = text.split("\n");
+  for (const prefix of SPARE) {
+    if (lines.join("\n").length <= CAPTION_LIMIT) break;
+    lines = lines.filter((l) => !l.startsWith(prefix));
+  }
+  const out = lines.join("\n");
+  return out.length <= CAPTION_LIMIT ? out : out.slice(0, CAPTION_LIMIT);
 }
 
 /** Shared money: starting amount - what was paid + what things sold for. */

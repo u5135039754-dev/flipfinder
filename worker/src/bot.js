@@ -3,7 +3,7 @@
 
 import { Telegram } from "./telegram.js";
 import { RULES, applySettings, effectiveBudget, searchId } from "./searches.js";
-import { SELLER_MESSAGE, fullText, keyboard, stock, profit, findDeal } from "./deals.js";
+import { SELLER_MESSAGE, fitCaption, fullText, keyboard, stock, profit, findDeal } from "./deals.js";
 import { allocate, entryLine, memberKey, potText, reverse, shares, summarize } from "./pot.js";
 import { ROLES, Team } from "./team.js";
 import { Handbook } from "./handbook.js";
@@ -453,7 +453,7 @@ Add one with /watch link, remove with /unwatch sol`);
     }
   }
 
-  /** 📊 Numbers: the full breakdown behind the short deal message, and the AI's max offer. */
+  /** 📊 Numbers (messages from the short layout): the full breakdown and the AI's max offer. */
   async onNumbers(cq, chat, msg, key) {
     const d = await this.store.deal(key);
     if (!d) return this.answer(cq, "That deal is gone");
@@ -1205,7 +1205,7 @@ Add one with /watch link, remove with /unwatch sol`);
       const ping = d.mention && d.status === "new" && d.ai?.verdict !== "no" && Telegram.isGroup(m.chat);
       const text = fullText(d) + (ping ? `\n${d.mention}` : "");
       if (m.photo) {
-        await this.tg.call("editMessageCaption", { chat_id: m.chat, message_id: m.id, caption: text.slice(0, 1024),
+        await this.tg.call("editMessageCaption", { chat_id: m.chat, message_id: m.id, caption: fitCaption(text),
           parse_mode: "HTML", reply_markup: kb });
       } else {
         await this.tg.call("editMessageText", { chat_id: m.chat, message_id: m.id, text, parse_mode: "HTML",
