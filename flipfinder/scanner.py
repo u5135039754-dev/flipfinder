@@ -33,6 +33,9 @@ MAX_SHIP_SHARE = 0.2
 # "slow lane" searches (slow_minutes): at most this many per run, the longest-waiting first, so a long list
 # of them spreads over the runs instead of all landing in one
 MAX_SLOW_PER_RUN = 8
+# searches that never ran (just added): their first run builds a price pool (3 page loads) on top of the search,
+# so at most this many a run; the rest wait for the next runs instead of pushing one run past the time limit
+MAX_NEW_PER_RUN = 6
 MUSIC_MIN_COMPARABLES = 5   # same-model listings needed to value music gear
 FAST_PER_PAGE = 24   # the fast lane only needs the listings that appeared since the last pass
 # A newly added search alerts on at most this many of the deals already listed
@@ -697,11 +700,16 @@ class Scanner:
         self._fetch_subito()
         # budget searches first: an overlapping normal search ("boss") would otherwise mark
         # their listings as seen under the normal rules before they're checked
+        new_this_run = 0
         for s in sorted(self.cfg.searches, key=lambda x: not x.budget):
             if not s.enabled:
                 continue
             if self.known.has(s) and not self._turn(s):
                 continue
+            if not self.known.has(s) and not self.first_run:
+                if new_this_run >= MAX_NEW_PER_RUN:
+                    continue
+                new_this_run += 1
             cap = self._price_to(s)
             if s.price_from is not None and cap is not None and s.price_from >= cap:
                 # e.g. a €500+ Gibson under the music max price: nothing to find, and Vinted refuses the range

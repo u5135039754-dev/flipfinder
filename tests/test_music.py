@@ -113,3 +113,20 @@ def test_a_search_priced_over_its_max_is_skipped_not_failed(tmp_path, monkeypatc
     monkeypatch.setattr(sc, "_fetch_subito", lambda: None)
     sc.scan()
     assert ran == [] and sc.failed_searches == 0
+
+
+def test_new_searches_start_a_few_a_run(tmp_path, monkeypatch):
+    from flipfinder.scanner import MAX_NEW_PER_RUN
+    cfg = config.load()
+    cfg.seen_file = tmp_path / "seen.json"
+    cfg.subito.enabled = False
+    cfg.stagger = False
+    sc = Scanner(cfg)
+    sc.first_run = False
+    ran = []
+    monkeypatch.setattr(sc, "scan_search", lambda s: ran.append(s.query) or [])
+    monkeypatch.setattr(sc, "_fetch_subito", lambda: None)
+    sc.seen.add("vinted:0")                    # not the very first run
+    sc.first_run = False
+    sc.scan()
+    assert len(ran) == MAX_NEW_PER_RUN          # none of them ran before: only a few start this run
