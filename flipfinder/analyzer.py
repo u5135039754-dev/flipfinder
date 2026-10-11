@@ -388,6 +388,9 @@ NOT_GARMENT = re.compile(r"\b(gilet|smanicato|scarpe|sneakers?|stivali|borsa|bor
 def clothes_kind(title: str) -> str | None:
     """cardigan, hoodie, jacket, sweatshirt or knit from the title; None when it's something else or unclear."""
     t = " ".join(normalize_text(title))
+    # "sans capuche", "senza cappuccio", "without hood" is a plain sweatshirt
+    t = re.sub(r"\b(sans|senza|without|no|sin|ohne|zonder) (la |il |de |the )?(capuche|cappuccio|hood|hoodie|capucha|kapuze)\b",
+               "sweat", t)
     kind = next((k for k, rx in CLOTHES_KINDS if rx.search(t)), None)
     if kind is None or NOT_GARMENT.search(t):
         return None
@@ -476,8 +479,8 @@ def fake_risk(item: Item, value: float) -> tuple[str, list[str]]:
     """
     points, why = 0, []
     share = item.price / value if value else 1.0
-    if share < 0.65:
-        points += 2 if share < 0.5 else 1
+    if share < 0.55:   # every deal is under the market; only a deep cut points to a fake
+        points += 2 if share < 0.45 else 1
         why.append(f"{share:.0%} of the market price")
     s = item.seller or {}
     if (s.get("reviews") or 0) < 20:

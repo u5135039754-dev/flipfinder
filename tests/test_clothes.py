@@ -37,6 +37,8 @@ def test_garment_types_and_what_is_not_one():
     assert clothes_kind("Piumino Arc'teryx") == "jacket"
     assert clothes_kind("Overshirt Stone Island") == "jacket"
     assert clothes_kind("Sweatshirt Stussy") == "sweatshirt"
+    assert clothes_kind("Sweat sans capuche Stone Island") == "sweatshirt"   # "without hood"
+    assert clothes_kind("Felpa senza cappuccio CP Company") == "sweatshirt"
     for title in ("Polo Ralph Lauren", "Gilet Stone Island", "Maglia manica corta Stussy", "Scarpe Margiela", "Borsa Acne"):
         assert clothes_kind(title) is None, title
 
@@ -62,12 +64,12 @@ def test_comparables_same_brand_type_and_size_without_fakes():
 
 
 def test_a_real_deal_with_fake_risk():
-    d = assess(it(1, 90, seller=GOOD_SELLER), pool(), RULES, "stone island", shipping=5)
+    d = assess(it(1, 85, seller=GOOD_SELLER), pool(), RULES, "stone island", shipping=5)
     assert d and not d.blocked, d and d.blocked
-    assert d.market_value == 160 and d.kind == "hoodie" and d.fake_risk == "medium"   # 56% of the market price
+    assert d.market_value == 160 and d.kind == "hoodie" and d.fake_risk == "medium"   # 53% of the market price
     text = format_deal(d)
     assert "Stone Island · hoodie · M" in text
-    assert "⚠️ Fake risk: <b>medium</b> 🟡 (56% of the market price)" in text and "inside label, care tag and codes" in text
+    assert "⚠️ Fake risk: <b>medium</b> 🟡 (53% of the market price)" in text and "inside label, care tag and codes" in text
 
 
 def test_too_cheap_is_a_fake_not_a_deal():
