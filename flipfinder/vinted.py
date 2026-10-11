@@ -50,6 +50,7 @@ class Item:
     photos: list = field(default_factory=list)   # up to 4 photo URLs, for the AI check (not kept in the pools)
     description: str = ""             # the seller's text (Vinted: from the item page), for the AI check
     country: str = ""                 # where it ships from, ISO code ("IT", "ES"): Vinted, from the seller's profile
+    category: int | None = None       # Subito: the category it was fetched from
 
     @property
     def key(self) -> str:

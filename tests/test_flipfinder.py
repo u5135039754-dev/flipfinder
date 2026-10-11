@@ -1676,7 +1676,7 @@ def test_report_suggestions_reach_the_scanner_music_rules_and_values(tmp_path: P
     cfg = cm.load("config.yaml")
     cfg.seen_file = tmp_path / "seen.json"
     apply_settings(cfg, {"music_rules": {"min_profit": 15}, "value_adjust": {"electronics": 0.85, "ps5": 0.9, "x": 9}})
-    assert cfg.music_rules == {"min_profit": 15.0, "min_roi": 35, "max_price": 250}
+    assert cfg.music_rules == {"min_profit": 15.0, "min_roi": 35, "max_price": 250, "pickup_max_price": 300, "pickup_min_profit": 40}
     assert cfg.value_adjust == {"electronics": 0.85, "ps5": 0.9}                 # out-of-range factors ignored
     sc = Scanner(cfg)
     by = {s.query: s for s in cfg.searches}

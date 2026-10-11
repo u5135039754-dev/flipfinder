@@ -40,6 +40,8 @@ def format_deal(deal: Deal) -> str:
     lines.append(f"🛒 <b>{platform}</b>" + (f" · {where}" if it.location else ""))
     if it.country and it.country != "IT":
         lines.append(abroad_line(it.country))
+    if it.source == "subito" and it.delivery == "shipping" and it.location:
+        lines.append(f"📦 <b>Ships from {html.escape(it.location)}</b>")
     if it.delivery == "pickup" and it.location:
         lines.append(f"📍 <b>Pickup {html.escape(it.location)}</b>" +
                      (f" ({it.distance_km:.0f} km)" if it.distance_km is not None else ""))

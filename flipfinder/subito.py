@@ -34,6 +34,7 @@ CATEGORY_FOR_VINTED_CATALOG = {
     3728: 10, 3580: 10, 3602: 10,     # tablets, laptops, graphics cards -> Informatica
     3025: 44,                         # consoles -> Console e Videogiochi
     4840: 39, 4826: 39, 4850: 39,     # pedals, amps, electric guitars -> Strumenti Musicali
+    79: 16, 267: 16, 1206: 16, 13: 16, 196: 16, 1037: 16,   # knitwear, sweatshirts, outerwear -> Abbigliamento e Accessori
     4860: 39, 4861: 39, 4931: 39, 5103: 39,   # MIDI controllers, synths, audio interfaces, microphones
     5433: 10,                         # calculators -> Informatica
     3075: 40,                         # digital cameras -> Fotografia
@@ -183,6 +184,26 @@ class SubitoClient:
         # Subito's own condition field: "Danneggiato" = damaged / for parts
         items = [i for i in items if not i.condition.lower().startswith("danneggiat")]
         return [self.delivery(i) for i in items if self.in_area(i)]
+
+    def pickup_radius(self, category: int) -> float:
+        return self.wide_radius_km if category in self.wide_categories and self.wide_regions and self.wide_radius_km else self.radius_km
+
+    def newest_shipping(self, category: int, limit: int = 50) -> list[Item]:
+        """
+        Newest listings of a category anywhere in Italy that offer shipping (Subito's "spedizione disponibile"). Within
+        the pickup radius the cheaper of pickup and shipping; further away shipping, at its cost when the listing says
+        (else None: the search's estimate is used).
+        """
+        items = [i for i in map(item_from_subito, self._get({"c": category, "shp": "true", "sort": "datedesc", "lim": limit, "start": 0})) if i]
+        items = [i for i in items if not i.condition.lower().startswith("danneggiat")]
+        out = []
+        for i in items:
+            if self.in_area(i, self.pickup_radius(category)):
+                out.append(self.delivery(i))
+            else:
+                i.delivery = "shipping"
+                out.append(i)
+        return out
 
     def pool(self, query: str, category: int, price_from: float | None, limit: int = 100) -> list[Item]:
         """Italy-wide listings for market value (location doesn't matter for prices)."""

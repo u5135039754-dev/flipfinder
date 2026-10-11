@@ -343,11 +343,16 @@ class Scanner:
         return out
 
     def _subito_for(self, s: Search) -> list[Item]:
-        """This run's new local Subito listings that belong to this search."""
-        return [i for i in self.subito_new
-                if is_relevant(i.title, s.query, i.brand)
-                and (s.price_from is None or i.price >= s.price_from)
-                and (self._price_to(s) is None or i.price <= self._price_to(s))]
+        """This run's new Subito listings (pickup or shipping) that belong to this search."""
+        def cap(i):
+            return self._pickup_cap(s) if self._is_music_pickup(s, i) else self._price_to(s)
+        out = [i for i in self.subito_new
+               if is_relevant(i.title, s.query, i.brand) and self._subito_category(s) == i.category
+               and (s.price_from is None or i.price >= s.price_from)
+               and (cap(i) is None or i.price <= cap(i))]
+        if s.clothes:   # Subito has no brand field: the search's brand, so the clothes checks can compare it
+            out = [replace(i, brand=i.brand or s.query.title()) for i in out]
+        return out
 
     # --- scanning ----------------------------------------------------------------
 
@@ -397,6 +402,25 @@ class Scanner:
         tracked, scale = self.sold.coverage(_key(s), now)
         return replace(rules, match_brand=s.match_brand, check=s.check, missing_part_cost=s.missing_part_cost,
                        sold=self.sold.sold_for(_key(s), now), tracked_days=tracked, sold_scale=scale, now=now)
+
+    def _is_music_pickup(self, s: Search, item: Item) -> bool:
+        return item.source == "subito" and item.delivery == "pickup" and search_group(s) in MUSIC and not s.budget
+
+    def _pickup_cap(self, s: Search) -> float | None:
+        """Music picked up in person may cost more (music_rules.pickup_max_price), never under the search's own max."""
+        music = getattr(self.cfg, "music_rules", None) or {}
+        cap = self._price_to(s)
+        if music.get("pickup_max_price"):
+            return max(float(music["pickup_max_price"]), cap or 0)
+        return cap
+
+    def _pickup_rules(self, s: Search, item: Item, rules: Rules) -> Rules:
+        """A music pickup: the higher max price, but a higher min profit too (most of the pot goes into one)."""
+        if not self._is_music_pickup(s, item):
+            return rules
+        music = getattr(self.cfg, "music_rules", None) or {}
+        return replace(rules, max_price=self._pickup_cap(s),
+                       min_profit=max(rules.min_profit, float(music.get("pickup_min_profit") or rules.min_profit)))
 
     def _max_price(self, s: Search) -> float | None:
         """The most a deal from this search may cost: its topic's max price (music, clothes), else the main one."""
@@ -580,7 +604,13 @@ class Scanner:
                 continue
             self.checked += 1
             if item.source in ("ebay", "subito"):
-                deal = assess(item, pool, rules, s.query)   # cost to get it comes with the listing
+                deal = assess(item, pool, self._pickup_rules(s, item, rules), s.query)   # cost to get it comes with the listing
+                if item.source == "subito":   # the per-run Subito line in the log (pickup vs shipping)
+                    counts = self.__dict__.setdefault("subito_counts", {})
+                    how = item.delivery or "pickup"
+                    counts[f"{how} checked"] = counts.get(f"{how} checked", 0) + 1
+                    if deal and not deal.blocked:
+                        counts[f"{how} deals"] = counts.get(f"{how} deals", 0) + 1
             else:
                 # Vinted shipping is only on the item page, so only open it for listings
                 # that would be a deal even with free shipping (a handful per scan)
@@ -797,6 +827,12 @@ class Scanner:
             log.info("Subito: %d new local listing(s) in %g km, %d API calls this run%s",
                      len(self.subito_new), self.cfg.subito.radius_km, self.subito.calls - self._subito_calls0,
                      " (first pass: only the best already-listed deals are sent)" if self.first_subito else "")
+            seen_by = getattr(self, "subito_fresh", {"pickup": 0, "shipping": 0})
+            c = getattr(self, "subito_counts", {})
+            log.info("SUBITO-STATS pickup seen=%d checked=%d deals=%d | shipping seen=%d checked=%d deals=%d",
+                     seen_by["pickup"], c.get("pickup checked", 0), c.get("pickup deals", 0),
+                     seen_by["shipping"], c.get("shipping checked", 0), c.get("shipping deals", 0))
+            self.subito_counts = {}
         if self.ebay:
             self.ebay_state.record(self.ebay.calls - calls_before, scanned=self.ebay_due)
             self.ebay_state.save()
@@ -816,19 +852,46 @@ class Scanner:
         return deals
 
     def _fetch_subito(self):
-        """Newest local Subito listings, one call per category the searches use."""
+        """
+        Newest Subito listings, two calls per category the searches use: local ones (pickup, by distance) and
+        Italy-wide ones that ship. A category's first Italy-wide pass is remembered without alerting.
+        """
         self.subito_new, self.first_subito = [], False
         if not self.subito:
             return
         self._subito_calls0 = self.subito.calls
         found: dict[str, Item] = {}
-        for cat in sorted({self._subito_category(s) for s in self.cfg.searches if s.enabled}):
+        state_path = self.cfg.seen_file.parent / "subito_shipping.json"
+        try:
+            seeded = set(json.loads(state_path.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            seeded = set()
+        for cat in sorted({self._subito_category(s) for s in self.cfg.searches if s.enabled and s.uses("subito")}):
             try:
                 for i in self.subito.newest_in_area(cat):
+                    i.category = cat
+                    found.setdefault(i.key, i)   # the local one: it already chose pickup or shipping
+                shipping = self.subito.newest_shipping(cat)
+                for i in shipping:
+                    i.category = cat
+                if cat not in seeded and not self.first_run:
+                    for i in shipping:
+                        if i.key not in found:
+                            self.seen.add(i.key)
+                    seeded.add(cat)
+                    continue
+                seeded.add(cat)
+                for i in shipping:
                     found.setdefault(i.key, i)
             except Exception as e:   # Subito trouble shouldn't stop the Vinted/eBay scan
                 log.error("Subito category %s failed: %s", cat, e)
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(json.dumps(sorted(seeded)), encoding="utf-8")
         self.subito_new = list(found.values())
+        self.subito_fresh = {"pickup": 0, "shipping": 0}   # new to us this run, for the SUBITO-STATS line
+        for i in self.subito_new:
+            if i.key not in self.seen:
+                self.subito_fresh[i.delivery or "pickup"] = self.subito_fresh.get(i.delivery or "pickup", 0) + 1
         self.first_subito = bool(self.subito_new) and not self.seen.has_platform("subito")
 
     DEMAND_EVERY = 30 * 60   # the /demand table goes to the Worker this often

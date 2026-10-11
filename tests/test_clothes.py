@@ -152,7 +152,8 @@ def test_config_settings_and_scanner_rules(tmp_path):
     cfg = config.load()
     clothes = [s for s in cfg.searches if s.clothes]
     assert [s.query for s in clothes][:3] == ["maison margiela", "acne studios", "stone island"]
-    assert all(s.vinted_only and s.group == "Clothes" and s.price_to is None for s in clothes)   # capped by the clothes max_price
+    assert all(s.uses("subito") and not s.uses("ebay") and s.subito_category == 16 and s.group == "Clothes" and s.price_to is None
+               for s in clothes)   # Vinted + Subito (Abbigliamento), no eBay; capped by the clothes max_price   # capped by the clothes max_price
     assert [s.slot for s in clothes[:4]] == [0, 1, 0, 1]   # half the brands each run
     apply_settings(cfg, {"added": [{"query": "moncler", "clothes": True}], "clothes_rules": {"min_profit": 35}})
     added = next(s for s in cfg.searches if s.query == "moncler")

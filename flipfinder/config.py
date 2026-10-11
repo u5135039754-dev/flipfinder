@@ -103,7 +103,8 @@ def clothes_search(c: ClothesSettings, brand: str, index: int = 0, added: bool =
                   filters={"catalog": list(c.catalog if catalog is None else catalog)} if (c.catalog if catalog is None else catalog) else {},
                   exclude_keywords=list(c.exclude_keywords),
                   shipping_cost=c.shipping_cost, resell_costs=c.resell_costs, max_roi=c.max_roi,
-                  group="Clothes", clothes=True, vinted_only=True, allow_keywords=list(c.allow_keywords),
+                  group="Clothes", clothes=True, platforms=["subito"], subito_category=16,   # Vinted + Subito (no eBay)
+                  allow_keywords=list(c.allow_keywords),
                   slot=index % 2, added=added)
 
 

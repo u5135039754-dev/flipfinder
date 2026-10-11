@@ -37,6 +37,8 @@ music_rules:
   min_profit: 20
   min_roi: 35
   max_price: 250             # music's own max price all in (Jackson searches: €300, set on them)
+  pickup_max_price: 300      # Subito pickups (collected in person) may cost up to this...
+  pickup_min_profit: 40      # ...but need this much profit: most of the pot goes into one
 
 # Designer clothes (👕 Clothes topic): one Vinted search per brand (Italy and the EU), in the adult
 # knitwear/cardigan, sweatshirt/hoodie and outerwear categories (no shoes, bags or underwear).
