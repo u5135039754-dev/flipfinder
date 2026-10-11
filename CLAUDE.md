@@ -9,7 +9,7 @@ Python 3.10+ app that finds underpriced Vinted listings and sends Telegram alert
 - `flipfinder/scanner.py` per-search scan, price pool cache in `data/pools.json`
 - designer clothes (config `clothes:`, group/topic Clothes): one Vinted-only search per brand (`config.clothes_search`, catalog = adult knitwear/sweatshirts/outerwear, slots alternate 0/1, clothes.abroad true = EU listings even with /abroad off (Italy alone gave ~0.7 deals/day), intro text is the owner's exact wording, Margiela Replica sneakers (config clothes.replica: Search.model 'replica', shoe categories 1242/2632/2990/2985, 'replica' allowed as a word only there, `replica_kind` low/high top + `colour_of` + `shoe_size` ±1, fake risk always high, AI verdict capped at 'YES, if the seller sends photos of the insole label, inner tag, sole and box', ai.REPLICA_QUESTION), fake risk floors (`analyzer.fake_risk` -> shown, why, base: abroad >= medium, label not checked >= medium; Worker finish: max of the AI's level, d.clothes.fake_base, abroad, no-label and replica floors; only the AI's own FAKE high is a NO), allow_keywords lifts the global 'felpa'); `analyzer.clothes_kind` (cardigan/hoodie/jacket/sweatshirt/knit from the title), `size_rank` (same size, else one either side), `find_clothes_comparables` (exact brand field + kind + size, fakes out), blocked: under fake_floor 0.4 of the median, seller < 5 reviews or < 4.5 stars (unknown seller = blocked in the scanner), fake_words in title (strong ones in the description too); `fake_risk` high/medium/low line on every clothes alert; rules clothes.rules + Worker settings.clothes_rules (/setrule clothes ...), /add clothes <brand> (settings.added {query, clothes: true}), /remove clothes <brand>; Worker: d.clothes {kind,size,brand,fake_risk,fake_why}, AI FAKE/LABEL/WHY line (high = NO, no label photo = 'YES, if the seller sends label photos'), ❓ questions start with ai.LABEL_QUESTION, kit: CLOTHES_MEASURES + Vinted or Vestiaire Collective
 - `flipfinder/ebay.py` eBay Browse API client (EBAY_IT, Buy It Now, app token), searched every 20 min, pools every 3 h (~3,050 of 5,000 calls/day), calls/day in `data/ebay.json`
-- `flipfinder/subito.py` Subito app JSON API (hades.subito.it, app headers; the website is Akamai-blocked): new listings per category in the home province, kept within `radius_km`, pickup travel cost vs seller shipping
+- `flipfinder/subito.py` Subito app JSON API (hades.subito.it, app headers; the website is Akamai-blocked): new listings per category in the home province, kept within `radius_km`, pickup travel cost vs seller shipping; music (category 39): whole regions from the private area.music {regions, radius_km, tiers [[km, €]]} (wide_regions/wide_radius_km/tiers), pickup cost by distance tier, alert line '📍 Pickup <town> (km)'
 - `flipfinder/sold.py` sold-price tracking: pool history, gone listings checked via item page (`can_buy:false` = sold, 404 = deleted), listing dates from id anchors, adaptive checks per run (halve on 403/429), demand (analyzer.demand, /demand table sent to the Worker every 30 min)
 - seller trust: `vinted.parse_item_page` (feedback_count/reputation/badges/last seen) + `parse_profile_page` (/member/<id>: given_item_count = sold), eBay `ebay_seller`; `analyzer.seller_check` skips 0 reviews + 0 sold at ROI >= 100%, warns otherwise; `telegram.seller_lines`
 - `flipfinder/storage.py` seen items in `data/seen.json` as `platform:id` (14 day expiry)
@@ -27,6 +27,7 @@ Python 3.10+ app that finds underpriced Vinted listings and sends Telegram alert
 
 ## Notes
 - Keep `request_delay` >= 2s. Handle 401/403 by refreshing the cookie, 429 by backing off.
+- Music (🎸, groups Guitars/Amps/Pedals/Studio): music_rules incl. max_price 250; Guitars/Amps on Vinted skip real shipping over 20% of the price (scanner.MAX_SHIP_SHARE); slow lane `slow_minutes` (scanner.MAX_SLOW_PER_RUN 8, longest-waiting first) for the extra music searches; per-search `max_price` (Jackson 300); Jackson `model: jackson` (`analyzer.jackson_kind`: model line JS1X/JS11/JS12/JS22/JS32/X Series/Pro/USA + body shape + lefty, Floyd Rose noted in check). Mercatino Musicale: NOT used, its terms forbid bots/scrapers without written permission.
 - Market value: asking prices, blended with likely-sold prices once 3+ sold comparables exist (sold.py). Music searches (Guitars/Amps/Pedals, not budget) need 5 comparables (others 8) and use config `music_rules` (min_profit 20, min_roi 35; max_price, max_roi, min_rating stay the main ones); budget pedals keep budget_rules.
 
 ## Plan decisions (agreed with the owner; keep until done)
@@ -47,3 +48,17 @@ Order: Step 6 speed (done: 3 h pools, budget/guitar searches alternate) → topi
 5. Health check: healthchecks.io (period 5 min, grace 30 min), Telegram integration to the owner; ping on success, /fail on failure, setup-step failures included.
 6. Keep runs under ~4 min; suggest trims and ask before changing.
 - `outputs/` and `Claude outputs/` stay in .gitignore, never committed.
+
+## Standing rule: an 📢 Updates post after every team-facing feature
+After every new feature the team will use (bot commands, buttons, Mini App screens, deal changes), write an explanation
+post for the 📢 Updates topic (settings.topics.updates, set with /topic updates; INTROS.updates). Each post:
+- Title: emoji + feature name (bold).
+- 1-2 sentences: what it does and why it's useful.
+- "How to use it" as short numbered steps.
+- 1-3 real screenshots from the Mini App or bot: phone size (390 px), dark mode, no private data (fake names, no
+  amounts from the real pot, no home area).
+- Who can use it: everyone / owner / managers.
+- Short, plain words, no em dashes, no filler.
+Send the draft to the owner first: POST /api/update {text, photos: [{name, type, b64}], to: "owner"}. Post it to the
+group only after the owner says OK: the same call with to: "group" (refused until the Updates topic exists).
+Never name team members in the repo; names live only in D1.

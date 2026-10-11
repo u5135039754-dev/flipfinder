@@ -37,7 +37,9 @@ class Search:
     vinted_only: bool = False            # no eBay or Subito for this search
     allow_keywords: list[str] = field(default_factory=list)   # global exclude words that don't apply here ("felpa")
     slot: int | None = None              # stagger slot (0/1) instead of the group's
-    model: str = ""                      # clothes: "replica" = Maison Margiela Replica sneakers
+    model: str = ""                      # "replica" (Margiela sneakers, clothes) or "jackson" (guitars): model-line matching
+    max_price: float | None = None       # this search's own max price all in (over its topic's)
+    slow_minutes: float = 0              # slow lane: at most this often, a few per run (scanner.MAX_SLOW_PER_RUN)
     platforms: list[str] | None = None   # from the app: ["ebay", "subito"] next to Vinted (None: every one that's on)
     must_words: list[str] = field(default_factory=list)   # from the app: a listing's title needs all of these
     size: str = ""                       # from the app (clothes): only listings in this size ("M", "42")
@@ -140,6 +142,10 @@ class SubitoSettings:
     town_travel_costs: dict = field(default_factory=dict)   # e.g. {"Town": 8}
     default_category: int = 39       # Strumenti Musicali, for searches without a category
     pool_refresh_minutes: float = 180
+    # music (big items): whole regions within a wider radius, pickup cost by distance (private, from the Worker's area.music)
+    wide_regions: list = field(default_factory=list)
+    wide_radius_km: float = 0
+    tiers: list = field(default_factory=list)
 
 
 @dataclass
@@ -222,6 +228,9 @@ def load(path: str | Path = "config.yaml") -> Config:
             missing_part_cost=float(s.get("missing_part_cost", 0)),
             every_minutes=float(s.get("every_minutes", 0)),
             group=str(s.get("group", "")),
+            model=str(s.get("model", "")),
+            max_price=_opt_float(s.get("max_price")),
+            slow_minutes=float(s.get("slow_minutes", 0)),
         ))
     cr = raw.get("clothes") or {}
     clothes = ClothesSettings(

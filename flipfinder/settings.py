@@ -152,4 +152,8 @@ def apply_area(cfg, area: dict | None):
     sb.radius_km = float(area.get("radius_km", sb.radius_km))
     sb.travel_cost = float(area.get("travel_cost", sb.travel_cost))
     sb.town_travel_costs = {str(k): float(v) for k, v in (area.get("town_travel_costs") or {}).items()}
+    music = area.get("music") or {}   # guitars and amps: picked up from further away, the cost by distance
+    sb.wide_regions = [int(r) for r in music.get("regions") or []]
+    sb.wide_radius_km = float(music.get("radius_km") or 0)
+    sb.tiers = [[float(k), float(c)] for k, c in music.get("tiers") or []]
     return cfg

@@ -1676,7 +1676,7 @@ def test_report_suggestions_reach_the_scanner_music_rules_and_values(tmp_path: P
     cfg = cm.load("config.yaml")
     cfg.seen_file = tmp_path / "seen.json"
     apply_settings(cfg, {"music_rules": {"min_profit": 15}, "value_adjust": {"electronics": 0.85, "ps5": 0.9, "x": 9}})
-    assert cfg.music_rules == {"min_profit": 15.0, "min_roi": 35}
+    assert cfg.music_rules == {"min_profit": 15.0, "min_roi": 35, "max_price": 250}
     assert cfg.value_adjust == {"electronics": 0.85, "ps5": 0.9}                 # out-of-range factors ignored
     sc = Scanner(cfg)
     by = {s.query: s for s in cfg.searches}
@@ -1769,7 +1769,7 @@ def test_music_searches_use_the_music_rules_and_budget_pedals_keep_theirs(tmp_pa
     sc = Scanner(cfg)
     by = {s.query: s for s in cfg.searches}
     amp = sc._rules(by["marshall amplificatore"])
-    assert (amp.min_profit, amp.min_roi, amp.min_comparables, amp.max_price) == (20, 35, 5, 200)
+    assert (amp.min_profit, amp.min_roi, amp.min_comparables, amp.max_price) == (20, 35, 5, 250)   # music max €250
     assert (sc._rules(by["boss"]).min_profit, sc._rules(by["yamaha chitarra"]).min_roi) == (20, 35)
     assert sc._rules(by["boss ds 1"]).min_profit == 12         # a budget pedal: budget rules
     assert (sc._rules(by["iphone 13"]).min_profit, sc._rules(by["iphone 13"]).min_roi) == (50, 40)

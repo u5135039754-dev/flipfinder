@@ -33,7 +33,8 @@ CATEGORY_FOR_VINTED_CATALOG = {
     3661: 12, 3678: 12, 3035: 12,     # phones, earphones, smartwatches -> Telefonia
     3728: 10, 3580: 10, 3602: 10,     # tablets, laptops, graphics cards -> Informatica
     3025: 44,                         # consoles -> Console e Videogiochi
-    4840: 39,                         # pedals -> Strumenti Musicali
+    4840: 39, 4826: 39, 4850: 39,     # pedals, amps, electric guitars -> Strumenti Musicali
+    4860: 39, 4861: 39, 4931: 39, 5103: 39,   # MIDI controllers, synths, audio interfaces, microphones
     5433: 10,                         # calculators -> Informatica
     3075: 40,                         # digital cameras -> Fotografia
 }
@@ -109,6 +110,11 @@ class SubitoClient:
     radius_km: float = 30
     travel_cost: float = 5.0
     town_travel_costs: dict = field(default_factory=dict)   # e.g. {"Town": 8}
+    # big items (music): whole regions around home, kept within wide_radius_km, pickup cost by distance tiers
+    wide_regions: list = field(default_factory=list)          # Subito region ids
+    wide_radius_km: float = 0
+    tiers: list = field(default_factory=list)                 # [[up to km, cost], ...] nearest first
+    wide_categories: tuple = (39,)                            # Strumenti Musicali
     request_delay: float = 2.0
     calls: int = 0
     session: requests.Session = field(default_factory=requests.Session)
@@ -130,15 +136,27 @@ class SubitoClient:
             return r.json().get("ads", [])
         raise RuntimeError("Subito kept refusing the search")
 
-    def in_area(self, item: Item) -> bool:
+    def in_area(self, item: Item, radius: float | None = None) -> bool:
         if item.lat is None or item.lon is None:
             return False
         item.distance_km = round(distance_km(item.lat, item.lon, *self.center), 1)
-        return item.distance_km <= self.radius_km
+        return item.distance_km <= (self.radius_km if radius is None else radius)
+
+    def travel(self, item: Item) -> float:
+        """Going to get it: a town's own cost, else the distance tier (nearby / a train or car trip), else the default."""
+        town = self._town_costs.get(item.location.lower())
+        if town is not None:
+            return town
+        if self.tiers and item.distance_km is not None:
+            for km, cost in sorted(self.tiers):
+                if item.distance_km <= float(km):
+                    return float(cost)
+            return float(sorted(self.tiers)[-1][1])
+        return self.travel_cost
 
     def delivery(self, item: Item) -> Item:
         """Cheaper of picking it up (travel cost) and the seller's shipping, if they ship."""
-        travel = self._town_costs.get(item.location.lower(), self.travel_cost)
+        travel = self.travel(item)
         if item.shipping is not None and item.shipping < travel:
             item.delivery = "shipping"
         else:
@@ -146,7 +164,19 @@ class SubitoClient:
         return item
 
     def newest_in_area(self, category: int, limit: int = 100) -> list[Item]:
-        """Newest listings of one category in the home province, within the radius."""
+        """
+        Newest listings of one category in the home province, within the radius. Music (big items, pickup):
+        the whole wide regions instead (one call each), within the wide radius.
+        """
+        if category in self.wide_categories and self.wide_regions and self.wide_radius_km:
+            items, seen = [], set()
+            for region in self.wide_regions:
+                for i in map(item_from_subito, self._get({"c": category, "r": region, "sort": "datedesc", "lim": limit, "start": 0})):
+                    if i and i.id not in seen and self.in_area(i, self.wide_radius_km):
+                        seen.add(i.id)
+                        items.append(i)
+            items = [i for i in items if not i.condition.lower().startswith("danneggiat")]
+            return [self.delivery(i) for i in items]
         ads = self._get({"c": category, "r": self.region, "ci": self.province,
                          "sort": "datedesc", "lim": limit, "start": 0})
         items = [i for i in map(item_from_subito, ads) if i]

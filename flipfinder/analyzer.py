@@ -85,7 +85,8 @@ class Rules:
     seller_min_reviews: int = 0     # skip sellers with fewer reviews...
     seller_min_stars: float = 0.0   # ...or a lower rating
     fake_words: tuple[str, ...] = ()   # replica, 1:1...: skipped in titles (and descriptions, see assess)
-    model: str = ""                 # clothes: "replica" = the Maison Margiela Replica sneaker search
+    model: str = ""                 # "replica" (Margiela sneakers) or "jackson": model-line comparables
+    max_ship_share: float = 0.0     # guitars/amps on Vinted: skipped when shipping is over this share of the price
     # rating knobs: profit/roi at which that part of the score maxes out
     rating_profit_cap: float = 50.0
     rating_roi_cap: float = 150.0
@@ -585,6 +586,40 @@ def _clothes_value(item: Item, pool: list[Item], rules: Rules, query: str) -> tu
     return round(median(kept), 2), comps, basis, kind
 
 
+# --- Jackson guitars ---------------------------------------------------------------
+# Same model line (JS1X ≠ JS32 ≠ X Series ≠ Pro) and same body shape (King V, Rhoads, Dinky, Soloist,
+# Warrior); left-handed ones only with left-handed ones. "JS32", "JS 32" and "js-32" are the same.
+JACKSON_JS = re.compile(r"\bjs ?(1x|11|12|20|22|30|32)[a-z]{0,3}\b")   # JS32T, JS22Q: the same line
+JACKSON_LINES = [("x series", re.compile(r"\b(x series|serie x|rrx\w*|slx\w*|dkx\w*|kvx\w*|wrx\w*|sl[23]x\w*|dk[23]x\w*)\b")),
+                 ("usa", re.compile(r"\b(usa|custom shop|american)\b")),
+                 ("pro", re.compile(r"\bpro\b"))]
+JACKSON_SHAPES = [("king v", re.compile(r"\bking ?v\b|\bkv\w*\b")), ("rhoads", re.compile(r"\brhoads?\b|\brr\w*\b")),
+                  ("dinky", re.compile(r"\bdinky\b|\bdk\w*\b")), ("soloist", re.compile(r"\bsoloist\b|\bsl\w*\b")),
+                  ("warrior", re.compile(r"\bwarrior\b|\bwr\w*\b")), ("kelly", re.compile(r"\bkelly\b"))]
+LEFTY = re.compile(r"\b(mancin[oai]|left|lefty|left handed|lh)\b")
+FLOYD = re.compile(r"\bfloyd\b|\bfloyd rose\b|\btremolo bloccante\b|\bponte mobile\b|\blocking trem")
+JACKSON_NOTE = "Floyd Rose: harder to set up, sells a bit lower"
+
+
+def jackson_kind(title: str) -> str:
+    """'js32 king v', 'x series dinky', 'other soloist lefty'... (model line, body shape, left-handed)."""
+    t = " ".join(normalize_text(title))
+    js = JACKSON_JS.search(t)
+    line = f"js{js.group(1)}" if js else next((name for name, rx in JACKSON_LINES if rx.search(t)), "other")
+    shape = next((name for name, rx in JACKSON_SHAPES if rx.search(t)), "other")
+    return f"{line} {shape}" + (" lefty" if LEFTY.search(t) else "")
+
+
+def _jackson_value(item: Item, pool: list[Item], rules: Rules) -> tuple[float | None, list[Item], str, str]:
+    kind = jackson_kind(item.title)
+    others = [p for p in pool if p.id != item.id and jackson_kind(p.title) == kind]
+    kept = remove_outliers([p.price for p in others])
+    if len(kept) < rules.min_comparables:
+        return None, [], f"Jackson {kind}: too few", kind
+    comps = [p for p in others if kept[0] <= p.price <= kept[-1]]
+    return round(median(kept), 2), comps, f"Jackson {kind}", kind
+
+
 def _comparables(item: Item, pool: list[Item], min_comparables: int,
                  query: str, match_brand: bool = True) -> tuple[float | None, list[Item], str]:
     others, basis = find_comparables(item, pool, min_comparables, query, match_brand)
@@ -819,6 +854,8 @@ def assess(item: Item, pool: list[Item], rules: Rules, query: str = "",
     kind = ""
     if rules.clothes:
         asking, comps, basis, kind = _clothes_value(item, pool, rules, query)
+    elif rules.model == "jackson":
+        asking, comps, basis, kind = _jackson_value(item, pool, rules)
     else:
         asking, comps, basis = _comparables(item, pool, rules.min_comparables, query, rules.match_brand)
     if asking is None:
@@ -844,6 +881,9 @@ def assess(item: Item, pool: list[Item], rules: Rules, query: str = "",
     blocked = blocked_reasons(profit, roi, rating, rules, cost)
     if fix and fix.difficulty == "hard" and profit < HARD_PROFIT_FACTOR * rules.min_profit:
         blocked.append(f"🔴 hard repair ({fix.part}): profit under {HARD_PROFIT_FACTOR:g}× the minimum")
+    if (rules.max_ship_share and shipping is not None and item.source == "vinted" and not pickup_only
+            and ship > rules.max_ship_share * item.price):   # a guitar or amp whose real shipping eats the margin
+        blocked.append(f"shipping €{ship:.0f} over {rules.max_ship_share:.0%} of the price")
     seller_block, seller_warn = seller_check(item.seller, roi)
     if seller_block:
         blocked.append(seller_block)
@@ -861,7 +901,9 @@ def assess(item: Item, pool: list[Item], rules: Rules, query: str = "",
                 shipping=round(ship, 2), shipping_known=pickup_only or shipping is not None,
                 packaging=rules.resell_costs, pickup_only=pickup_only, city=city, blocked=blocked,
                 by_platform=by_platform, resell_on=resell_on, sell_fee=round(sell_fee, 2),
-                cost=round(cost, 2), missing_part=missing, budget=rules.budget, check=rules.check,
+                cost=round(cost, 2), missing_part=missing, budget=rules.budget,
+                check=" · ".join(x for x in (rules.check, JACKSON_NOTE if rules.model == "jackson" and FLOYD.search(
+                    " ".join(normalize_text(text))) else "") if x),
                 asking_value=asking, sold_count=sold_n, sell_days=sell_days,
                 demand=demand(item, comps, rules, query, sell_days), seller_warnings=seller_warn, repair=fix,
                 kind=kind, fake_risk=risk, fake_why=risk_why, fake_base=risk_base)

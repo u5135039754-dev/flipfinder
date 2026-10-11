@@ -26,14 +26,19 @@ log = logging.getLogger(__name__)
 # expire together and push a run past the workflow timeout, so only this many are
 # rebuilt per run; the rest keep their older pool until their turn.
 MAX_POOL_REBUILDS = 4
-MUSIC = {"Guitars", "Amps", "Pedals"}
+MUSIC = {"Guitars", "Amps", "Pedals", "Studio"}
+BIG_MUSIC = {"Guitars", "Amps"}   # shipping costs a lot: skipped on Vinted when it's over MAX_SHIP_SHARE of the price
+MAX_SHIP_SHARE = 0.2
+# "slow lane" searches (slow_minutes): at most this many per run, the longest-waiting first, so a long list
+# of them spreads over the runs instead of all landing in one
+MAX_SLOW_PER_RUN = 8
 MUSIC_MIN_COMPARABLES = 5   # same-model listings needed to value music gear
 FAST_PER_PAGE = 24   # the fast lane only needs the listings that appeared since the last pass
 # A newly added search alerts on at most this many of the deals already listed
 # (the best ones); the rest of its current listings are just remembered.
 SEED_ALERTS = 3
 # Which 5-minute slot (even 0 / odd 1) each group runs in when `stagger` is on
-STAGGER_SLOTS = {"Budget": 0, "Guitars": 1, "Amps": 1, "Pedals": 1, "Audio": 1}
+STAGGER_SLOTS = {"Budget": 0, "Guitars": 1, "Amps": 1, "Pedals": 1, "Audio": 1, "Studio": 1}
 STAGGER_OVERDUE = 12   # minutes: a group this late takes the next run instead of the other one
 
 # Subito and eBay price pools are one call each; at most this many are rebuilt per run
@@ -142,6 +147,9 @@ class KnownSearches:
         every = getattr(s, "every_minutes", 0) or 0
         return time.time() - self.last.get(_sid(s), 0.0) >= every * 60 - 30   # slack for run jitter
 
+    def due_slow(self, s: "Search") -> bool:
+        return time.time() - self.last.get(_sid(s), 0.0) >= (s.slow_minutes or 0) * 60 - 30
+
     def add(self, s: "Search"):
         self.last[_sid(s)] = time.time()
 
@@ -196,7 +204,8 @@ class Scanner:
         sb = cfg.subito
         self.subito = SubitoClient(region=sb.region, province=sb.province, center=sb.center,
                                    radius_km=sb.radius_km, travel_cost=sb.travel_cost,
-                                   town_travel_costs=sb.town_travel_costs,
+                                   town_travel_costs=sb.town_travel_costs, wide_regions=list(sb.wide_regions),
+                                   wide_radius_km=sb.wide_radius_km, tiers=list(sb.tiers),
                                    request_delay=cfg.request_delay) if sb.enabled else None
         self.subito_new: list[Item] = []
         self.first_subito = False
@@ -346,6 +355,12 @@ class Scanner:
                 rules = replace(rules, min_profit=float(mr["min_profit"]), min_roi=float(mr["min_roi"]))
                 if mr.get("max_price"):   # the app's Music card
                     rules = replace(rules, max_price=float(mr["max_price"]))
+            if search_group(s) in BIG_MUSIC:
+                rules = replace(rules, max_ship_share=MAX_SHIP_SHARE)
+        if s.max_price is not None and not s.budget:   # one search's own max (Jackson: €300 for the X Series)
+            rules = replace(rules, max_price=float(s.max_price))
+        if s.model and not s.clothes:
+            rules = replace(rules, model=s.model)
         if s.clothes:   # designer clothes: their own minimums (/setrule clothes ...) and the fake checks
             c = self.cfg.clothes
             rules = replace(rules, min_profit=float(c.rules["min_profit"]), min_roi=float(c.rules["min_roi"]),
@@ -362,10 +377,13 @@ class Scanner:
 
     def _max_price(self, s: Search) -> float | None:
         """The most a deal from this search may cost: its topic's max price (music, clothes), else the main one."""
+        if s.max_price is not None and not s.budget:
+            return float(s.max_price)
         if s.clothes:
             return float(self.cfg.clothes.rules.get("max_price") or 200)
-        if search_group(s) in MUSIC and not s.budget and self.cfg.music_rules.get("max_price"):
-            return float(self.cfg.music_rules["max_price"])
+        music = getattr(self.cfg, "music_rules", None) or {}
+        if search_group(s) in MUSIC and not s.budget and music.get("max_price"):
+            return float(music["max_price"])
         return self.cfg.rules.max_price
 
     # --- the app's ➕ Add search preview ---------------------------------------------
@@ -613,6 +631,10 @@ class Scanner:
         self.pool_rebuilds = 0
         self.seed_candidates = []
         self._group_slot = self._pick_slot()   # which of budget / guitars runs this time
+        slow = sorted((x for x in self.cfg.searches if x.slow_minutes and x.enabled and self.known.has(x)
+                       and self.known.due_slow(x) and self._slot_of(x) in (None, self._group_slot)),
+                      key=lambda x: self.known.last.get(_sid(x), 0.0))
+        self._slow_picks = {x.query for x in slow[:MAX_SLOW_PER_RUN]}
         self.ebay_due = bool(self.ebay) and self.ebay_state.due(self.cfg.ebay.interval_minutes)
         if self.ebay_due and self.cfg.stagger and self._group_slot == STAGGER_SLOTS["Budget"]:
             # the eBay pass waits for the next guitar run: budget runs are the longer ones
@@ -631,6 +653,11 @@ class Scanner:
             if not s.enabled:
                 continue
             if self.known.has(s) and not self._turn(s):
+                continue
+            cap = self._price_to(s)
+            if s.price_from is not None and cap is not None and s.price_from >= cap:
+                # e.g. a €500+ Gibson under the music max price: nothing to find, and Vinted refuses the range
+                log.info("'%s' skipped: its prices start at €%g, over its max price €%g", s.query, s.price_from, cap)
                 continue
             try:
                 deals += self.scan_search(s)
@@ -767,7 +794,13 @@ class Scanner:
         return slot
 
     def _turn(self, s: Search) -> bool:
-        """Whether a known search runs this time: electronics every run, the two staggered groups in turn."""
+        """
+        Whether a known search runs this time: electronics every run, the two staggered groups in turn, and
+        slow-lane searches (slow_minutes) only when due, at most MAX_SLOW_PER_RUN a run.
+        """
+        if s.slow_minutes:
+            if not self.known.due_slow(s) or s.query not in getattr(self, "_slow_picks", {s.query}):
+                return False
         want = self._slot_of(s)
         if want is None:
             return self.known.due(s)

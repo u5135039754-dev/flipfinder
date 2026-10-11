@@ -4,10 +4,11 @@ import { DAY, esc, euro, num, g, rome } from "./util.js";
 
 // which topic a search category posts in (topics learned with /topic)
 export const TOPIC_FOR_GROUP = {
-  Guitars: "guitars", Amps: "guitars", Pedals: "guitars", "Added from Telegram": "guitars",
+  Guitars: "guitars", Amps: "guitars", Pedals: "guitars", Studio: "guitars", "Added from Telegram": "guitars",
   Audio: "electronics", Electronics: "electronics", Budget: "budget", Clothes: "clothes",
 };
 export const TOPIC_NAMES = { guitars: "Guitars", electronics: "Electronics", budget: "Budget", clothes: "Clothes", summary: "Summary",
+  updates: "Updates",
   crypto: "Crypto", rules: "Rules", repairs: "Repairs", rejected: "Rejected" };
 
 /**
@@ -74,6 +75,10 @@ export const INTROS = {
     "- Get photos of the inside label, care tag and codes (❓ Seller questions)",
     "- Too cheap = probably fake, not a deal",
     "- Pay only through Vinted checkout",
+  ].join("\n"),
+  updates: [
+    "📢 <b>Updates</b>",
+    "What's new in the bot and the app, and how to use it. One post per change, with screenshots.",
   ].join("\n"),
   crypto: [
     "🪙 <b>Crypto</b>",

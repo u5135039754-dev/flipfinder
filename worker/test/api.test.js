@@ -138,3 +138,23 @@ test("POST /api/owner_dm with a file: a document to the owner, the text as its c
   assert.deepEqual(doc.document, { name: "a.png", type: "image/png", text: "PNGDATA" });
   assert.equal((await t.api("POST", "/api/owner_dm", { file: { b64: "%%%" } })).body.sent, false);
 });
+
+test("POST /api/update: the draft to the owner; the group only once the 📢 Updates topic exists, text then the screenshots", async () => {
+  const t = await setup();
+  const shot = { name: "a.png", type: "image/png", b64: Buffer.from("PNG").toString("base64") };
+  let r = await t.api("POST", "/api/update", { text: "<b>📢 New</b>", photos: [shot, shot], to: "owner" });
+  assert.deepEqual(r.body, { sent: true, to: "owner" });
+  assert.equal(t.tg.sent()[0].chat_id, String(OWNER));
+  const album = t.tg.sent("sendMediaGroup")[0];
+  assert.equal(album.chat_id, String(OWNER));
+  assert.deepEqual(JSON.parse(album.media).map((m) => m.media), ["attach://p0", "attach://p1"]);
+  r = await t.api("POST", "/api/update", { text: "x", to: "group" });
+  assert.match(r.body.error, /create it and send \/topic updates/);
+  const s = await t.settings();
+  await t.store.put("settings", { ...s, topics: { ...(s.topics || {}), updates: 99 } });
+  t.tg.clear();
+  r = await t.api("POST", "/api/update", { text: "<b>📢 New</b>", photos: [shot], to: "group" });
+  assert.deepEqual(r.body, { sent: true, to: "group" });
+  assert.deepEqual([t.tg.sent()[0].chat_id, t.tg.sent()[0].message_thread_id], [GROUP, 99]);
+  assert.equal(t.tg.sent("sendMediaGroup")[0].message_thread_id, "99");
+});

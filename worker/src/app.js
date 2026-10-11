@@ -361,6 +361,33 @@ const API = {
     return { sent: sent !== null };
   },
 
+  /**
+   * A feature update (text in Telegram HTML + up to 3 screenshots {name, type, b64}): `to: "owner"` sends the draft to
+   * the owner only, `to: "group"` posts it in the 📢 Updates topic (only once the owner said OK, and the topic exists).
+   */
+  async "POST /api/update"({ tg, bot, settings }, body) {
+    const text = String(body.text || "").trim().slice(0, 4000);
+    if (!text) return { sent: false, error: "text is empty" };
+    const photos = [];
+    for (const p of (body.photos || []).slice(0, 3)) {
+      let bytes = new Uint8Array();
+      try { bytes = fromBase64(String(p.b64 || "")); } catch { /* not base64 */ }
+      if (!bytes.length || bytes.length > 10 * 1024 * 1024) return { sent: false, error: "a screenshot is empty or over 10 MB" };
+      photos.push({ name: String(p.name || "screenshot.png").slice(0, 80), type: String(p.type || "image/png"), bytes });
+    }
+    let chat;
+    let topic;
+    if (body.to === "group") {
+      if (!settings.topics?.updates) return { sent: false, error: "no 📢 Updates topic yet: create it and send /topic updates" };
+      chat = tg.groups[0];
+      topic = "updates";
+    } else chat = String(bot.ownerId);
+    if (!chat) return { sent: false, error: "no group" };
+    const msg = await tg.sendTo(chat, text, { topic, preview: false });
+    const album = photos.length ? await tg.sendPhotos(chat, photos, { topic }) : [];
+    return { sent: msg !== null && album !== null, to: body.to === "group" ? "group" : "owner" };
+  },
+
   /** One-time move of deals.json / settings.json (and the home area) into private storage. */
   async "POST /api/import"({ store }, body) {
     const have = await store.db.prepare("SELECT COUNT(*) AS c FROM deals").first();

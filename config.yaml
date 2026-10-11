@@ -36,6 +36,7 @@ budget_rules:
 music_rules:
   min_profit: 20
   min_roi: 35
+  max_price: 250             # music's own max price all in (Jackson searches: €300, set on them)
 
 # Designer clothes (👕 Clothes topic): one Vinted search per brand (Italy and the EU), in the adult
 # knitwear/cardigan, sweatshirt/hoodie and outerwear categories (no shoes, bags or underwear).
@@ -138,7 +139,7 @@ searches:
 
   # Strats
   - query: fender player stratocaster
-    price_from: 350
+    price_from: 150       # the music max price (€250) caps it: only the rare cheap ones
     price_to: 600
     shipping_cost: 22
     resell_costs: 10
@@ -168,6 +169,7 @@ searches:
     price_from: 500
     price_to: 1500
     exclude_keywords: [epiphone, tribute copy, made in china, copy]
+    max_price: 800        # its own max all in, over the music €250
     shipping_cost: 22
     resell_costs: 10
 
@@ -221,6 +223,318 @@ searches:
     exclude_keywords: [katana]   # the Katana search covers those
     shipping_cost: 6
     resell_costs: 1
+
+  # --- More music (slow lane: each about every 30 min, at most 8 a run; music rules, max €250) ---
+  - query: squier classic vibe telecaster
+    price_from: 150
+    group: Guitars
+    filters:
+      catalog: [4850]   # Chitarre elettriche
+    shipping_cost: 22
+    resell_costs: 10
+    slow_minutes: 30
+  - query: epiphone sg
+    price_from: 80
+    group: Guitars
+    filters:
+      catalog: [4850]   # Chitarre elettriche
+    shipping_cost: 22
+    resell_costs: 10
+    slow_minutes: 30
+  - query: yamaha pacifica
+    price_from: 80
+    group: Guitars
+    filters:
+      catalog: [4850]   # Chitarre elettriche
+    shipping_cost: 22
+    resell_costs: 10
+    slow_minutes: 30
+  - query: ibanez rg
+    price_from: 100
+    group: Guitars
+    filters:
+      catalog: [4850]   # Chitarre elettriche
+    shipping_cost: 22
+    resell_costs: 10
+    slow_minutes: 30
+  - query: ibanez az
+    price_from: 150
+    group: Guitars
+    filters:
+      catalog: [4850]   # Chitarre elettriche
+    shipping_cost: 22
+    resell_costs: 10
+    slow_minutes: 30
+  - query: prs se
+    price_from: 150
+    group: Guitars
+    filters:
+      catalog: [4850]   # Chitarre elettriche
+    shipping_cost: 22
+    resell_costs: 10
+    slow_minutes: 30
+  - query: fender blues junior
+    price_from: 150
+    group: Amps
+    filters:
+      catalog: [4826]   # Amplificatori e pedali
+    shipping_cost: 12
+    resell_costs: 5
+    slow_minutes: 30
+  - query: vox ac10
+    price_from: 100
+    group: Amps
+    filters:
+      catalog: [4826]   # Amplificatori e pedali
+    shipping_cost: 12
+    resell_costs: 5
+    slow_minutes: 30
+  - query: vox ac15
+    price_from: 150
+    group: Amps
+    filters:
+      catalog: [4826]   # Amplificatori e pedali
+    shipping_cost: 12
+    resell_costs: 5
+    slow_minutes: 30
+  - query: orange crush
+    price_from: 40
+    group: Amps
+    filters:
+      catalog: [4826]   # Amplificatori e pedali
+    shipping_cost: 12
+    resell_costs: 5
+    slow_minutes: 30
+  - query: positive grid spark
+    price_from: 80
+    group: Amps
+    filters:
+      catalog: [4826]   # Amplificatori e pedali
+    shipping_cost: 12
+    resell_costs: 5
+    slow_minutes: 30
+  - query: line 6 hx stomp
+    price_from: 150
+    group: Pedals
+    filters:
+      catalog: [4826]
+    shipping_cost: 7
+    resell_costs: 2
+    slow_minutes: 30
+  - query: line 6 pod go
+    price_from: 150
+    group: Pedals
+    filters:
+      catalog: [4826]
+    shipping_cost: 7
+    resell_costs: 2
+    slow_minutes: 30
+  - query: boss gt-1
+    price_from: 60
+    group: Pedals
+    filters:
+      catalog: [4826]
+    shipping_cost: 7
+    resell_costs: 2
+    slow_minutes: 30
+  - query: boss gt-100
+    price_from: 120
+    group: Pedals
+    filters:
+      catalog: [4826]
+    shipping_cost: 7
+    resell_costs: 2
+    slow_minutes: 30
+  - query: zoom g5n
+    price_from: 80
+    group: Pedals
+    filters:
+      catalog: [4826]
+    shipping_cost: 7
+    resell_costs: 2
+    slow_minutes: 30
+  - query: strymon
+    price_from: 80
+    group: Pedals
+    filters:
+      catalog: [4840]   # Pedali
+    shipping_cost: 6
+    resell_costs: 1
+    slow_minutes: 30
+  - query: electro harmonix
+    price_from: 40
+    group: Pedals
+    filters:
+      catalog: [4840]   # Pedali
+    shipping_cost: 6
+    resell_costs: 1
+    slow_minutes: 30
+  - query: walrus audio
+    price_from: 60
+    group: Pedals
+    filters:
+      catalog: [4840]   # Pedali
+    shipping_cost: 6
+    resell_costs: 1
+    slow_minutes: 30
+  - query: mxr pedale
+    price_from: 70     # over the budget 'mxr' search
+    group: Pedals
+    filters:
+      catalog: [4840]   # Pedali
+    shipping_cost: 6
+    resell_costs: 1
+    slow_minutes: 30
+  - query: focusrite scarlett
+    price_from: 50
+    group: Studio
+    filters:
+      catalog: [4931]
+    shipping_cost: 7
+    resell_costs: 2
+    slow_minutes: 30
+  - query: shure sm57
+    price_from: 40
+    group: Studio
+    filters:
+      catalog: [5103]
+    shipping_cost: 7
+    resell_costs: 2
+    slow_minutes: 30
+  - query: shure sm58
+    price_from: 40
+    group: Studio
+    filters:
+      catalog: [5103]
+    shipping_cost: 7
+    resell_costs: 2
+    slow_minutes: 30
+  - query: arturia minilab
+    price_from: 40
+    group: Studio
+    filters:
+      catalog: [4860]
+    shipping_cost: 7
+    resell_costs: 2
+    slow_minutes: 30
+  - query: arturia keystep
+    price_from: 60
+    group: Studio
+    filters:
+      catalog: [4860]
+    shipping_cost: 7
+    resell_costs: 2
+    slow_minutes: 30
+  - query: korg volca
+    price_from: 60
+    group: Studio
+    filters:
+      catalog: [4861]
+    shipping_cost: 7
+    resell_costs: 2
+    slow_minutes: 30
+
+  # --- Jackson guitars: compared within the same model line and body shape, max €300 ---
+  - query: jackson king v
+    price_from: 80
+    exclude_keywords: &jackson_out [copy, tipo jackson, stile, body only, neck only, solo corpo,
+      solo manico, per parti, ricambi, basso, bass]
+    group: Guitars
+    model: jackson        # same model line (JS1X, JS32, X Series...) and body shape; Floyd Rose noted
+    max_price: 300        # over the music €250, so the X Series can show up
+    filters:
+      catalog: [4850]
+    shipping_cost: 22
+    resell_costs: 10
+    slow_minutes: 30
+  - query: jackson js32
+    price_from: 80
+    group: Guitars
+    model: jackson        # same model line (JS1X, JS32, X Series...) and body shape; Floyd Rose noted
+    max_price: 300        # over the music €250, so the X Series can show up
+    filters:
+      catalog: [4850]
+    exclude_keywords: *jackson_out
+    shipping_cost: 22
+    resell_costs: 10
+    slow_minutes: 30
+  - query: jackson js22
+    price_from: 80
+    group: Guitars
+    model: jackson        # same model line (JS1X, JS32, X Series...) and body shape; Floyd Rose noted
+    max_price: 300        # over the music €250, so the X Series can show up
+    filters:
+      catalog: [4850]
+    exclude_keywords: *jackson_out
+    shipping_cost: 22
+    resell_costs: 10
+    slow_minutes: 30
+  - query: jackson js12
+    price_from: 80
+    group: Guitars
+    model: jackson        # same model line (JS1X, JS32, X Series...) and body shape; Floyd Rose noted
+    max_price: 300        # over the music €250, so the X Series can show up
+    filters:
+      catalog: [4850]
+    exclude_keywords: *jackson_out
+    shipping_cost: 22
+    resell_costs: 10
+    slow_minutes: 30
+  - query: jackson js11
+    price_from: 80
+    group: Guitars
+    model: jackson        # same model line (JS1X, JS32, X Series...) and body shape; Floyd Rose noted
+    max_price: 300        # over the music €250, so the X Series can show up
+    filters:
+      catalog: [4850]
+    exclude_keywords: *jackson_out
+    shipping_cost: 22
+    resell_costs: 10
+    slow_minutes: 30
+  - query: jackson js1x
+    price_from: 80
+    group: Guitars
+    model: jackson        # same model line (JS1X, JS32, X Series...) and body shape; Floyd Rose noted
+    max_price: 300        # over the music €250, so the X Series can show up
+    filters:
+      catalog: [4850]
+    exclude_keywords: *jackson_out
+    shipping_cost: 22
+    resell_costs: 10
+    slow_minutes: 30
+  - query: jackson x series
+    price_from: 80
+    group: Guitars
+    model: jackson        # same model line (JS1X, JS32, X Series...) and body shape; Floyd Rose noted
+    max_price: 300        # over the music €250, so the X Series can show up
+    filters:
+      catalog: [4850]
+    exclude_keywords: *jackson_out
+    shipping_cost: 22
+    resell_costs: 10
+    slow_minutes: 30
+  - query: jackson soloist
+    price_from: 80
+    group: Guitars
+    model: jackson        # same model line (JS1X, JS32, X Series...) and body shape; Floyd Rose noted
+    max_price: 300        # over the music €250, so the X Series can show up
+    filters:
+      catalog: [4850]
+    exclude_keywords: *jackson_out
+    shipping_cost: 22
+    resell_costs: 10
+    slow_minutes: 30
+  - query: jackson dinky
+    price_from: 80
+    group: Guitars
+    model: jackson        # same model line (JS1X, JS32, X Series...) and body shape; Floyd Rose noted
+    max_price: 300        # over the music €250, so the X Series can show up
+    filters:
+      catalog: [4850]
+    exclude_keywords: *jackson_out
+    shipping_cost: 22
+    resell_costs: 10
+    slow_minutes: 30
 
   # Soundbars
   - query: soundbar sony    # every Sony soundbar, each compared with the same model (HT-G700 with HT-G700s)

@@ -81,6 +81,26 @@ export class Telegram {
     return r.ok ? r.result : null;
   }
 
+  /** Up to 10 photos as one album (photos: [{name, type, bytes}]), into `topic` in a group; the messages, or null. */
+  async sendPhotos(chat, photos, { topic } = {}) {
+    chat = this.migrations[String(chat)] || String(chat);
+    if (this.callsLeft <= 0 || !photos.length) return null;
+    this.callsLeft--;
+    const form = new FormData();
+    form.append("chat_id", chat);
+    const thread = topic && Telegram.isGroup(chat) ? this.topics[topic] : null;
+    if (thread) form.append("message_thread_id", String(thread));
+    const media = photos.slice(0, 10).map((p, i) => ({ type: "photo", media: `attach://p${i}` }));
+    form.append("media", JSON.stringify(media));
+    photos.slice(0, 10).forEach((p, i) => form.append(`p${i}`, new Blob([p.bytes], { type: p.type || "image/png" }), p.name || `p${i}.png`));
+    try {
+      const data = await (await this.fetch(`${this.base}/sendMediaGroup`, { method: "POST", body: form })).json();
+      return data.ok ? data.result : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** A file (a CSV, a report) to one chat, into `topic` in a group; the message, or null. */
   async sendDocument(chat, filename, content, { caption, type = "text/csv", html = false, topic } = {}) {
     chat = this.migrations[String(chat)] || String(chat);
