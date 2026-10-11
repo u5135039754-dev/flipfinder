@@ -112,6 +112,10 @@ class Cloud:
             log.warning("AI check request failed: %s", e)
             return {}
 
+    def preview_result(self, pid: str, result: dict) -> dict:
+        """The app's ➕ Add search preview, checked by this run."""
+        return self._call("POST", "/api/preview", {"id": pid, "result": result}) or {}
+
     def fast_report(self, body: dict) -> dict:
         """A fast-lane pass: time, page loads, blocks (the Worker backs off and tells the owner)."""
         return self._call("POST", "/api/fast", body) or {}

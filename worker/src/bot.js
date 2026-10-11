@@ -10,6 +10,7 @@ import { Handbook } from "./handbook.js";
 import { Kits, kitButtons, kitText } from "./kit.js";
 import { Reports } from "./reports.js";
 import { Meeting, parseDay } from "./meeting.js";
+import { Searches } from "./searchedit.js";
 import { AI, PRICES } from "./ai.js";
 import { dailyStats, daysSinceStart, statsCsv, statsText } from "./stats.js";
 import { INTROS, TOPIC_FOR_GROUP, TOPIC_NAMES, dealTopic, mention, pricesFor, sellListing } from "./group.js";
@@ -105,6 +106,7 @@ export class Bot {
     this.kits = new Kits(this);
     this.reports = new Reports(this);
     this.meeting = new Meeting(this);
+    this.searches = new Searches(this);
     this.cleanup = [];   // {chat, id}: commands and replies in the Rules topic, deleted 10 s later
     this.rules = null;   // {chat, thread} while answering a message in the Rules topic
     this._deals = null;
@@ -1123,7 +1125,7 @@ Add one with /watch link, remove with /unwatch sol`);
   }
 
   /** /add clothes <brand>: a designer brand searched in the clothes categories, with the clothes rules. */
-  async addClothes(chat, args) {
+  async addClothes(chat, args, user) {
     const brand = args.join(" ").trim().replace(/^"|"$/g, "").toLowerCase();
     if (!brand) throw new UserError("Which brand? e.g. /add clothes moncler");
     if (brand.length > 40) throw new UserError("That brand name is too long");
@@ -1134,11 +1136,12 @@ Add one with /watch link, remove with /unwatch sol`);
     this.settings.removed = this.settings.removed.filter((q) => q !== brand);
     this.changed = true;
     await this.reply(chat, `✅ Added 👕 <b>${esc(brand)}</b> to Clothes (knitwear, sweatshirts, hoodies and jackets, ` +
-      "up to €200, Vinted Italy). Checked from the next run.");
+      "up to €200, Vinted Italy and EU). Checked from the next run.");
+    await this.searches.log(`➕ ${esc(this.team.nameOf(user))} added '${esc(brand)}' to Clothes with /add clothes`);
   }
 
-  async cmd_add(chat, args) {
-    if ((args[0] || "").toLowerCase() === "clothes" && args.length > 1) return this.addClothes(chat, args.slice(1));
+  async cmd_add(chat, args, user) {
+    if ((args[0] || "").toLowerCase() === "clothes" && args.length > 1) return this.addClothes(chat, args.slice(1), user);
     const [name, lo, hi] = queryAndRange(args);
     if (!name) throw new UserError("The search can't be empty");
     if ((await this.view()).searches.some((s) => s.query.toLowerCase() === name)) {
@@ -1150,6 +1153,7 @@ Add one with /watch link, remove with /unwatch sol`);
     this.changed = true;
     await this.reply(chat, `✅ Added <b>${esc(name)}</b> (€${g(lo)} – €${g(hi)}). Its current listings are ` +
       "checked on the next run, then new ones alert as usual.");
+    await this.searches.log(`➕ ${esc(this.team.nameOf(user))} added '${esc(name)}' to Music (€${g(lo)}–€${g(hi)}) with /add`);
   }
 
   async cmd_remove(chat, args) {
@@ -1967,6 +1971,14 @@ Add one with /watch link, remove with /unwatch sol`);
       const [value, date] = rest.split(":");
       return this.meeting.answer(cq, user, value === "in" ? "in" : "out", date);
     }
+    if (kind === "sgy" || kind === "sgn") {
+      const said = await this.searches.answer(user, Number(rest), kind === "sgy");
+      if (/^(✅ Added|❌ Ignored)/.test(said)) {
+        await this.tg.call("editMessageReplyMarkup", { chat_id: chat, message_id: msg.message_id,
+          reply_markup: { inline_keyboard: [[{ text: said.slice(0, 60), callback_data: "noop" }]] } });
+      }
+      return this.answer(cq, said);
+    }
     if (kind === "bn") return this.onBuyNow(cq, user, rest);
     if (kind === "bon") return this.onBuyNowOnIt(cq, user, rest);
     if (kind === "noop") return this.answer(cq, "");
@@ -2041,6 +2053,8 @@ Add one with /watch link, remove with /unwatch sol`);
         this.settings.added = this.settings.added.filter((a) => a.query !== s.query);
         this.changed = true;
         note = `Removed ${s.query}`;
+        await this.searches.log(`🗑 ${esc(this.team.nameOf(user))} removed '${esc(s.query)}' from ` +
+          `${this.searches.label(this.searches.topicOf(s))} with /remove`);
       } else note = "Kept it";
       await this.tg.call("editMessageText", { chat_id: chat, message_id: msg.message_id,
         text: (answer === "y" && s ? "🗑 " : "") + note });

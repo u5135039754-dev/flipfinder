@@ -131,6 +131,10 @@ async function handleApp(request, env, opts, url) {
       await bot.save();
       return json(state);
     }
+    if (url.pathname === "/app/api/preview") {   // ➕ Add search: queue a preview, then ask for it until it's there
+      if (request.method === "POST") return json({ id: await bot.searches.previewCreate(user.id, await request.json()) });
+      return json(await bot.searches.previewGet(user.id, url.searchParams.get("id") || ""));
+    }
     if (request.method === "POST" && url.pathname === "/app/api/action") {
       const notice = await action(bot, user, await request.json());
       await bot.save();
@@ -159,7 +163,14 @@ const API = {
       pool: await bot.pool(),
       fast: await store.get("fast_state", { last_started: 0, passes: 0 }),
       open: open.filter(([, d]) => d.item).map(([key, d]) => ({ key, query: d.query || "", item: d.item })),
+      previews: await bot.searches.pending(),   // the app's ➕ Add search previews, for this run to check
     };
+  },
+
+  /** A preview the scanner checked: listings now, how many would pass. */
+  async "POST /api/preview"({ bot }, body) {
+    const result = body.result && typeof body.result === "object" ? body.result : { error: "no result" };
+    return { ok: await bot.searches.previewDone(String(body.id || ""), result) };
   },
 
   /** The searches and rules from config.yaml, so commands can list and change them. */

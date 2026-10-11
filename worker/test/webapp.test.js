@@ -132,6 +132,8 @@ test("settings from the app: same checks as the commands", async () => {
   r = await app(t, "marco", "action", { action: "price", query: "boss katana", from: "90", to: "260" });
   assert.equal(r.body.state.settings.searches.find((s) => s.query === "boss katana").price_to, 260);
   r = await app(t, "marco", "action", { action: "toggle", query: "iphone 13" });
+  assert.equal(r.status, 400);                                                   // owner and managers only
+  r = await app(t, "owner", "action", { action: "toggle", query: "iphone 13" });
   assert.equal(r.body.notice, "iphone 13: off");
   assert.equal(r.body.state.settings.searches.find((s) => s.query === "iphone 13").enabled, false);
   r = await app(t, "marco", "action", { action: "budget", value: "60" });

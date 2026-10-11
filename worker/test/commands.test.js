@@ -52,11 +52,15 @@ test("rules, budget, add and remove", async () => {
   await t.updates(msg("/setrule min_roi 25"), msg("/setrule min_rating 11"), msg("/setrule max_roi 20"),
     msg("/setrule speed 3"), msg("/budget abc"), msg("/budget 60"), msg('/add "zoom g1x four" 20 60'),
     msg("/add boss katana 10 20"), msg("/remove boss katana"), tap(`rm:${await searchId("boss katana")}:y`));
-  const r = t.tg.texts();
+  const replies = t.tg.sent().filter((p) => String(p.chat_id) === "111");   // the Summary lines go to the group
+  const r = replies.map((p) => p.text);
   assert.ok(r[0].includes("min_roi is now 25") && r[1].includes("between 1 and 10") && r[2].includes("below max_roi"));
   assert.ok(r[3].includes("Unknown rule") && r[4].includes("must be a number") && r[5].includes("Budget is now €60"));
   assert.ok(r[6].includes("Added <b>zoom g1x four</b>") && r[7].includes("already a search"));
-  assert.ok(r[8].includes("Remove <b>boss katana</b>?") && t.tg.sent()[8].reply_markup);
+  assert.ok(r[8].includes("Remove <b>boss katana</b>?") && replies[8].reply_markup);
+  const summary = t.tg.sent().filter((p) => String(p.chat_id) === GROUP).map((p) => p.text);
+  assert.ok(summary.some((x) => /added 'zoom g1x four' to Music \(€20–€60\) with \/add/.test(x)));
+  assert.ok(summary.some((x) => /removed 'boss katana' from .* with \/remove/.test(x)));
   const view = applySettings(CATALOG, await t.settings());
   assert.deepEqual(view.searches.map((s) => s.query), ["iphone 13", "boss ds 1", "zoom g1x four"]);
   assert.equal(view.rules.min_roi, 25);

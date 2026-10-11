@@ -238,6 +238,26 @@
   .reqrow:first-of-type { border-top: 0; }
   .pick { display: flex; flex-wrap: wrap; gap: 8px; }
   .times { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  /* Settings → Searches */
+  .topic { padding: 0; overflow: hidden; }
+  .topic > *:not(.topic-head) { margin-left: 16px; margin-right: 16px; }
+  .topic.open { padding-bottom: 14px; }
+  .topic-head { width: 100%; display: flex; align-items: center; gap: 12px; padding: 14px 16px; border: 0; background: none; text-align: left; }
+  .topic-head .grow { flex: 1; min-width: 0; }
+  .topic-head .chev { width: 20px; height: 20px; color: var(--muted); transition: transform 0.2s; flex: none; }
+  .topic.open .chev { transform: rotate(90deg); }
+  .ticon { width: 38px; height: 38px; border-radius: 12px; background: var(--soft); display: grid; place-items: center; font-size: 20px; flex: none; }
+  .rules { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .rule { border: 0; background: var(--soft); border-radius: 12px; padding: 8px 10px; text-align: left; min-height: 52px; }
+  .rule:disabled { opacity: 1; }
+  .srow { gap: 10px; }
+  .sbtn { border: 0; background: none; text-align: left; padding: 0; min-height: 44px; display: flex; flex-direction: column; justify-content: center; }
+  .sbtn > div:first-child { font-weight: 600; overflow-wrap: anywhere; }
+  .wk { background: var(--profit-bg); color: var(--profit); border-radius: 999px; padding: 3px 9px; font-size: 12px; font-weight: 700; flex: none; }
+  .sform { display: grid; gap: 12px; margin-bottom: 12px; }
+  .preview { background: var(--soft); border-radius: 12px; padding: 10px 12px; font-size: 14px; display: grid; gap: 4px; }
+  .chip:disabled { opacity: 0.5; }
+  .switch input:disabled + span { opacity: 0.45; }
   nav button.on svg { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 
   /* sheets, toasts, pull to refresh */
@@ -873,6 +893,132 @@ function dutyButton(sc, onMe) {
     h("div", { class: "next" }, nextShift(sc, onMe)));
 }
 
+// --- Settings → Searches: a card per topic with its rules and searches; owner/managers edit, others suggest
+const PLATFORM_NAMES = { vinted: "Vinted", ebay: "eBay", subito: "Subito" };
+const RULE_NAMES = { min_profit: "Min profit", min_roi: "Min ROI", max_price: "Max price" };
+const topicRuleText = (name, v) => (v == null ? "–" : name === "min_roi" ? `${v}%` : euro0(v));
+const range = (x) => `${x.price_from != null ? euro0(x.price_from) : "any"} – ${x.price_to != null ? euro0(x.price_to) : "no max"}`;
+
+function searchesSection(d) {
+  const S = d.searches;
+  if (!S) return [];
+  state.openTopics ??= {};
+  const out = [h("h2", {}, "Searches"),
+    h("div", { class: "label", style: "margin:-4px 4px 10px" }, S.can_edit ? "Tap a search to change it."
+      : "Only the owner and managers change searches. Tap 💡 to suggest one.")];
+  for (const tp of S.topics) {
+    const open = Boolean(state.openTopics[tp.key]);
+    const on = tp.searches.filter((x) => x.enabled).length;
+    const week = tp.searches.reduce((n, x) => n + x.week, 0);
+    const sub = tp.key === "repairs" ? "Damaged but fixable deals from every search"
+      : `${on}/${tp.searches.length} on · ${week} deal${week === 1 ? "" : "s"} this week`;
+    const chev = svg("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "2", "stroke-linecap": "round", class: "chev" });
+    chev.innerHTML = '<path d="M9 6l6 6-6 6"/>';
+    const head = h("button", { class: "topic-head", "aria-expanded": String(open),
+      onclick: () => { tap(); state.openTopics[tp.key] = !open; render(false); } },
+    h("span", { class: "ticon" }, tp.icon), h("div", { class: "grow" }, h("b", {}, tp.name), h("div", { class: "label" }, sub)), chev);
+    const body = [];
+    if (open && tp.rules) {
+      body.push(h("div", { class: "rules" }, ["min_profit", "min_roi", "max_price"].map((name) =>
+        h("button", { class: "rule", disabled: !S.can_edit, onclick: () => sheet(`${tp.name}: ${RULE_NAMES[name].toLowerCase()}`,
+          [{ label: name === "min_roi" ? "Percent" : "Euros", value: tp.rules[name] }],
+          ([v]) => act({ action: "topic_rule", topic: tp.key, name, value: v }).then((r) => !!r)) },
+        h("div", { class: "label" }, RULE_NAMES[name]), h("b", {}, topicRuleText(name, tp.rules[name]))))),
+      h("div", { class: "label", style: "margin-top:6px;margin-bottom:4px" }, tp.rules.note));
+    }
+    if (open && tp.key === "repairs") {
+      body.push(h("div", { class: "row" }, h("div", { class: "q" }, h("div", {}, "Repair deals"),
+        h("div", { class: "label" }, "Damaged items still worth it after the part (owner)")),
+      h("label", { class: "switch" }, h("input", { type: "checkbox", checked: tp.repairs, disabled: !d.me.owner,
+        onchange: () => act({ action: "repairs" }) }), h("span"))));
+    }
+    if (open) {
+      for (const x of tp.searches) {
+        const extras = [range(x), x.platforms.length > 1 ? x.platforms.map((p) => PLATFORM_NAMES[p]).join(" + ") : "",
+          x.size ? `size ${x.size}` : "", x.must.length ? `+${x.must.join(" +")}` : ""].filter(Boolean).join(" · ");
+        body.push(h("div", { class: "row srow" },
+          h("label", { class: "switch", onclick: (e) => e.stopPropagation() }, h("input", { type: "checkbox", checked: x.enabled, disabled: !S.can_edit,
+            "aria-label": `${x.query} on or off`, onchange: () => act({ action: "toggle", query: x.query }) }), h("span")),
+          h("button", { class: "q sbtn", onclick: () => searchForm(d, tp, x) },
+            h("div", {}, x.query), h("div", { class: "label" }, extras)),
+          x.week ? h("span", { class: "wk", title: "deals this week" }, String(x.week)) : null));
+      }
+      if (!tp.searches.length && tp.key !== "repairs") body.push(h("div", { class: "label", style: "padding:8px 2px" }, "No searches yet"));
+      if (tp.can_add) {
+        body.push(h("button", { class: "btn" + (S.can_edit ? " primary" : ""), style: "width:100%;margin-top:10px",
+          onclick: () => searchForm(d, tp, null) }, S.can_edit ? "➕ Add search" : "💡 Suggest a search"));
+      }
+    }
+    out.push(h("div", { class: "card topic" + (open ? " open" : "") }, head, ...body));
+  }
+  return out;
+}
+
+/** Add or change a search (x: the search, null to add). Owner/managers save; everyone else sends a suggestion. */
+function searchForm(d, tp, x) {
+  tap();
+  const S = d.searches;
+  const editing = Boolean(x);
+  const input = (label, props) => { const el = h("input", { type: "text", ...props }); return [el, h("label", {}, h("div", { class: "label", style: "margin-bottom:6px" }, label), el)]; };
+  const [q, qBox] = input("What to search", { value: x?.query || "", placeholder: tp.key === "clothes" ? "e.g. stone island jacket" : "e.g. boss katana", maxlength: "60" });
+  const [from, fromBox] = input("Min €", { type: "number", inputmode: "decimal", value: x?.price_from ?? "", placeholder: "any" });
+  const [to, toBox] = input("Max €", { type: "number", inputmode: "decimal", value: x ? x.price_to ?? "" : tp.rules?.max_price ?? "", placeholder: "no max" });
+  const [must, mustBox] = input("Must have (optional, commas)", { value: (x?.must || []).join(", "), placeholder: "e.g. mini" });
+  const [excl, exclBox] = input("Leave out (optional, commas)", { value: (x?.exclude || []).join(", "), placeholder: "e.g. cover, case" });
+  const [size, sizeBox] = input("Size (optional)", { value: x?.size || "", placeholder: "e.g. M or 42", maxlength: "10" });
+  const plat = { ebay: (x?.platforms || []).includes("ebay"), subito: (x?.platforms || []).includes("subito") };
+  const platRow = h("div", { class: "pick" });
+  const paintPlat = () => platRow.replaceChildren(
+    h("span", { class: "chip on", "aria-disabled": "true" }, "✓ Vinted"),
+    ...["ebay", "subito"].map((p) => h("button", { class: "chip" + (plat[p] ? " on" : ""), "aria-pressed": String(plat[p]),
+      disabled: !S.platforms[p], onclick: () => { tap(); plat[p] = !plat[p]; paintPlat(); } },
+    `${plat[p] ? "✓ " : ""}${PLATFORM_NAMES[p]}${S.platforms[p] ? "" : " (off)"}`)));
+  paintPlat();
+  const spec = () => ({ query: q.value, topic: tp.key, price_from: from.value, price_to: to.value, must: must.value, exclude: excl.value,
+    size: size.value, platforms: Object.keys(plat).filter((p) => plat[p]) });
+  // the preview: the scanner loads Vinted on its next run, the form asks for the result every 15 s
+  const pv = h("div", { class: "preview", "aria-live": "polite" }, "Check how many listings this finds before you save.");
+  let poll = null;
+  const showResult = (r) => {
+    if (r.status === "expired") return pv.replaceChildren("The check didn't run in time. Try again.");
+    if (r.status !== "done") return false;
+    const res = r.result || {};
+    if (res.error) pv.replaceChildren(`⚠️ ${res.error}`);
+    else pv.replaceChildren(h("b", {}, `Found ${res.listings} listings right now, about ${res.pass} would pass the rules`),
+      h("div", { class: "label" }, "Before shipping and seller checks."),
+      ...(res.best || []).map((b) => h("div", { class: "label" }, `· ${b.title} · ${euro0(b.price)} → +${euro0(b.profit)}`)));
+    return true;
+  };
+  const check = h("button", { class: "btn grow", onclick: async () => {
+    if (!q.value.trim()) return toast("Type what to search first", true);
+    tap();
+    try {
+      const { id } = await api("preview", spec());
+      pv.replaceChildren("⏳ Checking on Vinted. The next scan picks it up, usually within 5 minutes. You can save now or wait.");
+      clearInterval(poll);
+      poll = setInterval(async () => {
+        if (!document.body.contains(pv)) return clearInterval(poll);
+        try { if (showResult(await api(`preview?id=${encodeURIComponent(id)}`)) !== false) clearInterval(poll); } catch { /* next try */ }
+      }, 15000);
+    } catch (e) { toast(e.message, true); }
+  } }, "🔍 Preview");
+  let confirmDel = false;
+  const del = editing && S.can_edit ? h("button", { class: "btn danger grow", onclick: (e) => {
+    if (!confirmDel) { confirmDel = true; e.target.textContent = "Tap again to delete"; tap("heavy"); return; }
+    close(); act({ action: "search_delete", query: x.query });
+  } }, "🗑 Delete") : null;
+  const save = h("button", { class: "btn primary grow", onclick: async () => {
+    const ok = await act(S.can_edit ? { action: "search_save", spec: spec(), old: x?.query || "" } : { action: "search_suggest", spec: spec() });
+    if (ok) { clearInterval(poll); close(); }
+  } }, S.can_edit ? (editing ? "Save" : "Add search") : "💡 Send to the owner");
+  const close = sheet(`${tp.icon} ${editing ? (S.can_edit ? "Change search" : x.query) : S.can_edit ? `Add to ${tp.name}` : `Suggest for ${tp.name}`}`, [], null,
+    h("div", { class: "sform" }, qBox, h("div", { class: "times" }, fromBox, toBox),
+      h("div", {}, h("div", { class: "label", style: "margin-bottom:8px" }, "Platforms (Vinted always: prices come from it)"), platRow),
+      mustBox, exclBox, tp.key === "clothes" ? sizeBox : null, pv,
+      h("div", { class: "actions", style: "margin:0" }, check, save), del ? h("div", { class: "actions", style: "margin:0" }, del) : null));
+  if (!editing) q.focus();
+}
+
 // --- Settings
 // --- Handbook (opened by link or from Settings, not a tab)
 const HB_TINTS = ["#3987e5", "#d95926", "#1baf7a", "#8f5bd6", "#c9922b", "#d6457a"];
@@ -930,7 +1076,7 @@ function settingsTab(d) {
     h("div", { class: "row" }, h("div", {}, h("div", { style: "font-weight:600" }, `Budget ${euro(s.budget_setting)}`),
       h("div", { class: "label" }, `In effect: ${euro(s.budget)} (never more than the pot's cash)`)),
     edit("Edit", () => sheet("Budget-mode budget", [{ label: "Budget (€)", value: s.budget_setting }], ([v]) => act({ action: "budget", value: v }).then((r) => !!r)))))];
-  const ruleText = (name, v) => name.endsWith("roi") ? `${v}%` : name === "min_profit" ? euro(v) : `${v} / 10`;
+  const ruleText = (name, v) => name.endsWith("roi") ? `${v}%` : name === "min_profit" || name === "max_price" ? euro(v) : `${v} / 10`;
   const ruleName = (name) => name.replace("_", " ").replace("roi", "ROI");
   out.push(h("h2", {}, "Deal rules"), h("div", { class: "card" }, Object.entries(s.rules).map(([name, value]) =>
     h("div", { class: "row" }, h("div", {}, h("div", { style: "font-weight:500" }, ruleName(name)), h("div", { class: "label" }, ruleText(name, value))),
@@ -940,17 +1086,7 @@ function settingsTab(d) {
       h("button", { class: d.pot.split === m ? "on" : "", onclick: () => d.pot.split !== m && act({ action: "split", value: m }) },
         m === "equal" ? "Equally" : "By contribution"))));
   }
-  const groups = {};
-  for (const x of s.searches) (groups[x.group] ??= []).push(x);
-  for (const [group, list] of Object.entries(groups)) {
-    out.push(h("h2", {}, `${group} · ${list.filter((x) => x.enabled).length}/${list.length} on`));
-    out.push(h("div", { class: "card" }, list.map((x) => h("div", { class: "row" },
-      h("label", { class: "switch" }, h("input", { type: "checkbox", checked: x.enabled, onchange: () => act({ action: "toggle", query: x.query }) }), h("span")),
-      h("div", { class: "q" }, h("div", {}, x.query), h("div", { class: "label" },
-        `${x.price_from != null ? euro0(x.price_from) : "any"} – ${x.price_to != null ? euro0(x.price_to) : "no max"}${x.budget ? " · budget" : ""}`)),
-      edit("€", () => sheet(`Price range: ${x.query}`, [{ label: "From (€)", value: x.price_from }, { label: "To (€)", value: x.price_to }],
-        ([a, b]) => act({ action: "price", query: x.query, from: a, to: b }).then((r) => !!r)))))));
-  }
+  out.push(...searchesSection(d));
   out.push(h("div", { class: "label", style: "margin:14px 4px" }, "Search and price changes apply from the next scan (every ~5 min)."));
   return out;
 }

@@ -27,7 +27,7 @@ from flipfinder.analyzer import Deal, market_value
 from flipfinder.cloud import Cloud
 from flipfinder.health import FAIL_ALERT_AFTER, RunStats, miss_record
 from flipfinder.scanner import Scanner, _key, describe_miss
-from flipfinder.settings import apply_area, apply_settings, effective_budget, search_group, set_budget
+from flipfinder.settings import apply_area, apply_settings, effective_budget, search_from_spec, search_group, set_budget
 from flipfinder.telegram import format_deal
 from flipfinder.vinted import Item
 
@@ -167,6 +167,8 @@ def main() -> int:
             cloud.analyze(sent_keys)   # nothing happens unless the owner turned on /ai auto
         if queued:
             logging.info("Quiet hours: %d deal(s) queued for 07:30", queued)
+        if cloud and not args.dry_run:
+            run_previews(cloud, cfg, scanner, (state or {}).get("previews") or [])
         if cloud and not args.dry_run and scanner.demand_due():
             cloud.put_demand(scanner.demand_table())       # for /demand in Telegram
             scanner.sold.save()
@@ -180,6 +182,22 @@ def main() -> int:
         if args.once:
             return 0 if ok else 1
         time.sleep(cfg.interval_minutes * 60)
+
+
+MAX_PREVIEWS = 2   # the app's ➕ Add search previews per run (~4 page loads each)
+
+
+def run_previews(cloud: Cloud, cfg, scanner: Scanner, previews: list[dict]):
+    """Searches someone is about to add in the app: listings now and how many would pass, sent back to the Worker."""
+    for p in previews[:MAX_PREVIEWS]:
+        try:
+            result = scanner.preview(search_from_spec(cfg, p["spec"]))
+        except Exception as e:   # a preview never fails the run
+            logging.warning("Preview failed: %s", type(e).__name__)
+            result = {"error": "Vinted didn't answer, try again in a few minutes"}
+        cloud.preview_result(p["id"], result)
+    if previews:
+        scanner.pools.save()
 
 
 def current_value(d: dict, cfg, scanner: Scanner) -> float | None:

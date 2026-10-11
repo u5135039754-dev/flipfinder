@@ -38,6 +38,37 @@ class Search:
     allow_keywords: list[str] = field(default_factory=list)   # global exclude words that don't apply here ("felpa")
     slot: int | None = None              # stagger slot (0/1) instead of the group's
     model: str = ""                      # clothes: "replica" = Maison Margiela Replica sneakers
+    platforms: list[str] | None = None   # from the app: ["ebay", "subito"] next to Vinted (None: every one that's on)
+    must_words: list[str] = field(default_factory=list)   # from the app: a listing's title needs all of these
+    size: str = ""                       # from the app (clothes): only listings in this size ("M", "42")
+
+    def uses(self, platform: str) -> bool:
+        """Vinted always (market values come from it); eBay and Subito unless turned off for this search."""
+        if platform == "vinted":
+            return True
+        if self.vinted_only:
+            return False
+        return self.platforms is None or platform in self.platforms
+
+    def has_words(self, item) -> bool:
+        """The must-have words, in the title or the brand."""
+        from .analyzer import normalize
+        have = set(normalize(item.title)) | set(normalize(item.brand))
+        return all(set(normalize(w)) <= have for w in self.must_words)
+
+    def wants(self, item) -> bool:
+        """The must-have words and the size, when the search has them."""
+        from .analyzer import shoe_size, size_rank
+        if self.must_words and not self.has_words(item):
+            return False
+        if self.size:
+            mine, want = shoe_size(self.size), size_rank(self.size)
+            if mine is not None:
+                return shoe_size(item.size or "") == mine
+            if want is not None:
+                return size_rank(item.size or "") == want
+            return self.size.lower() in (item.size or "").lower()
+        return True
 
 
 @dataclass
@@ -47,7 +78,7 @@ class ClothesSettings:
     catalog: list[int] = field(default_factory=list)
     price_from: float | None = 20
     price_to: float | None = 200
-    rules: dict = field(default_factory=lambda: {"min_profit": 30, "min_roi": 40, "min_rating": 5})
+    rules: dict = field(default_factory=lambda: {"min_profit": 30, "min_roi": 40, "min_rating": 5, "max_price": 200})
     min_comparables: int = 6
     max_roi: float = 150
     fake_floor: float = 0.4              # under 40% of the brand+type median: usually a fake
@@ -65,7 +96,8 @@ class ClothesSettings:
 def clothes_search(c: ClothesSettings, brand: str, index: int = 0, added: bool = False, model: str = "",
                    catalog: list | None = None) -> Search:
     """One brand's search; brands alternate between the two stagger slots so each run has half of them."""
-    return Search(query=brand.lower().strip(), price_from=c.price_from, price_to=c.price_to, model=model,
+    # no price_to of its own: the clothes max price (/setrule clothes max_price, the app) caps it in the scanner
+    return Search(query=brand.lower().strip(), price_from=c.price_from, price_to=None, model=model,
                   filters={"catalog": list(c.catalog if catalog is None else catalog)} if (c.catalog if catalog is None else catalog) else {},
                   exclude_keywords=list(c.exclude_keywords),
                   shipping_cost=c.shipping_cost, resell_costs=c.resell_costs, max_roi=c.max_roi,
@@ -197,7 +229,8 @@ def load(path: str | Path = "config.yaml") -> Config:
         catalog=[int(x) for x in cr.get("catalog", [])],
         price_from=_opt_float(cr.get("price_from", 20)),
         price_to=_opt_float(cr.get("price_to", 200)),
-        rules={"min_profit": 30, "min_roi": 40, "min_rating": 5, **(cr.get("rules") or {})},
+        rules={"min_profit": 30, "min_roi": 40, "min_rating": 5, "max_price": float(cr.get("price_to") or 200),
+               **(cr.get("rules") or {})},
         min_comparables=int(cr.get("min_comparables", 6)),
         max_roi=float(cr.get("max_roi", 150)),
         fake_floor=float(cr.get("fake_floor", 0.4)),

@@ -51,6 +51,36 @@ def set_budget(cfg, amount: float):
             s.price_to, s.price_to_is_budget = cfg.budget, s.price_to_is_budget or s.price_to is None
 
 
+PLATFORMS = ("vinted", "ebay", "subito")
+
+
+def search_extras(s, a: dict):
+    """The app's extras for a search: platforms next to Vinted, must-have words, words to exclude, size."""
+    if isinstance(a.get("platforms"), list):
+        s.platforms = [p for p in a["platforms"] if p in PLATFORMS]
+        s.vinted_only = s.vinted_only and not ({"ebay", "subito"} & set(s.platforms))
+    s.must_words = [str(w) for w in a.get("must") or [] if str(w).strip()][:10]
+    s.exclude_keywords = list(dict.fromkeys(s.exclude_keywords + [str(w) for w in a.get("exclude") or [] if str(w).strip()][:20]))
+    s.size = str(a.get("size") or "")[:10]
+
+
+def search_from_spec(cfg, spec: dict):
+    """A search from the app's form (for a preview), built like a saved one: its topic's group, rules and extras."""
+    from .config import Search, clothes_search
+    group = str(spec.get("group") or "")
+    if group == "Clothes":
+        s = clothes_search(cfg.clothes, spec["query"], 0, added=True)
+        if spec.get("price_from") is not None or spec.get("price_to") is not None:
+            s.price_from, s.price_to = spec.get("price_from"), spec.get("price_to")
+    else:
+        s = Search(spec["query"], spec.get("price_from"), spec.get("price_to"), added=True,
+                   group="" if group in ("", "Added from Telegram") else group, budget=group == "Budget")
+        if s.budget and (s.price_to is None or s.price_to > cfg.budget):
+            s.price_to = cfg.budget
+    search_extras(s, spec)
+    return s
+
+
 def apply_settings(cfg, settings: dict):
     """Telegram settings over config.yaml: removed/added searches, on/off, prices, budget, rules."""
     from .config import Search, clothes_search
@@ -61,11 +91,22 @@ def apply_settings(cfg, settings: dict):
     for a in settings.get("added", []):
         if a["query"].lower() in existing:
             continue
-        if a.get("clothes"):   # /add clothes <brand>: the clothes categories, rules and checks
-            cfg.searches.append(clothes_search(cfg.clothes, a["query"], n_clothes, added=True))
+        group = str(a.get("group") or "")
+        if a.get("clothes") or group == "Clothes":   # /add clothes <brand>, or the app's Clothes card
+            s = clothes_search(cfg.clothes, a["query"], n_clothes, added=True)
             n_clothes += 1
-        else:
-            cfg.searches.append(Search(a["query"], a.get("price_from"), a.get("price_to"), added=True))
+            if a.get("price_from") is not None or a.get("price_to") is not None:
+                s.price_from, s.price_to = a.get("price_from"), a.get("price_to")
+        else:   # /add (Added from Telegram) or the app (its topic's group: Guitars, Electronics, Budget...)
+            s = Search(a["query"], a.get("price_from"), a.get("price_to"), added=True,
+                       group="" if group in ("", "Added from Telegram") else group, budget=group == "Budget")
+        cfg.searches.append(s)
+        existing.add(s.query.lower())
+        search_extras(s, a)
+    overrides = {k.lower(): v for k, v in (settings.get("overrides") or {}).items()}
+    for s in cfg.searches:   # the app's changes to config.yaml searches (platforms, words, size)
+        if s.query.lower() in overrides:
+            search_extras(s, overrides[s.query.lower()])
     disabled = {q.lower() for q in settings.get("disabled", [])}
     prices = {k.lower(): v for k, v in settings.get("prices", {}).items()}
     for s in cfg.searches:
@@ -83,12 +124,15 @@ def apply_settings(cfg, settings: dict):
     cfg.rules.abroad = settings.get("abroad") is True                  # /abroad on|off (Italy only unless turned on)
     # applied from a report's suggestions (✅ Apply): music minimums, and values per category or search
     cfg.music_rules = {**cfg.music_rules, **{k: float(v) for k, v in (settings.get("music_rules") or {}).items()
-                                             if k in ("min_profit", "min_roi")}}
+                                             if k in ("min_profit", "min_roi", "max_price")}}
+    if getattr(cfg, "budget_rules", None) is not None:
+        cfg.budget_rules = {**cfg.budget_rules, **{k: float(v) for k, v in (settings.get("budget_rules") or {}).items()
+                                                   if k in ("min_profit", "min_roi")}}
     # /setrule clothes <name> <value>
     if getattr(cfg, "clothes", None) is not None:
         cfg.clothes.rules = {**cfg.clothes.rules, **{k: (int(v) if k == "min_rating" else float(v))
                                                      for k, v in (settings.get("clothes_rules") or {}).items()
-                                                     if k in ("min_profit", "min_roi", "min_rating")}}
+                                                     if k in ("min_profit", "min_roi", "min_rating", "max_price")}}
     cfg.value_adjust = {str(k).lower(): float(v) for k, v in (settings.get("value_adjust") or {}).items() if 0.5 <= float(v) <= 1.5}
     return cfg
 

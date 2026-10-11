@@ -301,10 +301,8 @@ class Scanner:
     def _other_pools(self, s: Search) -> list[Item]:
         """eBay and Subito pools; trouble with either shouldn't stop the scan."""
         out: list[Item] = []
-        if s.vinted_only:
-            return out
-        for name, get in (("eBay", self._ebay_pool if self.ebay else None),
-                          ("Subito", self._subito_pool if self.subito else None)):
+        for name, get in (("eBay", self._ebay_pool if self.ebay and s.uses("ebay") else None),
+                          ("Subito", self._subito_pool if self.subito and s.uses("subito") else None)):
             if get:
                 try:
                     out += get(s)
@@ -346,6 +344,8 @@ class Scanner:
             if not s.budget:   # music gear's own minimums (config music_rules); budget pedals keep budget_rules
                 mr = self.cfg.music_rules
                 rules = replace(rules, min_profit=float(mr["min_profit"]), min_roi=float(mr["min_roi"]))
+                if mr.get("max_price"):   # the app's Music card
+                    rules = replace(rules, max_price=float(mr["max_price"]))
         if s.clothes:   # designer clothes: their own minimums (/setrule clothes ...) and the fake checks
             c = self.cfg.clothes
             rules = replace(rules, min_profit=float(c.rules["min_profit"]), min_roi=float(c.rules["min_roi"]),
@@ -354,18 +354,48 @@ class Scanner:
                             seller_min_stars=c.seller_min_stars, repairs=False, model=s.model,
                             # "replica" is the model's name in the Margiela Replica search, a fake word everywhere else
                             fake_words=tuple(w for w in c.fake_words if not (s.model == "replica" and w.lower() == "replica")),
-                            abroad=rules.abroad or c.abroad)
+                            abroad=rules.abroad or c.abroad, max_price=float(c.rules.get("max_price") or 200))
         now = time.time()
         tracked, scale = self.sold.coverage(_key(s), now)
         return replace(rules, match_brand=s.match_brand, check=s.check, missing_part_cost=s.missing_part_cost,
                        sold=self.sold.sold_for(_key(s), now), tracked_days=tracked, sold_scale=scale, now=now)
+
+    def _max_price(self, s: Search) -> float | None:
+        """The most a deal from this search may cost: its topic's max price (music, clothes), else the main one."""
+        if s.clothes:
+            return float(self.cfg.clothes.rules.get("max_price") or 200)
+        if search_group(s) in MUSIC and not s.budget and self.cfg.music_rules.get("max_price"):
+            return float(self.cfg.music_rules["max_price"])
+        return self.cfg.rules.max_price
+
+    # --- the app's ➕ Add search preview ---------------------------------------------
+    def preview(self, s: Search) -> dict:
+        """
+        For a search not saved yet: how many listings Vinted has now (newest page) and how many would pass
+        the topic's rules, before shipping and seller checks (no item pages opened). Builds its price pool.
+        """
+        newest = [i for i in self.client.search(s.query, order="newest_first", price_from=s.price_from,
+                                                price_to=self._price_to(s), extra=s.filters) if s.wants(i)]
+        pool = self._vinted_pool(s, force=True) + newest
+        if s.must_words:
+            pool = [p for p in pool if s.has_words(p)]
+        rules = self._rules(s)
+        valued, passing = 0, []
+        for item in newest:
+            d = assess(item, pool, rules, s.query, shipping=0.0)
+            valued += d is not None
+            if d and not d.blocked:
+                passing.append(d)
+        passing.sort(key=lambda d: d.profit, reverse=True)
+        return {"listings": len(newest), "valued": valued, "pass": len(passing), "pool": len(pool),
+                "best": [{"title": d.item.title[:60], "price": d.item.total_price, "profit": d.profit} for d in passing[:3]]}
 
     def _price_to(self, s: Search) -> float | None:
         """
         The search's max price, never above the main deals' max price: no point loading what we
         wouldn't buy. Only at search time: the saved pools and sold history keep their keys.
         """
-        cap = self.cfg.rules.max_price
+        cap = self._max_price(s)
         if s.budget or cap is None:
             return s.price_to
         return cap if s.price_to is None else min(s.price_to, cap)
@@ -376,7 +406,7 @@ class Scanner:
                                     extra=s.filters)
         self.sold.anchor(newest, time.time())   # newest ids = listed just now: dates for days-to-sell
         ebay_newest: list[Item] = []
-        if self.ebay and self.ebay_due and not s.vinted_only:
+        if self.ebay and self.ebay_due and s.uses("ebay"):
             try:
                 ebay_newest = self.ebay.search(s.query, price_from=s.price_from, price_to=self._price_to(s),
                                                limit=self.cfg.ebay.new_per_search,
@@ -385,8 +415,12 @@ class Scanner:
                 log.error("eBay search '%s' failed: %s", s.query, e)
             else:
                 ebay_newest = self._seed_ebay(s, ebay_newest)
-        local = self._subito_for(s) if self.subito and not s.vinted_only else []
+        local = self._subito_for(s) if self.subito and s.uses("subito") else []
         fresh = [i for i in newest + ebay_newest + local if i.key not in self.seen]
+        for i in fresh:
+            if not s.wants(i):   # the app's must-have words or size: seen, never checked
+                self.seen.add(i.key)
+        fresh = [i for i in fresh if s.wants(i)]
         log.info("'%s': %d Vinted + %d eBay + %d Subito listings, %d new",
                  s.query, len(newest), len(ebay_newest), len(local), len(fresh))
         if not self.first_run and not self.known.has(s):
@@ -402,6 +436,8 @@ class Scanner:
             log.info("'%s': price pool waits for the next run", s.query)
             return []
         pool = _merge(pool, self._other_pools(s), newest, ebay_newest, local)
+        if s.must_words:   # compared only with listings that have the same must-have words
+            pool = [p for p in pool if s.has_words(p)]
         return [tag(d, s) for d in self._evaluate(s, fresh, pool, self._rules(s))]
 
     def _evaluate(self, s: Search, fresh: list[Item], pool: list[Item], rules: Rules) -> list[Deal]:
@@ -470,11 +506,12 @@ class Scanner:
                 self.failed_searches += 1
                 log.error("Fast lane: search '%s' failed: %s", s.query, e)
                 continue
-            fresh = [i for i in newest if i.key not in self.seen]
+            fresh = [i for i in newest if i.key not in self.seen and s.wants(i)]
             log.info("Fast lane '%s': %d newest, %d new", s.query, len(newest), len(fresh))
             if not fresh:
                 continue
-            keys = ([f"ebay {self._ebay_category(s)} " + _key(s)] if self.ebay else []) + ["subito " + _key(s)]
+            keys = (([f"ebay {self._ebay_category(s)} " + _key(s)] if self.ebay and s.uses("ebay") else [])
+                    + (["subito " + _key(s)] if s.uses("subito") else []))
             cached = [p for p in (self.pools.get(k, any_age=True) for k in keys) if p]
             pool = _merge(pool, [i for p in cached for i in p], newest)
             deals += [tag(d, s) for d in self._evaluate(s, fresh, pool, self._rules(s))]

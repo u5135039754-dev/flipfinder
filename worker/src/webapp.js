@@ -88,6 +88,7 @@ export async function snapshot(bot, user) {
         price_from: s.price_from ?? null, price_to: s.price_to ?? null })),
       rules: view.rules, budget_rules: view.budget_rules, budget_setting: view.budget_setting, budget: view.budget,
     },
+    searches: await bot.searches.forApp(user.id),
   };
 }
 
@@ -172,17 +173,24 @@ export async function action(bot, user, body) {
       await bot.cmd_sell(chat, [String(d.n), body.lang || "it"], uid);
       break;
     }
-    case "toggle": {
-      const s = (await bot.view()).searches.find((x) => x.query === body.query);
-      if (!s) throw new UserError("That search is gone");
-      const dis = new Set(bot.settings.disabled);
-      if (s.enabled) dis.add(s.query);
-      else dis.delete(s.query);
-      bot.settings.disabled = [...dis].sort();
-      bot.changed = true;
-      bot.capture.push(`${s.query}: ${s.enabled ? "off" : "on"}`);
+    case "toggle":   // owner and managers; a line in Summary
+      bot.capture.push(await bot.searches.toggle(uid, String(body.query || "")));
       break;
-    }
+    case "search_save":
+      bot.capture.push(await bot.searches.save(uid, body.spec || {}, String(body.old || "")));
+      break;
+    case "search_delete":
+      bot.capture.push(await bot.searches.remove(uid, String(body.query || "")));
+      break;
+    case "search_suggest":
+      bot.capture.push(await bot.searches.suggest(uid, body.spec || {}));
+      break;
+    case "topic_rule":
+      bot.capture.push(await bot.searches.setRule(uid, String(body.topic || ""), String(body.name || ""), body.value));
+      break;
+    case "repairs":   // the 🔧 Repairs card's switch, like /repairs on|off (owner only)
+      await bot.cmd_repairs(chat, [bot.settings.repairs === false ? "on" : "off"], uid);
+      break;
     case "price":
       await bot.cmd_setprice(chat, [String(body.query || ""), String(body.from ?? ""), String(body.to ?? "")], uid);
       break;
