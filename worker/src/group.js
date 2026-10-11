@@ -5,9 +5,9 @@ import { DAY, esc, euro, num, g, rome } from "./util.js";
 // which topic a search category posts in (topics learned with /topic)
 export const TOPIC_FOR_GROUP = {
   Guitars: "guitars", Amps: "guitars", Pedals: "guitars", "Added from Telegram": "guitars",
-  Audio: "electronics", Electronics: "electronics", Budget: "budget",
+  Audio: "electronics", Electronics: "electronics", Budget: "budget", Clothes: "clothes",
 };
-export const TOPIC_NAMES = { guitars: "Guitars", electronics: "Electronics", budget: "Budget", summary: "Summary",
+export const TOPIC_NAMES = { guitars: "Guitars", electronics: "Electronics", budget: "Budget", clothes: "Clothes", summary: "Summary",
   crypto: "Crypto", rules: "Rules", repairs: "Repairs", rejected: "Rejected" };
 
 /**
@@ -56,6 +56,25 @@ export const INTROS = {
     "🟢 easy · 🟡 medium · 🔴 hard (only when the profit is big). iPhones with a new screen/battery/camera sell ~15% lower (\"unknown part\").",
     "/repairs off stops them, /repairs on brings them back.",
   ].join("\n"),
+  clothes: [   // the owner's exact text
+    "<b>👕 CLOTHES</b>",
+    "Designer pieces under €200, Italy + EU.",
+    "",
+    "<b>🏷 Brands</b>",
+    "Maison Margiela · Acne Studios · Stone Island · C.P. Company · Carhartt WIP · Arc'teryx · Ralph Lauren · Stüssy",
+    "",
+    "<b>👔 What</b>",
+    "Knitwear, cardigans, hoodies, sweatshirts, jackets",
+    "",
+    "<b>🌍 From abroad</b>",
+    "Shipping is included in the price, arrival time is shown on the deal",
+    "",
+    "<b>⚠️ Before you buy</b>",
+    "- Check the fake risk on every deal",
+    "- Get photos of the inside label, care tag and codes (❓ Seller questions)",
+    "- Too cheap = probably fake, not a deal",
+    "- Pay only through Vinted checkout",
+  ].join("\n"),
   crypto: [
     "🪙 <b>Crypto</b>",
     "Read-only crypto news: a digest at 18:00 (headlines, watchlist prices and volume, trending coins) and an alert when a watched coin moves ±10% or trades 3× its usual volume.",
@@ -64,7 +83,7 @@ export const INTROS = {
   ].join("\n"),
   general: [
     "💸 <b>Welcome to FLIP MAFIA</b>",
-    "This chat is just for talking. Deals go to their topics: Guitars, Electronics, Budget and Summary.",
+    "This chat is just for talking. Deals go to their topics: Guitars, Electronics, Budget, Clothes and Summary.",
     "/help lists everything the bot can do.",
   ].join("\n"),
 };

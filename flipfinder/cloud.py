@@ -35,6 +35,8 @@ def deal_record(deal: Deal) -> dict:
         "seller": " · ".join(x.replace("👤 ", "") for x in seller_lines(deal)),
         "repair": ({"part": deal.repair.part, "parts": deal.repair.parts, "cost": deal.repair.cost,
                     "difficulty": deal.repair.difficulty, "iphone_part": deal.repair.iphone_part} if deal.repair else None),
+        **({"clothes": {"kind": deal.kind, "size": it.size, "brand": it.brand, "fake_risk": deal.fake_risk,
+                        "fake_why": deal.fake_why}} if deal.fake_risk else {}),
         # what the market value was worked out from, for the AI check
         "comparables": [{"title": c.title[:80], "price": c.price, "condition": c.condition, "source": c.source}
                         for c in (deal.sample or [])[:8]],
@@ -47,11 +49,13 @@ def catalog(cfg) -> dict:
     """Searches and rules from config.yaml (before Telegram changes), for /categories, /prices, /rules."""
     return {
         "searches": [{"query": s.query, "price_from": s.price_from, "price_to": s.price_to, "budget": s.budget,
-                      "group": search_group(s), "price_to_is_budget": s.price_to_is_budget} for s in cfg.searches],
+                      "group": search_group(s), "price_to_is_budget": s.price_to_is_budget,
+                      **({"clothes": True} if s.clothes else {})} for s in cfg.searches],
         "rules": {"min_profit": cfg.rules.min_profit, "min_roi": cfg.rules.min_roi,
                   "min_rating": cfg.rules.min_rating, "max_roi": cfg.rules.max_roi,
                   **({"max_price": cfg.rules.max_price} if cfg.rules.max_price is not None else {})},
-        "budget_rules": cfg.budget_rules, "music_rules": cfg.music_rules, "budget": cfg.budget_setting,
+        "budget_rules": cfg.budget_rules, "music_rules": cfg.music_rules, "clothes_rules": cfg.clothes.rules,
+        "budget": cfg.budget_setting,
         "ebay": cfg.ebay.enabled, "subito": cfg.subito.enabled,
     }
 

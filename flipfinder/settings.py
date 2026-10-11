@@ -53,12 +53,18 @@ def set_budget(cfg, amount: float):
 
 def apply_settings(cfg, settings: dict):
     """Telegram settings over config.yaml: removed/added searches, on/off, prices, budget, rules."""
-    from .config import Search
+    from .config import Search, clothes_search
     removed = {q.lower() for q in settings.get("removed", [])}
     cfg.searches = [s for s in cfg.searches if s.query.lower() not in removed]
     existing = {s.query.lower() for s in cfg.searches}
+    n_clothes = sum(1 for s in cfg.searches if getattr(s, "clothes", False))
     for a in settings.get("added", []):
-        if a["query"].lower() not in existing:
+        if a["query"].lower() in existing:
+            continue
+        if a.get("clothes"):   # /add clothes <brand>: the clothes categories, rules and checks
+            cfg.searches.append(clothes_search(cfg.clothes, a["query"], n_clothes, added=True))
+            n_clothes += 1
+        else:
             cfg.searches.append(Search(a["query"], a.get("price_from"), a.get("price_to"), added=True))
     disabled = {q.lower() for q in settings.get("disabled", [])}
     prices = {k.lower(): v for k, v in settings.get("prices", {}).items()}
@@ -78,6 +84,11 @@ def apply_settings(cfg, settings: dict):
     # applied from a report's suggestions (✅ Apply): music minimums, and values per category or search
     cfg.music_rules = {**cfg.music_rules, **{k: float(v) for k, v in (settings.get("music_rules") or {}).items()
                                              if k in ("min_profit", "min_roi")}}
+    # /setrule clothes <name> <value>
+    if getattr(cfg, "clothes", None) is not None:
+        cfg.clothes.rules = {**cfg.clothes.rules, **{k: (int(v) if k == "min_rating" else float(v))
+                                                     for k, v in (settings.get("clothes_rules") or {}).items()
+                                                     if k in ("min_profit", "min_roi", "min_rating")}}
     cfg.value_adjust = {str(k).lower(): float(v) for k, v in (settings.get("value_adjust") or {}).items() if 0.5 <= float(v) <= 1.5}
     return cfg
 

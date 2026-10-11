@@ -9,7 +9,7 @@ from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .analyzer import (NEW_SELLER, Deal, Rules, assess, blend_sold, demand, is_near_miss, is_pickup_only, is_relevant,
+from .analyzer import (FAKE_SELLER, NEW_SELLER, Deal, Rules, assess, blend_sold, demand, is_near_miss, is_pickup_only, is_relevant,
                        model_numbers, model_tokens)
 from .config import Config, Search
 from .ebay import CATEGORY_FOR_VINTED_CATALOG as EBAY_CATEGORY_FOR_VINTED_CATALOG
@@ -301,6 +301,8 @@ class Scanner:
     def _other_pools(self, s: Search) -> list[Item]:
         """eBay and Subito pools; trouble with either shouldn't stop the scan."""
         out: list[Item] = []
+        if s.vinted_only:
+            return out
         for name, get in (("eBay", self._ebay_pool if self.ebay else None),
                           ("Subito", self._subito_pool if self.subito else None)):
             if get:
@@ -320,8 +322,10 @@ class Scanner:
     # --- scanning ----------------------------------------------------------------
 
     def _rules(self, s: Search) -> Rules:
+        allow = {k.lower() for k in s.allow_keywords}
         rules = replace(self.cfg.rules,
-                        exclude_keywords=self.cfg.rules.exclude_keywords + tuple(s.exclude_keywords))
+                        exclude_keywords=tuple(k for k in self.cfg.rules.exclude_keywords if k.lower() not in allow)
+                        + tuple(s.exclude_keywords))
         if s.shipping_cost is not None:
             rules = replace(rules, shipping_cost=s.shipping_cost)
         if s.resell_costs is not None:
@@ -342,6 +346,13 @@ class Scanner:
             if not s.budget:   # music gear's own minimums (config music_rules); budget pedals keep budget_rules
                 mr = self.cfg.music_rules
                 rules = replace(rules, min_profit=float(mr["min_profit"]), min_roi=float(mr["min_roi"]))
+        if s.clothes:   # designer clothes: their own minimums (/setrule clothes ...) and the fake checks
+            c = self.cfg.clothes
+            rules = replace(rules, min_profit=float(c.rules["min_profit"]), min_roi=float(c.rules["min_roi"]),
+                            min_rating=int(c.rules["min_rating"]), min_comparables=c.min_comparables, clothes=True,
+                            fake_floor=c.fake_floor, seller_min_reviews=c.seller_min_reviews,
+                            seller_min_stars=c.seller_min_stars, fake_words=tuple(c.fake_words), repairs=False,
+                            abroad=rules.abroad or c.abroad)
         now = time.time()
         tracked, scale = self.sold.coverage(_key(s), now)
         return replace(rules, match_brand=s.match_brand, check=s.check, missing_part_cost=s.missing_part_cost,
@@ -363,7 +374,7 @@ class Scanner:
                                     extra=s.filters)
         self.sold.anchor(newest, time.time())   # newest ids = listed just now: dates for days-to-sell
         ebay_newest: list[Item] = []
-        if self.ebay and self.ebay_due:
+        if self.ebay and self.ebay_due and not s.vinted_only:
             try:
                 ebay_newest = self.ebay.search(s.query, price_from=s.price_from, price_to=self._price_to(s),
                                                limit=self.cfg.ebay.new_per_search,
@@ -372,7 +383,7 @@ class Scanner:
                 log.error("eBay search '%s' failed: %s", s.query, e)
             else:
                 ebay_newest = self._seed_ebay(s, ebay_newest)
-        local = self._subito_for(s) if self.subito else []
+        local = self._subito_for(s) if self.subito and not s.vinted_only else []
         fresh = [i for i in newest + ebay_newest + local if i.key not in self.seen]
         log.info("'%s': %d Vinted + %d eBay + %d Subito listings, %d new",
                  s.query, len(newest), len(ebay_newest), len(local), len(fresh))
@@ -418,6 +429,8 @@ class Scanner:
                     continue
                 deal = (self._with_details(item, pool, rules, s.query) if not free.blocked
                         else assess(item, pool, rules, s.query))   # estimated shipping
+            if deal and not deal.blocked and s.clothes and item.source == "vinted" and not item.seller:
+                deal.blocked.append(f"{FAKE_SELLER} {rules.seller_min_reviews} reviews (couldn't check the seller)")
             if deal and not deal.blocked:
                 deals.append(deal)
             elif is_near_miss(deal):
@@ -691,7 +704,9 @@ class Scanner:
 
     def _slot_of(self, s: Search):
         from .settings import search_group
-        return STAGGER_SLOTS.get("Budget" if s.budget else search_group(s)) if self.cfg.stagger else None
+        if not self.cfg.stagger:
+            return None
+        return s.slot if s.slot is not None else STAGGER_SLOTS.get("Budget" if s.budget else search_group(s))
 
     def _pick_slot(self) -> int:
         """

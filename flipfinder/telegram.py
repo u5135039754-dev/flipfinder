@@ -24,7 +24,7 @@ def stars(rating: int) -> str:
 def format_deal(deal: Deal) -> str:
     it = deal.item
     c = it.currency
-    extras = " · ".join(x for x in (it.brand, it.size, it.condition) if x)
+    extras = " · ".join(x for x in (it.brand, deal.kind, it.size, it.condition) if x)
     lines = [
         f"{'🔧' if deal.repair else '🔥'} <b>{html.escape(it.title[:120])}</b>",   # photo captions max out at 1024 chars
     ]
@@ -70,10 +70,21 @@ def format_deal(deal: Deal) -> str:
         *([f"🎯 Budget: {money(deal.cost, c)} total · {money(deal.per_euro, c)} profit per € spent"]
           if deal.budget else []),
         *([f"🔍 Before buying: {html.escape(deal.check)}"] if deal.check else []),
+        *([fake_line(deal)] if deal.fake_risk else []),
         "",
         f'<a href="{html.escape(it.url)}">Open on {platform}</a>',
     ]
     return "\n".join(lines)
+
+
+FAKE_ICONS = {"high": "🔴", "medium": "🟡", "low": "🟢"}
+
+
+def fake_line(deal: Deal) -> str:
+    """'⚠️ Fake risk: medium 🟡 (only 8 reviews, 2 photos) · ask for label photos'."""
+    why = f" ({html.escape(', '.join(deal.fake_why))})" if deal.fake_why else ""
+    return (f"⚠️ Fake risk: <b>{deal.fake_risk}</b> {FAKE_ICONS.get(deal.fake_risk, '')}{why} · "
+            "ask for photos of the inside label, care tag and codes")
 
 
 # where vinted.it listings come from, and how long Vinted's cross-border parcels usually take

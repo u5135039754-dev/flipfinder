@@ -33,6 +33,40 @@ class Search:
     enabled: bool = True                 # turned off from Telegram (settings.json)
     added: bool = False                  # added from Telegram (settings.json)
     price_to_is_budget: bool = False     # budget search whose max price follows the budget/pool
+    clothes: bool = False                # a designer clothes brand (config `clothes:`): its own rules and checks
+    vinted_only: bool = False            # no eBay or Subito for this search
+    allow_keywords: list[str] = field(default_factory=list)   # global exclude words that don't apply here ("felpa")
+    slot: int | None = None              # stagger slot (0/1) instead of the group's
+
+
+@dataclass
+class ClothesSettings:
+    """Designer clothes: one Vinted search per brand in the adult knitwear, sweatshirt and outerwear categories."""
+    brands: list[str] = field(default_factory=list)
+    catalog: list[int] = field(default_factory=list)
+    price_from: float | None = 20
+    price_to: float | None = 200
+    rules: dict = field(default_factory=lambda: {"min_profit": 30, "min_roi": 40, "min_rating": 5})
+    min_comparables: int = 6
+    max_roi: float = 150
+    fake_floor: float = 0.4              # under 40% of the brand+type median: usually a fake
+    seller_min_reviews: int = 5
+    seller_min_stars: float = 4.5
+    fake_words: list[str] = field(default_factory=list)
+    exclude_keywords: list[str] = field(default_factory=list)
+    allow_keywords: list[str] = field(default_factory=list)
+    shipping_cost: float = 6
+    resell_costs: float = 2
+    abroad: bool = False                 # also listings shipping from other countries (clothes only; /abroad stays for the rest)
+
+
+def clothes_search(c: ClothesSettings, brand: str, index: int = 0, added: bool = False) -> Search:
+    """One brand's search; brands alternate between the two stagger slots so each run has half of them."""
+    return Search(query=brand.lower().strip(), price_from=c.price_from, price_to=c.price_to,
+                  filters={"catalog": list(c.catalog)}, exclude_keywords=list(c.exclude_keywords),
+                  shipping_cost=c.shipping_cost, resell_costs=c.resell_costs, max_roi=c.max_roi,
+                  group="Clothes", clothes=True, vinted_only=True, allow_keywords=list(c.allow_keywords),
+                  slot=index % 2, added=added)
 
 
 @dataclass
@@ -92,6 +126,7 @@ class Config:
     value_adjust: dict = field(default_factory=dict)   # category or search -> factor on market value (report suggestions)
     ebay: EbaySettings = field(default_factory=EbaySettings)
     subito: SubitoSettings = field(default_factory=SubitoSettings)
+    clothes: ClothesSettings = field(default_factory=ClothesSettings)
 
 
 def _flat(values) -> list[str]:
@@ -152,6 +187,27 @@ def load(path: str | Path = "config.yaml") -> Config:
             every_minutes=float(s.get("every_minutes", 0)),
             group=str(s.get("group", "")),
         ))
+    cr = raw.get("clothes") or {}
+    clothes = ClothesSettings(
+        brands=[str(b) for b in cr.get("brands", [])],
+        catalog=[int(x) for x in cr.get("catalog", [])],
+        price_from=_opt_float(cr.get("price_from", 20)),
+        price_to=_opt_float(cr.get("price_to", 200)),
+        rules={"min_profit": 30, "min_roi": 40, "min_rating": 5, **(cr.get("rules") or {})},
+        min_comparables=int(cr.get("min_comparables", 6)),
+        max_roi=float(cr.get("max_roi", 150)),
+        fake_floor=float(cr.get("fake_floor", 0.4)),
+        seller_min_reviews=int(cr.get("seller_min_reviews", 5)),
+        seller_min_stars=float(cr.get("seller_min_stars", 4.5)),
+        fake_words=[str(w) for w in cr.get("fake_words", [])],
+        exclude_keywords=_flat(cr.get("exclude_keywords", []) or []),
+        allow_keywords=[str(w) for w in cr.get("allow_keywords", [])],
+        shipping_cost=float(cr.get("shipping_cost", 6)),
+        resell_costs=float(cr.get("resell_costs", 2)),
+        abroad=bool(cr.get("abroad", False)),
+    )
+    taken = {s.query.lower() for s in searches}
+    searches += [clothes_search(clothes, b, i) for i, b in enumerate(clothes.brands) if b.lower() not in taken]
     if not searches:
         raise SystemExit("No searches in config.yaml, add at least one.")
     budget = float(raw.get("budget", 72))
@@ -195,5 +251,6 @@ def load(path: str | Path = "config.yaml") -> Config:
             default_category=int(sb.get("default_category", 39)),
             pool_refresh_minutes=float(sb.get("pool_refresh_minutes", 180)),
         ),
+        clothes=clothes,
     )
     return cfg

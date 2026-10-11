@@ -37,6 +37,32 @@ music_rules:
   min_profit: 20
   min_roi: 35
 
+# Designer clothes (👕 Clothes topic): one Vinted search per brand (Italy and the EU), in the adult
+# knitwear/cardigan, sweatshirt/hoodie and outerwear categories (no shoes, bags or underwear).
+# A listing is valued against the same brand, the same garment type (cardigan, knit, hoodie,
+# sweatshirt, jacket) and a similar size. Fakes are common, so the checks are strict.
+# Brands can also be added and removed from Telegram: /add clothes <brand>, /remove <brand>.
+clothes:
+  brands: [maison margiela, acne studios, stone island, c.p. company, carhartt wip, "arc'teryx", ralph lauren, stussy]
+  catalog: [79, 267, 1206, 13, 196, 1037]   # men's + women's: knitwear, sweatshirts/hoodies, outerwear
+  price_from: 20
+  price_to: 200
+  rules:                     # /setrule clothes min_profit 35 changes them from Telegram
+    min_profit: 30
+    min_roi: 40
+    min_rating: 5
+  min_comparables: 6         # same brand + type + similar size listings needed for a market value
+  max_roi: 150
+  fake_floor: 0.4            # under 40% of the brand+type median is usually a fake, not a deal
+  seller_min_reviews: 5      # skip sellers with fewer reviews...
+  seller_min_stars: 4.5      # ...or a lower rating
+  fake_words: [replica, inspired, simil, aaa, "1:1", stile, tipo, copia, fake, imitazione, falso, falsa]
+  exclude_keywords: [bambino, bambina, kids, junior, gilet, smanicato]
+  allow_keywords: [felpa]    # the global list skips "felpa" (merch); here it's a sweatshirt
+  shipping_cost: 6
+  resell_costs: 2
+  abroad: true               # Italy alone gives almost no deals: EU listings too (shipping and arrival time on the deal)
+
 # Vinted adds a buyer protection fee on top of the price.
 # If the API gives the real total we use that, otherwise this estimate.
 buyer_protection:

@@ -335,14 +335,14 @@ const API = {
    * or a file {name, type, b64} (up to 10 MB) with the text as its caption.
    */
   async "POST /api/owner_dm"({ tg, bot }, body) {
-    const text = String(body.text || "").trim().slice(0, 1000);
+    const text = String(body.text || "").trim().slice(0, 4000);   // Telegram allows 4096
     if (body.file) {
       const { name = "file", type = "application/octet-stream", b64 = "" } = body.file;
       let bytes = new Uint8Array();
       try { bytes = fromBase64(String(b64)); } catch { /* not base64: refused below */ }
       if (!bytes.length || bytes.length > 10 * 1024 * 1024) return { sent: false, error: "file is empty or over 10 MB" };
       const sent = await tg.sendDocument(String(bot.ownerId), String(name).slice(0, 100), bytes,
-        { caption: text ? esc(text, false) : undefined, type: String(type), html: true });
+        { caption: text ? esc(text.slice(0, 1000), false) : undefined, type: String(type), html: true });   // captions: 1024 max
       return { sent: sent !== null };
     }
     if (!text) return { sent: false, error: "text is empty" };

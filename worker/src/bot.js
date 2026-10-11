@@ -2,7 +2,7 @@
 // Only the owner and users they /allow can use them; everyone else is ignored.
 
 import { Telegram } from "./telegram.js";
-import { RULES, applySettings, effectiveBudget, searchId } from "./searches.js";
+import { CLOTHES_RULES, RULES, applySettings, effectiveBudget, searchId } from "./searches.js";
 import { SELLER_MESSAGE, fitCaption, fullText, keyboard, stock, profit, findDeal } from "./deals.js";
 import { allocate, entryLine, memberKey, potText, reverse, shares, summarize } from "./pot.js";
 import { ROLES, Team } from "./team.js";
@@ -17,7 +17,7 @@ import { DEFAULT_WATCH, MAX_WATCH, findCoin, watchlist } from "./crypto.js";
 import { hhmm, rome, romeTs } from "./util.js";
 import { UserError, closeMatches, esc, euro, g, parseNumber, queryAndRange, splitArgs } from "./util.js";
 
-export const COMMANDS_VERSION = 25;   // bump when the list below changes, so it's registered again
+export const COMMANDS_VERSION = 26;   // bump when the list below changes, so it's registered again
 export const UNDOABLE = ["deposit", "withdraw", "fix", "personal", "refund"];   // /undo; buys and sales: /fix
 export const TREASURER_CMDS = new Set(["deposit", "withdraw", "paidby", "refund"]);
 export const POT_CHECK_MIN = 19 * 60 + 30;   // Sunday 19:30: the treasurer's pot balance screenshot
@@ -30,9 +30,9 @@ export const COMMANDS = [
   ["setprice", 'Change a price range: /setprice "boss katana" 80 250'],
   ["budget", "Change the budget-mode budget: /budget 72"],
   ["rules", "Show the deal rules"],
-  ["setrule", "Change a rule: /setrule min_roi 25"],
-  ["add", 'Add a search: /add "zoom g1x four" 20 60'],
-  ["remove", "Remove a search: /remove zoom g1x four"],
+  ["setrule", "Change a rule: /setrule min_roi 25, or for clothes: /setrule clothes min_profit 35"],
+  ["add", 'Add a search: /add "zoom g1x four" 20 60, or a clothes brand: /add clothes moncler'],
+  ["remove", "Remove a search or clothes brand: /remove zoom g1x four, /remove clothes moncler"],
   ["stock", "Items we own now (bought or listed), who has them, what we paid"],
   ["sell", "Ready-to-copy listing: /sell 12 or /sell boss ds-1 (add en or uk for English/Ukrainian)"],
   ["topic", "Send in a group topic to make it the Guitars/Electronics/Budget/Summary topic"],
@@ -1081,10 +1081,13 @@ Add one with /watch link, remove with /unwatch sol`);
       ...Object.entries(this.settings.value_adjust || {}).map(([k, f]) => `<i>${esc(k)} values ${f >= 1 ? "+" : ""}${Math.round((f - 1) * 100)}%</i>`),
       `<i>Budget mode (€${g(view.budget)}): min_profit €${g(br.min_profit)}, ` +
         `min_roi ${g(br.min_roi)}%, max_roi ${g(br.max_roi)}%</i>`,
+      `<i>👕 Clothes: min_profit €${g(view.clothes_rules.min_profit)}, min_roi ${g(view.clothes_rules.min_roi)}%, ` +
+        `min_rating ${view.clothes_rules.min_rating} (/setrule clothes min_profit 35)</i>`,
     ].join("\n"));
   }
 
   async cmd_setrule(chat, args) {
+    if ((args[0] || "").toLowerCase() === "clothes") return this.setClothesRule(chat, args.slice(1));
     if (args.length !== 2) throw new UserError("Use /setrule <name> <value>, e.g. /setrule min_roi 25");
     const name = args[0].toLowerCase();
     if (!(name in RULES)) throw new UserError(`Unknown rule '${name}'. Rules: ${Object.keys(RULES).join(", ")}`);
@@ -1103,7 +1106,39 @@ Add one with /watch link, remove with /unwatch sol`);
     await this.reply(chat, `✅ ${name} is now ${g(value)}`);
   }
 
+  /** /setrule clothes <min_profit|min_roi|min_rating> <value>: the clothes minimums only. */
+  async setClothesRule(chat, args) {
+    if (args.length !== 2) throw new UserError("Use /setrule clothes <name> <value>, e.g. /setrule clothes min_profit 35");
+    const name = args[0].toLowerCase();
+    if (!CLOTHES_RULES.includes(name)) throw new UserError(`Clothes rules: ${CLOTHES_RULES.join(", ")}`);
+    const [type, lo, hi] = RULES[name];
+    const value = parseNumber(args[1].replace(/%/g, ""));
+    if (value === null || (type === "int" && !Number.isInteger(value))) {
+      throw new UserError(`${name} must be ${type === "int" ? "a whole number" : "a number"}, I got '${args[1]}'`);
+    }
+    if (!(value >= lo && value <= hi)) throw new UserError(`${name} must be between ${lo} and ${hi}`);
+    this.settings.clothes_rules = { ...(this.settings.clothes_rules || {}), [name]: value };
+    this.changed = true;
+    await this.reply(chat, `✅ 👕 Clothes ${name} is now ${g(value)} (from the next scan)`);
+  }
+
+  /** /add clothes <brand>: a designer brand searched in the clothes categories, with the clothes rules. */
+  async addClothes(chat, args) {
+    const brand = args.join(" ").trim().replace(/^"|"$/g, "").toLowerCase();
+    if (!brand) throw new UserError("Which brand? e.g. /add clothes moncler");
+    if (brand.length > 40) throw new UserError("That brand name is too long");
+    if ((await this.view()).searches.some((s) => s.query.toLowerCase() === brand)) {
+      throw new UserError(`There's already a search called "${brand}"`);
+    }
+    this.settings.added = [...this.settings.added.filter((a) => a.query !== brand), { query: brand, clothes: true }];
+    this.settings.removed = this.settings.removed.filter((q) => q !== brand);
+    this.changed = true;
+    await this.reply(chat, `✅ Added 👕 <b>${esc(brand)}</b> to Clothes (knitwear, sweatshirts, hoodies and jackets, ` +
+      "up to €200, Vinted Italy). Checked from the next run.");
+  }
+
   async cmd_add(chat, args) {
+    if ((args[0] || "").toLowerCase() === "clothes" && args.length > 1) return this.addClothes(chat, args.slice(1));
     const [name, lo, hi] = queryAndRange(args);
     if (!name) throw new UserError("The search can't be empty");
     if ((await this.view()).searches.some((s) => s.query.toLowerCase() === name)) {
@@ -1119,6 +1154,7 @@ Add one with /watch link, remove with /unwatch sol`);
 
   async cmd_remove(chat, args) {
     if (!args.length) throw new UserError("Which search? e.g. /remove boss katana");
+    if ((args[0] || "").toLowerCase() === "clothes" && args.length > 1) args = args.slice(1);
     const s = await this.find(await this.view(), args.join(" "));
     const sid = await searchId(s.query);
     await this.reply(chat, `Remove <b>${esc(s.query)}</b>? You can /add it again later.`,
@@ -1294,11 +1330,11 @@ Add one with /watch link, remove with /unwatch sol`);
   }
 
   async cmd_topic(chat, args, user, msg) {
-    if (!msg?.is_topic_message) throw new UserError("Send /topic inside a group topic (Guitars, Electronics, Budget or Summary)");
+    if (!msg?.is_topic_message) throw new UserError("Send /topic inside a group topic (Guitars, Electronics, Budget, Clothes or Summary)");
     const key = this.learnTopic(msg, args.length ? args.join(" ") : null);
     if (!key) {
       throw new UserError("I couldn't tell which topic this is. Use /topic guitars, /topic electronics, " +
-        "/topic budget or /topic summary");
+        "/topic budget, /topic clothes or /topic summary");
     }
     const known = Object.keys(TOPIC_NAMES).filter((k) => k in (this.settings.topics || {})).map((k) => TOPIC_NAMES[k]);
     if (key === "rules" && !this.rules) this.enterRules(msg, true);   // just became the Rules topic

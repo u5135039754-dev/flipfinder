@@ -36,6 +36,15 @@ export function dropPrice(current, lowest) {
   return Math.max(lowest, nicePrice(current * 0.9));
 }
 
+// what to measure on a garment (shown in the kit for clothes)
+export const CLOTHES_MEASURES = {
+  knit: "chest (armpit to armpit) · length (back collar to hem) · sleeves (shoulder seam to cuff)",
+  cardigan: "chest (armpit to armpit, buttoned) · length (back collar to hem) · sleeves (shoulder seam to cuff)",
+  sweatshirt: "chest (armpit to armpit) · length (back collar to hem) · sleeves (shoulder seam to cuff)",
+  hoodie: "chest (armpit to armpit) · length (back collar to hem, not the hood) · sleeves (shoulder seam to cuff)",
+  jacket: "chest (armpit to armpit, zipped) · length (back collar to hem) · sleeves (shoulder seam to cuff) · shoulders (seam to seam)",
+};
+
 /** The AI's kit ("PLATFORM: ...", "TITLE: ...", "DESCRIPTION:" lines up to END, "PHOTOS: ...", "PACKAGE: ..."). */
 export function parseKit(raw) {
   const field = (name) => raw.match(new RegExp(`^\\s*${name}:\\s*(.+?)\\s*$`, "im"))?.[1] || "";
@@ -44,7 +53,8 @@ export function parseKit(raw) {
     raw.match(/^\s*DESCRIPTION:\s*([\s\S]*?)(?=^\s*PHOTOS:)/im)?.[1] || "";
   const [box, option = ""] = field("PACKAGE").split("|").map((x) => x.trim());
   return {
-    platform: ["Vinted", "Subito", "eBay"].find((p) => p.toLowerCase() === (platform || "").toLowerCase()) || "Vinted",
+    platform: (/vestiaire/i.test(platform || "") ? "Vestiaire Collective" : null) ||
+      ["Vinted", "Subito", "eBay"].find((p) => p.toLowerCase() === (platform || "").toLowerCase()) || "Vinted",
     why: why.replace(/\.$/, ""),
     title: cleanTitle(field("TITLE").replace(/^["«]|["»]$/g, ""), 60),
     // we're the seller now: no "as in the photo" / "according to the seller" left from the old listing
@@ -60,7 +70,8 @@ export function plainKit(d, city) {
   const title = cleanTitle(d.title || "", 60);
   return {
     platform: "Vinted", why: "", title, plain: true,
-    description: [`${title}.`, `Condizioni: ${d.condition || "[indica le condizioni]"}. [Aggiungi segni d'uso o difetti, e cosa è incluso.]`,
+    description: [`${title}.`, ...(d.clothes ? [`Taglia ${d.clothes.size || "[__]"}. Misure: petto [__] cm, lunghezza [__] cm, maniche [__] cm.`] : []),
+      `Condizioni: ${d.condition || "[indica le condizioni]"}. [Aggiungi segni d'uso o difetti, e cosa è incluso.]`,
       `Spedizione con imballaggio accurato${city ? `, oppure ritiro a mano a ${city}` : ""}.`].join("\n"),
     photos: [], shipping: "",
   };
@@ -74,6 +85,10 @@ export function kitText(d, kit) {
   if (p.short) lines.push(`⚠️ The market value (about €${g(p.value)}) is under what keeps our min profit: €${g(p.lowest)} is the floor.`);
   lines.push(`🛒 Where: <b>${esc(kit.platform)}</b>${kit.why ? `, ${esc(kit.why)}` : ""}`,
     `🏷 Title: <code>${esc(kit.title)}</code>`, `📝 Description:\n<code>${esc(kit.description)}</code>`);
+  if (d.clothes) {
+    lines.push(`📏 Measure it laid flat: ${CLOTHES_MEASURES[d.clothes.kind] || CLOTHES_MEASURES.knit}`);
+    if (kit.platform !== "Vestiaire Collective") lines.push("💡 Or Vestiaire Collective: buyers pay more for checked designer pieces, worth it from ~€150");
+  }
   if (kit.photos.length) lines.push(`📸 Photos: ${kit.photos.map((x) => esc(x)).join(" · ")}`);
   if (kit.shipping) lines.push(`📦 Shipping: ${esc(kit.shipping)}`);
   if (d.list_price) lines.push(`🏷 Listed now at €${g(d.list_price)}`);
@@ -112,8 +127,12 @@ export class Kits {
     if (ai.config.enabled && !(await ai.blocked(user))) {
       await ai.count(user);
       const fixed = d.repaired_at ? `\nWe repaired it ourselves: ${d.repair?.part || d.ai?.part || "the faulty part"} replaced, it works now. Say so honestly.` : "";
+      const clothes = d.clothes ? "\nDesigner clothes: PLATFORM is Vinted or Vestiaire Collective (Vestiaire for pricier pieces, " +
+        "where its authentication check helps). Put brand, garment, size and colour in the TITLE. PHOTOS must include the inside " +
+        "label, the care tag and the item laid flat with a tape measure. The DESCRIPTION gives the size and leaves room for " +
+        "the measurements (petto, lunghezza, maniche) as [__ cm]." : "";
       const task = `Task: listing kit (listing kit format). Pickup city: ${city || "none, shipping only"}.` +
-        ` We'll list it at about €${prices.price}.${fixed}`;
+        ` We'll list it at about €${prices.price}.${fixed}${clothes}`;
       const raw = await ai.run([{ role: "user", content: await ai.dealContent(d, task) }], { maxLines: 20 });
       if (raw) kit = parseKit(raw);
       if (kit && (!kit.title || !kit.description)) kit = null;

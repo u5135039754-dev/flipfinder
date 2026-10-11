@@ -8,6 +8,10 @@ export const RULES = {   // name: [type, min, max] for /setrule
   max_price: ["float", 1, 10_000],   // main deals: the most we pay all in (budget deals use /budget)
 };
 
+// designer clothes' own minimums (config.yaml clothes.rules; /setrule clothes <name> <value>)
+export const CLOTHES_DEFAULTS = { min_profit: 30, min_roi: 40, min_rating: 5 };
+export const CLOTHES_RULES = ["min_profit", "min_roi", "min_rating"];
+
 /** Short stable id for button data (Telegram allows 64 bytes). */
 export async function searchId(query) {
   const hash = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(query.toLowerCase()));
@@ -40,8 +44,11 @@ export function applySettings(catalog, settings, pool = null) {
   const existing = new Set(searches.map((s) => s.query.toLowerCase()));
   for (const a of settings.added || []) {
     if (!existing.has(a.query.toLowerCase())) {
-      searches.push({ query: a.query, price_from: a.price_from ?? null, price_to: a.price_to ?? null,
-        budget: false, group: "Added from Telegram", added: true, price_to_is_budget: false });
+      searches.push(a.clothes
+        ? { query: a.query, price_from: 20, price_to: 200, budget: false, group: "Clothes", clothes: true, added: true,
+          price_to_is_budget: false }
+        : { query: a.query, price_from: a.price_from ?? null, price_to: a.price_to ?? null,
+          budget: false, group: "Added from Telegram", added: true, price_to_is_budget: false });
     }
   }
   const disabled = new Set((settings.disabled || []).map((q) => q.toLowerCase()));
@@ -62,6 +69,7 @@ export function applySettings(catalog, settings, pool = null) {
     searches, rules,
     budget_rules: { min_profit: 12, min_roi: 35, max_roi: 150, ...(catalog.budget_rules || {}) },
     music_rules: { min_profit: 20, min_roi: 35, ...(catalog.music_rules || {}), ...(settings.music_rules || {}) },
+    clothes_rules: { ...CLOTHES_DEFAULTS, ...(catalog.clothes_rules || {}), ...(settings.clothes_rules || {}) },
     budget_setting: settings.budget ?? catalog.budget ?? 72,
     ebay: Boolean(catalog.ebay), subito: Boolean(catalog.subito),
   };

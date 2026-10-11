@@ -56,6 +56,7 @@ What to look for:
 - Damage: cracks, dents, worn frets, rust, broken jacks, pots or switches, screen burn-in, dead pixels, swollen batteries, water damage, missing keys.
 - Missing parts: power supply, cables, case, controller, charger, strap, box, accessories shown in other listings.
 - Locked or stolen risk (phones, tablets, consoles, laptops): iCloud, Google or account lock, blacklisted IMEI, "for parts", no box or receipt with a very low price, a brand-new seller.
+- Designer clothes (the listing says "category: designer clothes"): fakes are the main risk. Look for a clear photo of the inside neck label and the care/wash tag, and check the stitching, the logo or badge (shape, font, spacing, placement), buttons and zips, and any codes (QR, serial, Certilogo, hologram). Missing label photos, stock or catalogue photos, a blurry logo, or a price far below the market all raise the risk. Clothes are never repaired: stains, holes or pilling are a RISK, PARTS stays 0.
 - Repairs: the team repairs everything itself, so a repair costs only the part. Name the part and a typical price for it in Italy (AliExpress, Amazon or iFixit, aftermarket part). Difficulty: 🟢 easy (battery, iPad glass, buttons, controller sticks, guitar jacks or pots) / 🟡 medium (iPhone screen, back glass, charging port) / 🔴 hard (camera, Face ID, logic board or anything with soldering). A 🔴 repair is a NO unless the profit after the part is very high.
 
 Quick check format, exactly these 4 lines, nothing before or after:
@@ -71,6 +72,10 @@ IF: iCloud is off
 RED FLAG: none
 PARTS: 0 | DIFFICULTY: none | PART: none
 
+For designer clothes, add one more line after PARTS:
+FAKE: <low, medium or high, from the photos and price> | LABEL: <yes if a clear photo of the inside label or care tag is among the photos, else no> | WHY: <at most 8 words, e.g. "logo font looks off, no care tag photo">
+A high FAKE is a red flag too.
+
 Seller questions format: 2 or 3 short questions to send the seller, the ones that would change our answer. One per line, each as "IT: <the question in Italian> | EN: <the same in English>". Nothing else.
 
 Deep check format: start with the bot's ✅ YES / ❌ NO line from the quick check in <thread>, exactly as it is (you may only turn a YES into a NO for a red flag, and say which), then go further in at most 10 short lines: what in the photos or text points to each risk, how the price compares with the comparables, the repair if any, and what would change the answer. End with the same PARTS line.
@@ -85,6 +90,10 @@ PHOTOS: 4 to 7 shots to take for this kind of item, in English, separated by ; (
 PACKAGE: box size and weight, e.g. "40x30x15 cm, about 2 kg" | the shipping option to pick: Vinted piccolo, medio or grande, and the Subito size
 
 Questions: answer in at most 5 short lines using the listing, the thread so far and the tools. If the data doesn't answer it, say so.`;
+
+// ❓ Seller questions for clothes always start with this one
+export const LABEL_QUESTION = "IT: Potresti mandarmi foto chiare dell'etichetta interna, dell'etichetta di lavaggio e di eventuali " +
+  "codici (QR, seriale, ologramma)? | EN: Could you send clear photos of the inside label, the care tag and any codes (QR, serial, hologram)?";
 
 const TOOLS = [
   { name: "get_deal", description: "One of our deals by its number (#n): listing, prices, market value, status. Read-only.",
@@ -318,7 +327,8 @@ export class AI {
   /** The min profit for this deal (budget deals have their own rules). */
   async minProfit(d) {
     const view = await this.bot.view();
-    const rules = d.group === "Budget" ? { ...view.rules, ...(view.budget_rules || {}) } : view.rules;
+    const rules = d.group === "Budget" ? { ...view.rules, ...(view.budget_rules || {}) }
+      : d.group === "Clothes" ? { ...view.rules, ...(view.clothes_rules || {}) } : view.rules;
     return rules?.min_profit ?? 25;
   }
 
@@ -340,6 +350,9 @@ export class AI {
       d.item?.price !== undefined ? `price: €${shownPrice(d)} (what we pay the seller, buyer fee included)` : "",
       `description: ${(d.item?.description || "(none given)").slice(0, 1500)}`,
       d.seller ? `seller: ${d.seller}` : "", d.item?.location ? `location: ${d.item.location}` : "",
+      d.clothes ? `category: designer clothes (${d.clothes.kind || "garment"}, brand ${d.clothes.brand || "?"}, ` +
+        `size ${d.clothes.size || "?"}); the scanner's fake risk from price and seller: ${d.clothes.fake_risk}` +
+        (d.clothes.fake_why?.length ? ` (${d.clothes.fake_why.join(", ")})` : "") : "",
       "</listing>",
       "<numbers>",
       `our total cost (price + fees + shipping): €${d.cost}`, `market value (median of similar listings): €${d.value}`,
@@ -385,12 +398,20 @@ export class AI {
     // a question isn't a condition ("Which Pencil model?"): left out
     const cond = /\?/.test(field("IF")) ? "" : clip(field("IF").replace(/^if\s+/i, ""), 50);
     const afterPart = fixed ? ` after the ~€${Math.round(parts)} part` : "";
+    // designer clothes: the AI's fake risk from the photos; no clear label photo caps a YES at "if the seller sends label photos"
+    const fk = d.clothes ? text.match(/^\s*FAKE:\s*(low|medium|high)\b[^|\n]*(?:\|\s*LABEL:\s*(yes|no)\b)?[^|\n]*(?:\|\s*WHY:\s*(.+?))?\s*$/im) : null;
+    const fake = fk ? fk[1].toLowerCase() : d.clothes ? "medium" : null;
+    const label = fk?.[2] ? fk[2].toLowerCase() === "yes" : false;
+    const fakeWhy = fk?.[3] && !/^(none|n\/a|-)$/i.test(fk[3]) ? clip(fk[3].replace(/\.$/, ""), 70) : "";
     let first;
     if (flag) first = `❌ NO. ${flag[0].toUpperCase()}${flag.slice(1)}.`;
+    else if (fake === "high") first = `❌ NO. High fake risk${fakeWhy ? `: ${fakeWhy}` : " from the photos"}.`;
     else if (difficulty === "hard" && profit !== null && profit < 2 * minProfit) {
       first = `❌ NO. The 🔴 ${part ? `${part} repair` : "repair"} eats the profit.`;
     } else if (profit !== null && profit < minProfit) {
       first = profit < 0 ? `❌ NO. It loses €${-profit}${afterPart}.` : `❌ NO. Only €${profit} profit${afterPart}.`;
+    } else if (d.clothes && !label) {
+      first = `✅ YES, if the seller sends label photos.${profit !== null ? ` €${profit} profit.` : ""}`;
     } else first = `✅ YES${cond ? `, if ${cond}` : ""}.${profit !== null ? ` €${profit} profit${afterPart}.` : ""}`;
     const verdict = first.startsWith("❌") ? "no" : "yes";
     // the risk line; an answer in the old layout ("⚠️ ...") still works
@@ -398,8 +419,11 @@ export class AI {
       "Nothing visible";
     const why = fixed ? `parts ~€${partsTotal}${icon || part ? `, ${[icon, part].filter(Boolean).join(" ")}` : ""}` : "no repair needed";
     const offerLine = `💬 Max offer: ${offer !== null ? `€${offer}` : "?"} (${why}${iphonePart ? ", −15% resale: iPhone part" : ""})`;
-    return { verdict, lines: [first, `⚠️ ${risk}`], offer, offer_line: offerLine, red_flag: flag || null,
-      profit: fixed ? profit : null, parts: partsTotal, part };
+    const lines = [first, `⚠️ ${risk}`];
+    if (fake) lines.push(`⚠️ Fake risk: ${fake} ${{ high: "🔴", medium: "🟡", low: "🟢" }[fake]}` +
+      `${fakeWhy ? ` (${fakeWhy})` : ""}${label ? "" : " · no clear label photo"}`);
+    return { verdict, lines, offer, offer_line: offerLine, red_flag: flag || null,
+      profit: fixed ? profit : null, parts: partsTotal, part, ...(fake ? { fake, label } : {}) };
   }
 
   /** The check as text (for threads, the test endpoint and 📊 Numbers). */
@@ -438,7 +462,9 @@ export class AI {
       const why = await this.blocked(user);
       if (why) return { error: why };
       await this.count(user);
-      raw = await this.run([{ role: "user", content: await this.dealContent(d, "Task: quick check (quick check format).") }], { maxLines: 6 });
+      const task = d.clothes ? "Task: quick check (quick check format, plus the FAKE line for designer clothes)."
+        : "Task: quick check (quick check format).";
+      raw = await this.run([{ role: "user", content: await this.dealContent(d, task) }], { maxLines: 7 });
       if (!raw) return { error: DOWN_TEXT };
       if (id) {
         const latest = await this.bot.store.get("ai_cache", {});
@@ -512,11 +538,15 @@ export class AI {
       const why = await this.blocked(user);
       if (why) return { error: why };
       await this.count(user);
-      const task = "Task: seller questions (seller questions format)." + (d.ai?.text ? `\n<thread>\nquick check so far:\n${d.ai.text}\n</thread>` : "");
+      const task = "Task: seller questions (seller questions format)." +
+        (d.clothes ? " The question about label, care tag and code photos is already asked: write 1 or 2 others." : "") +
+        (d.ai?.text ? `\n<thread>\nquick check so far:\n${d.ai.text}\n</thread>` : "");
       const raw = await this.run([{ role: "user", content: await this.dealContent(d, task) }], { maxLines: 4 });
       if (!raw) return { error: DOWN_TEXT };
       const fresh = (await this.bot.store.deal(key)) || d;
-      fresh.ai_questions = raw;
+      // clothes: the label/care tag/codes question always comes first, whatever the AI wrote
+      fresh.ai_questions = d.clothes
+        ? [LABEL_QUESTION, ...raw.split("\n").filter((l) => l.trim() && !/etichett/i.test(l)).slice(0, 2)].join("\n") : raw;
       await this.bot.store.saveDeal(key, fresh);
       d = fresh;
     }
