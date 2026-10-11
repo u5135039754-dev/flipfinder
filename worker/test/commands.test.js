@@ -236,3 +236,15 @@ test("/rules shows the music gear rules", async () => {
   await t.update(msg("/rules"));
   assert.match(t.tg.texts().at(-1), /Music gear \(amps, pedals, guitars\): min_profit €20, min_roi 35%/);
 });
+
+test("/reverb eu|all: owner only, EU sellers by default", async () => {
+  const t = await setup({ settings: { allowed_users: [MARCO] } });
+  await t.updates(msg("/reverb"), msg("/reverb all", { user: MARCO }), msg("/reverb all"), msg("/reverb"), msg("/reverb eu"));
+  const r = t.tg.texts();
+  assert.match(r[0], /EU sellers only/);
+  assert.match(r[1], /Only the owner/);
+  assert.match(r[2], /sellers anywhere.*customs and import VAT/);
+  assert.match(r[3], /sellers anywhere/);
+  assert.match(r[4], /EU sellers only/);
+  assert.equal((await t.settings()).reverb_region, "eu");
+});

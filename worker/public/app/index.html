@@ -897,7 +897,7 @@ function dutyButton(sc, onMe) {
 }
 
 // --- Settings → Searches: a card per topic with its rules and searches; owner/managers edit, others suggest
-const PLATFORM_NAMES = { vinted: "Vinted", ebay: "eBay", subito: "Subito", mercatino: "Mercatino" };
+const PLATFORM_NAMES = { vinted: "Vinted", ebay: "eBay", subito: "Subito", mercatino: "Mercatino", reverb: "Reverb" };
 const RULE_NAMES = { min_profit: "Min profit", min_roi: "Min ROI", max_price: "Max price" };
 const topicRuleText = (name, v) => (v == null ? "–" : name === "min_roi" ? `${v}%` : euro0(v));
 const range = (x) => `${x.price_from != null ? euro0(x.price_from) : "any"} – ${x.price_to != null ? euro0(x.price_to)
@@ -973,7 +973,7 @@ function searchForm(d, tp, x) {
   const [must, mustBox] = input("Must have (optional, commas)", { value: (x?.must || []).join(", "), placeholder: "e.g. mini" });
   const [excl, exclBox] = input("Leave out (optional, commas)", { value: (x?.exclude || []).join(", "), placeholder: "e.g. cover, case" });
   const [size, sizeBox] = input("Size (optional)", { value: x?.size || "", placeholder: "e.g. M or 42", maxlength: "10" });
-  const extra = ["ebay", "subito", ...(tp.key === "guitars" ? ["mercatino"] : [])];   // Mercatino Musicale: music only
+  const extra = ["ebay", "subito", ...(tp.key === "guitars" ? ["mercatino", "reverb"] : [])];   // Mercatino and Reverb: music only
   const plat = Object.fromEntries(extra.map((p) => [p, (x?.platforms || []).includes(p)]));
   const platRow = h("div", { class: "pick" });
   const paintPlat = () => platRow.replaceChildren(

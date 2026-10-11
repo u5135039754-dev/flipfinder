@@ -58,6 +58,7 @@ def catalog(cfg) -> dict:
         "budget_rules": cfg.budget_rules, "music_rules": cfg.music_rules, "clothes_rules": cfg.clothes.rules,
         "budget": cfg.budget_setting,
         "ebay": cfg.ebay.enabled, "subito": cfg.subito.enabled, "mercatino": cfg.mercatino.enabled,
+        "reverb": cfg.reverb.enabled and bool(cfg.reverb.token),
     }
 
 

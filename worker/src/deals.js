@@ -5,7 +5,7 @@ import { esc, euro, num, rome } from "./util.js";
 
 export const STATUS = { new: "", claimed: "✋ Claimed", bought: "💸 Bought", listed: "🏷 Listed", sold: "✅ Sold" };
 export const NEXT = { claimed: ["b", "🙋 Request buy"], bought: ["l", "🏷 Listed"], listed: ["s", "✅ Sold"] };
-export const PLATFORMS = { vinted: "Vinted", ebay: "eBay", subito: "Subito", mercatino: "Mercatino Musicale" };
+export const PLATFORMS = { vinted: "Vinted", ebay: "eBay", subito: "Subito", mercatino: "Mercatino Musicale", reverb: "🎸 Reverb" };
 export const SELLER_MESSAGE = (title) =>
   `Ciao! L'articolo "${title}" è ancora disponibile? Se sì, potresti mandarmi un breve video ` +
   "in cui si vede che funziona? Grazie mille!";

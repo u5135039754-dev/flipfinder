@@ -48,6 +48,7 @@ jobs:
           FLIPFINDER_API_KEY: ${{ secrets.FLIPFINDER_API_KEY }}
           EBAY_CLIENT_ID: ${{ secrets.EBAY_CLIENT_ID }}
           EBAY_CLIENT_SECRET: ${{ secrets.EBAY_CLIENT_SECRET }}
+          REVERB_TOKEN: ${{ secrets.REVERB_TOKEN }}
         run: python main.py --once
 
       - uses: actions/cache/save@v4

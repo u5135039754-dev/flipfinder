@@ -16,6 +16,7 @@ from .ebay import CATEGORY_FOR_VINTED_CATALOG as EBAY_CATEGORY_FOR_VINTED_CATALO
 from .ebay import EbayClient
 from .subito import CATEGORY_FOR_VINTED_CATALOG, SubitoClient
 from .mercatino import MercatinoClient
+from .reverb import ReverbClient, assess_reverb
 from .sold import SoldTracker
 from .storage import SeenStore
 from .settings import search_group
@@ -218,6 +219,17 @@ class Scanner:
         except ValueError:
             self.mercatino = None
         self.mercatino_pages = 0
+        rv = getattr(cfg, "reverb", None)
+        try:
+            self.reverb = ReverbClient(rv.token, rv.region) if rv and rv.enabled and rv.token else None
+        except ValueError:
+            self.reverb = None
+        self.reverb_state = {"turn": 0, "seeded": []}
+        if self.reverb:
+            try:
+                self.reverb_state.update(json.loads((cfg.seen_file.parent / "reverb.json").read_text(encoding="utf-8")))
+            except (OSError, ValueError):
+                pass
         self.subito_new: list[Item] = []
         self.first_subito = False
         self.subito_pools = 0
@@ -396,6 +408,47 @@ class Scanner:
         if search_group(s) in MUSIC and not s.budget and music.get("max_price"):
             return float(music["max_price"])
         return self.cfg.rules.max_price
+
+    # --- Reverb (official API; its terms: see reverb.py) -----------------------------------
+    def _scan_reverb(self) -> list[Deal]:
+        """
+        A few music searches a run, in turn: the newest used listings that ship to Italy (EU sellers unless /reverb all),
+        each against the median asking price of the same model and condition on Reverb. Reverb prices value Reverb
+        deals only. A search's first pass is remembered without alerting.
+        """
+        rv, st = self.reverb, self.reverb_state
+        music = [s for s in self.cfg.searches if s.enabled and search_group(s) in MUSIC and not s.budget and s.uses("reverb")]
+        deals: list[Deal] = []
+        rebuilt = 0
+        for _ in range(min(self.cfg.reverb.searches_per_run, len(music))):
+            s = music[st["turn"] % len(music)]
+            st["turn"] += 1
+            items = [i for i in rv.newest(s.query, s.price_from, self._price_to(s)) if s.wants(i)]
+            key = "reverb " + _key(s)
+            pool = self.pools.get(key)
+            if pool is None and rebuilt < 3:
+                pool = rv.pool(s.query, self.cfg.reverb.pool_pages)
+                self.pools.put(key, pool)
+                rebuilt += 1
+            pool = (pool if pool is not None else self.pools.get(key, any_age=True) or []) + items
+            if s.query not in st["seeded"] and not self.first_run:
+                for i in items:
+                    self.seen.add(i.key)
+                st["seeded"] = sorted(set(st["seeded"]) | {s.query})
+                continue
+            rules = self._rules(s)
+            for item in items:
+                if item.key in self.seen:
+                    continue
+                self.seen.add(item.key)
+                self.checked += 1
+                deal = assess_reverb(item, pool, rules, s.model)
+                if deal and not deal.blocked:
+                    deals.append(tag(deal, s))
+                elif is_near_miss(deal):
+                    self.near_misses.append((s.query, deal))
+        log.info("Reverb: %d request(s) this run (%s sellers)", rv.requests, "EU" if rv.region == "eu" else "all")
+        return deals
 
     # --- Mercatino Musicale (permission on its conditions: see mercatino.py) ---------------
     def _scan_mercatino(self) -> list[Deal]:
@@ -720,6 +773,12 @@ class Scanner:
             except Exception as e:  # one broken search shouldn't kill the rest
                 self.failed_searches += 1
                 log.error("Search '%s' failed: %s", s.query, e)
+        if getattr(self, "reverb", None):
+            try:
+                deals += self._scan_reverb()
+            except Exception as e:   # never stops the scan
+                log.error("Reverb failed: %s", e)
+            (self.cfg.seen_file.parent / "reverb.json").write_text(json.dumps(self.reverb_state), encoding="utf-8")
         if getattr(self, "mercatino", None):
             try:
                 deals += self._scan_mercatino()
@@ -875,7 +934,7 @@ class Scanner:
         return self.failed_searches == len(self.cfg.searches)
 
 
-PLATFORM_NAMES = {"vinted": "Vinted", "ebay": "eBay", "subito": "Subito", "mercatino": "Mercatino Musicale"}
+PLATFORM_NAMES = {"vinted": "Vinted", "ebay": "eBay", "subito": "Subito", "mercatino": "Mercatino Musicale", "reverb": "Reverb"}
 
 
 def describe_miss(query: str, m: Deal) -> str:

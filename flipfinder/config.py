@@ -158,6 +158,16 @@ class MercatinoSettings:
 
 
 @dataclass
+class ReverbSettings:
+    """Reverb's official API (music searches; token REVERB_TOKEN, a secret). See reverb.py for the API terms we keep to."""
+    enabled: bool = False
+    searches_per_run: int = 6         # music searches in turn, newest page each
+    pool_pages: int = 2               # asking-price comparables per search (50 a page), refreshed every 3 h
+    token: str = ""
+    region: str = "eu"                # /reverb eu|all: EU sellers only (no customs or import VAT), or anywhere
+
+
+@dataclass
 class Config:
     domain: str
     interval_minutes: float
@@ -179,6 +189,7 @@ class Config:
     subito: SubitoSettings = field(default_factory=SubitoSettings)
     clothes: ClothesSettings = field(default_factory=ClothesSettings)
     mercatino: MercatinoSettings = field(default_factory=MercatinoSettings)
+    reverb: ReverbSettings = field(default_factory=ReverbSettings)
 
 
 def _flat(values) -> list[str]:
@@ -315,5 +326,9 @@ def load(path: str | Path = "config.yaml") -> Config:
         mercatino=MercatinoSettings(enabled=bool((raw.get("mercatino") or {}).get("enabled", False)),
                                     pages_per_run=int((raw.get("mercatino") or {}).get("pages_per_run", 2)),
                                     daily_cap=min(950, int((raw.get("mercatino") or {}).get("daily_cap", 900)))),
+        reverb=ReverbSettings(enabled=bool((raw.get("reverb") or {}).get("enabled", False)),
+                              searches_per_run=int((raw.get("reverb") or {}).get("searches_per_run", 6)),
+                              pool_pages=int((raw.get("reverb") or {}).get("pool_pages", 2)),
+                              token=os.getenv("REVERB_TOKEN", "")),
     )
     return cfg

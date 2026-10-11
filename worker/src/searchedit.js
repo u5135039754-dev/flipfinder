@@ -12,8 +12,8 @@ const TOPIC_LABELS = { guitars: "Music" };   // "Borys added 'boss katana' to Mu
 // the group a search added in a topic's card gets: its rules come with it
 export const TOPIC_GROUP = { guitars: "Guitars", electronics: "Electronics", budget: "Budget", clothes: "Clothes" };
 export const TOPIC_RULES = ["min_profit", "min_roi", "max_price"];
-export const EXTRA_PLATFORMS = ["ebay", "subito", "mercatino"];   // Vinted is always on: market values come from it
-const MUSIC_ONLY = ["mercatino"];   // Mercatino Musicale: music searches only
+export const EXTRA_PLATFORMS = ["ebay", "subito", "mercatino", "reverb"];   // Vinted is always on: market values come from it
+const MUSIC_ONLY = ["mercatino", "reverb"];   // Mercatino Musicale and Reverb: music searches only
 const PREVIEW_MAX_AGE = 3600;     // the scanner picks a preview up within a run (~5 min); after an hour it's dropped
 const PREVIEWS_PER_PERSON = 3;
 
@@ -68,12 +68,12 @@ export class Searches {
         enabled: s.enabled !== false,
         budget: Boolean(s.budget), clothes: Boolean(s.clothes), added: Boolean(s.added), week: week[s.query.toLowerCase()] || 0,
         platforms: ["vinted", ...(s.platforms ? s.platforms.filter((p) => EXTRA_PLATFORMS.includes(p))
-          : s.clothes ? [] : [view.ebay && "ebay", view.subito && "subito", key === "guitars" && view.mercatino && "mercatino"].filter(Boolean))],
+          : s.clothes ? [] : [view.ebay && "ebay", view.subito && "subito", key === "guitars" && view.mercatino && "mercatino", key === "guitars" && view.reverb && "reverb"].filter(Boolean))],
         must: s.must || [], exclude: s.exclude || [], size: s.size || "",
       })),
     }));
     return { can_edit: this.bot.team.isManager(userId), owner: userId === this.bot.ownerId, topics,
-      platforms: { ebay: view.ebay, subito: view.subito, mercatino: view.mercatino } };
+      platforms: { ebay: view.ebay, subito: view.subito, mercatino: view.mercatino, reverb: view.reverb } };
   }
 
   // --- checks

@@ -9,7 +9,7 @@ from .analyzer import Deal
 
 log = logging.getLogger(__name__)
 
-PLATFORMS = {"vinted": "Vinted", "ebay": "eBay", "subito": "Subito", "mercatino": "Mercatino Musicale"}
+PLATFORMS = {"vinted": "Vinted", "ebay": "eBay", "subito": "Subito", "mercatino": "Mercatino Musicale", "reverb": "🎸 Reverb"}
 SYMBOLS = {"EUR": "€", "GBP": "£", "USD": "$", "PLN": "zł "}
 
 
@@ -24,7 +24,8 @@ def stars(rating: int) -> str:
 def format_deal(deal: Deal) -> str:
     it = deal.item
     c = it.currency
-    extras = " · ".join(x for x in (it.brand, deal.kind, it.size, it.condition) if x)
+    cond = it.condition.replace("-", " ").capitalize() if it.source == "reverb" else it.condition   # "very-good" -> "Very good"
+    extras = " · ".join(x for x in (it.brand, deal.kind, it.size, cond) if x)
     lines = [
         f"{'🔧' if deal.repair else '🔥'} <b>{html.escape(it.title[:120])}</b>",   # photo captions max out at 1024 chars
     ]

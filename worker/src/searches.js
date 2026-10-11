@@ -83,7 +83,7 @@ export function applySettings(catalog, settings, pool = null) {
     music_rules: { min_profit: 20, min_roi: 35, ...(catalog.music_rules || {}), ...(settings.music_rules || {}) },
     clothes_rules: { ...CLOTHES_DEFAULTS, ...(catalog.clothes_rules || {}), ...(settings.clothes_rules || {}) },
     budget_setting: settings.budget ?? catalog.budget ?? 72,
-    ebay: Boolean(catalog.ebay), subito: Boolean(catalog.subito), mercatino: Boolean(catalog.mercatino),
+    ebay: Boolean(catalog.ebay), subito: Boolean(catalog.subito), mercatino: Boolean(catalog.mercatino), reverb: Boolean(catalog.reverb),
   };
   setBudget(view, view.budget_setting);
   setBudget(view, effectiveBudget(view.budget_setting, pool));

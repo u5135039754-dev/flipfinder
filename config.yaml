@@ -78,6 +78,15 @@ mercatino:
   pages_per_run: 2
   daily_cap: 900
 
+# Reverb (reverb.com), official API with a read-only token (REVERB_TOKEN secret). Music searches only, used and Good
+# or better, shipping to Italy, EU sellers unless /reverb all. Only alerts at least 25% under the median Reverb
+# asking price of the same model and condition; profit assumes reselling on Reverb (fees ~8.2% + €0.49). Deals go
+# out without Reverb's photos, and Reverb prices only value Reverb deals (its API terms).
+reverb:
+  enabled: true
+  searches_per_run: 6
+  pool_pages: 2
+
 # Vinted adds a buyer protection fee on top of the price.
 # If the API gives the real total we use that, otherwise this estimate.
 buyer_protection:
