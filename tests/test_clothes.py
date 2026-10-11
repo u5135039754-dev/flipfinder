@@ -3,8 +3,8 @@
 from dataclasses import replace
 
 from flipfinder import config
-from flipfinder.analyzer import (FAKE_SELLER, FAKE_TOO_CHEAP, Rules, assess, brand_matches, clothes_kind,
-                                 fake_risk, find_clothes_comparables, size_rank)
+from flipfinder.analyzer import (FAKE_SELLER, FAKE_TOO_CHEAP, Rules, assess, brand_matches, clothes_kind, colour_of,
+                                 fake_risk, find_clothes_comparables, replica_kind, shoe_size, size_rank)
 from flipfinder.settings import apply_settings
 from flipfinder.telegram import format_deal
 from flipfinder.vinted import Item
@@ -66,7 +66,7 @@ def test_comparables_same_brand_type_and_size_without_fakes():
 def test_a_real_deal_with_fake_risk():
     d = assess(it(1, 85, seller=GOOD_SELLER), pool(), RULES, "stone island", shipping=5)
     assert d and not d.blocked, d and d.blocked
-    assert d.market_value == 160 and d.kind == "hoodie" and d.fake_risk == "medium"   # 53% of the market price
+    assert d.market_value == 160 and d.kind == "hoodie" and d.fake_risk == "medium" and d.fake_base == "medium"   # 53%
     text = format_deal(d)
     assert "Stone Island · hoodie · M" in text
     assert "⚠️ Fake risk: <b>medium</b> 🟡 (53% of the market price)" in text and "inside label, care tag and codes" in text
@@ -91,10 +91,61 @@ def test_seller_trust_and_fake_words():
     assert assess(it(1, 90, brand="No brand", seller=GOOD_SELLER), pool(), RULES, "stone island", shipping=5) is None
 
 
-def test_fake_risk_levels():
-    assert fake_risk(it(1, 140, seller=GOOD_SELLER, desc="con scontrino"), 160)[0] == "low"
-    level, why = fake_risk(it(1, 75, seller={"reviews": 6, "sold": 2}, photos=1), 160)
-    assert level == "high" and "47% of the market price" in why and "1 photo" in why
+def test_fake_risk_levels_and_floors():
+    # the label isn't checked yet (the AI does that from the photos): shown at least medium, the base stays low
+    level, why, base = fake_risk(it(1, 140, seller=GOOD_SELLER, desc="con scontrino"), 160)
+    assert (level, base) == ("medium", "low") and "label photos not checked yet" in why
+    level, why, base = fake_risk(it(1, 70, seller={"reviews": 6, "sold": 2}, photos=1), 160)
+    assert level == base == "high" and "44% of the market price" in why and "1 photo" in why
+    abroad = it(1, 140, seller=GOOD_SELLER)
+    abroad.country = "FR"
+    assert fake_risk(abroad, 160)[2] == "medium"                    # from abroad: at least medium
+    assert fake_risk(it(1, 140, seller=GOOD_SELLER), 160, "replica")[::2] == ("high", "high")
+
+
+REPLICA_RULES = replace(RULES, model="replica", fake_words=tuple(w for w in RULES.fake_words if w != "replica"))
+
+
+def shoe(i, price, title="Maison Margiela Replica bianche", size="42", seller=None, desc=""):
+    return it(i, price, title=title, size=size, brand="Maison Margiela", seller=seller, desc=desc)
+
+
+def test_replica_sneakers_model_colour_and_size():
+    assert replica_kind("Maison Margiela Replica bianche") == "replica low top"
+    assert replica_kind("Margiela Replica high top black") == "replica high top"
+    assert replica_kind("Margiela Tabi boots") is None and replica_kind("Margiela sneakers") is None
+    assert replica_kind("Maison Margiela Gats 42 Oreo") == "replica low top"
+    assert replica_kind("Maison Margiela german army trainer") == "replica low top"
+    assert replica_kind("Margiela Future high top") is None
+    assert colour_of("Replica bianche") == "white" and colour_of("Replica paint splatter") == "paint"
+    assert shoe_size("42,5") == 42.5 and shoe_size("EU 41") == 41
+    pool = ([shoe(100 + n, 250, size=s) for n, s in enumerate(["41", "42", "42.5", "43", "41.5", "42"])]
+            + [shoe(200 + n, 400, title="Margiela Replica high top bianche") for n in range(6)]
+            + [shoe(300 + n, 180, title="Margiela Replica nere") for n in range(6)]
+            + [shoe(400 + n, 250, size="45") for n in range(6)])
+    comps, basis, kind = find_clothes_comparables(shoe(1, 120), pool, REPLICA_RULES, "margiela gat")
+    assert kind == "replica low top" and basis == "Maison Margiela replica low top, white, EU 42 ±1"
+    assert {c.id for c in comps} == {100, 101, 102, 103, 104, 105}   # no high tops, no black ones, no size 45
+    d = assess(shoe(1, 120, seller=GOOD_SELLER), pool, REPLICA_RULES, "margiela gat", shipping=8)
+    assert d and not d.blocked and d.fake_risk == "high" and d.fake_why[0] == "one of the most faked sneakers"
+    assert "insole label, inner tag, sole and box" in format_deal(d)
+
+
+def test_replica_word_allowed_only_for_margiela_replica_sneakers():
+    pool = [shoe(100 + n, 250) for n in range(6)]
+    assert assess(shoe(1, 120, seller=GOOD_SELLER), pool, REPLICA_RULES, "margiela gat", shipping=8)
+    # other fake words still block, "replica" still blocks in every other clothes search
+    assert assess(shoe(1, 120, title="Margiela Replica 1:1 bianche", seller=GOOD_SELLER), pool, REPLICA_RULES,
+                  "margiela gat", shipping=8) is None
+    assert assess(it(1, 90, title="Felpa con cappuccio Stone Island replica", seller=GOOD_SELLER), pool_hoodies(),
+                  RULES, "stone island", shipping=5) is None
+    # another brand's "replica" in the Replica search: not Maison Margiela
+    nike = it(2, 120, title="Replica sneakers bianche", size="42", brand="Nike", seller=GOOD_SELLER)
+    assert assess(nike, pool, REPLICA_RULES, "margiela gat", shipping=8) is None
+
+
+def pool_hoodies():
+    return pool()
 
 
 def test_config_settings_and_scanner_rules(tmp_path):
@@ -113,5 +164,9 @@ def test_config_settings_and_scanner_rules(tmp_path):
     assert rules.clothes and rules.min_profit == 35 and rules.min_roi == 40 and rules.fake_floor == 0.4
     assert "felpa" not in rules.exclude_keywords                    # a sweatshirt here, merch elsewhere
     assert "felpa" in Scanner(cfg)._rules(cfg.searches[0]).exclude_keywords
+    rep = next(s for s in cfg.searches if s.model == "replica")
+    rr = Scanner(cfg)._rules(rep)
+    assert rep.query == "margiela gat" and rep.filters == {} and rep.group == "Clothes"   # Vinted blocks "replica" searches
+    assert "replica" not in rr.fake_words and "replica" in rules.fake_words and rr.model == "replica"
     assert not rules.repairs
     assert rules.abroad and not Scanner(cfg)._rules(cfg.searches[0]).abroad   # EU listings for clothes only

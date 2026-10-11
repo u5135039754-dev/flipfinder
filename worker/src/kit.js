@@ -43,6 +43,8 @@ export const CLOTHES_MEASURES = {
   sweatshirt: "chest (armpit to armpit) · length (back collar to hem) · sleeves (shoulder seam to cuff)",
   hoodie: "chest (armpit to armpit) · length (back collar to hem, not the hood) · sleeves (shoulder seam to cuff)",
   jacket: "chest (armpit to armpit, zipped) · length (back collar to hem) · sleeves (shoulder seam to cuff) · shoulders (seam to seam)",
+  "replica low top": "EU size and insole length (heel to toe, in cm); photograph the insole label, inner tag, both soles and the box",
+  "replica high top": "EU size and insole length (heel to toe, in cm); photograph the insole label, inner tag, both soles and the box",
 };
 
 /** The AI's kit ("PLATFORM: ...", "TITLE: ...", "DESCRIPTION:" lines up to END, "PHOTOS: ...", "PACKAGE: ..."). */
@@ -86,7 +88,8 @@ export function kitText(d, kit) {
   lines.push(`🛒 Where: <b>${esc(kit.platform)}</b>${kit.why ? `, ${esc(kit.why)}` : ""}`,
     `🏷 Title: <code>${esc(kit.title)}</code>`, `📝 Description:\n<code>${esc(kit.description)}</code>`);
   if (d.clothes) {
-    lines.push(`📏 Measure it laid flat: ${CLOTHES_MEASURES[d.clothes.kind] || CLOTHES_MEASURES.knit}`);
+    lines.push(/^replica/.test(d.clothes.kind || "") ? `📏 ${CLOTHES_MEASURES[d.clothes.kind]}`
+      : `📏 Measure it laid flat: ${CLOTHES_MEASURES[d.clothes.kind] || CLOTHES_MEASURES.knit}`);
     if (kit.platform !== "Vestiaire Collective") lines.push("💡 Or Vestiaire Collective: buyers pay more for checked designer pieces, worth it from ~€150");
   }
   if (kit.photos.length) lines.push(`📸 Photos: ${kit.photos.map((x) => esc(x)).join(" · ")}`);

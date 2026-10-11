@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setup, msg, tap, addDeal, MARCO } from "./helpers.js";
-import { AI, LABEL_QUESTION, SYSTEM } from "../src/ai.js";
+import { AI, LABEL_QUESTION, REPLICA_QUESTION, SYSTEM } from "../src/ai.js";
 import { dealTopic } from "../src/group.js";
 import { kitText, parseKit, plainKit } from "../src/kit.js";
 
@@ -59,7 +59,7 @@ test("the AI's fake check: no clear label photo caps it at 'if the seller sends 
   const ai = new AI({ settings: {}, view: async () => ({ rules: { min_profit: 25 }, clothes_rules: { min_profit: 30 } }) }, "k");
   const r1 = await ai.finish(d, check("FAKE: low | LABEL: no | WHY: none"));
   assert.equal(r1.lines[0], "✅ YES, if the seller sends label photos. €60 profit.");
-  assert.equal(r1.lines[2], "⚠️ Fake risk: low 🟢 · no clear label photo");
+  assert.equal(r1.lines[2], "⚠️ Fake risk: medium 🟡 · no clear label photo");   // no label photo: at least medium
   const r2 = await ai.finish(d, check("FAKE: low | LABEL: yes | WHY: none"));
   assert.equal(r2.lines[0], "✅ YES. €60 profit.");
   assert.equal(r2.lines[2], "⚠️ Fake risk: low 🟢");
@@ -86,7 +86,7 @@ test("❓ Seller questions for clothes always start with the label, care tag and
   const u = tap(`aq:${key}`, { user: MARCO, chat: -100 });
   u.callback_query.message.message_id = 8;
   await t.update(u);
-  assert.match(t.tg.claude[0].body.messages[0].content.at(-1).text, /label, care tag and code photos is already asked/);
+  assert.match(t.tg.claude[0].body.messages[0].content.at(-1).text, /label, tag, sole and box photos is already asked/);
   const post = t.tg.texts().at(-1);
   const codes = [...post.matchAll(/<code>(.+?)<\/code>/g)].map((m) => m[1]);
   assert.equal(codes.length, 2);
@@ -107,4 +107,48 @@ test("the listing kit for clothes: what to measure, Vinted or Vestiaire Collecti
   const vinted = kitText(d, { ...kit, platform: "Vinted" });
   assert.match(vinted, /💡 Or Vestiaire Collective/);
   assert.match(plainKit(d, "").description, /Taglia M\. Misure: petto \[__\] cm, lunghezza \[__\] cm, maniche \[__\] cm\./);
+});
+
+test("fake risk floors: abroad and no label photo at least medium, the scanner's base kept; only the AI's own high is a NO", async () => {
+  const ai = new AI({ settings: {}, view: async () => ({ rules: { min_profit: 25 }, clothes_rules: { min_profit: 30 } }) }, "k");
+  const base = { group: "Clothes", value: 120, cost: 60, item: { price: 60, country: "IT" }, clothes: { ...CLOTHES, fake_base: "low" } };
+  const shown = async (d, fake) => (await ai.finish(d, check(fake))).lines[2];
+  assert.equal(await shown(base, "FAKE: low | LABEL: yes | WHY: none"), "⚠️ Fake risk: low 🟢");
+  assert.match(await shown({ ...base, item: { price: 60, country: "FR" } }, "FAKE: low | LABEL: yes | WHY: none"), /medium/);
+  assert.match(await shown({ ...base, clothes: { ...CLOTHES, fake_base: "high" } }, "FAKE: low | LABEL: yes | WHY: none"), /high/);
+  // a high shown from the scanner's base isn't a NO: only the AI seeing a fake in the photos is
+  assert.equal((await ai.finish({ ...base, clothes: { ...CLOTHES, fake_base: "high" } }, check("FAKE: low | LABEL: yes | WHY: none"))).verdict, "yes");
+});
+
+test("Margiela Replica sneakers: always high, at most 'YES, if the seller sends photos of...', their own seller question", async () => {
+  const ai = new AI({ settings: {}, view: async () => ({ rules: { min_profit: 25 }, clothes_rules: { min_profit: 30 } }) }, "k");
+  const d = { group: "Clothes", value: 250, cost: 120, item: { price: 120, country: "IT" },
+    clothes: { kind: "replica low top", size: "42", brand: "Maison Margiela", fake_risk: "high", fake_base: "high", fake_why: [] } };
+  const r = await ai.finish(d, check("FAKE: low | LABEL: yes | WHY: none"));
+  assert.equal(r.lines[0], "✅ YES, if the seller sends photos of the insole label, inner tag, sole and box. €130 profit.");
+  assert.equal(r.lines[2], "⚠️ Fake risk: high 🔴");
+  assert.equal(r.verdict, "yes");
+  assert.equal((await ai.finish(d, check("FAKE: high | LABEL: yes | WHY: heel stitches look wrong"))).lines[0],
+    "❌ NO. High fake risk: heel stitches look wrong.");
+  const t = await setup({ settings: { allowed_users: [MARCO], ai: { enabled: true } } });
+  t.env.ANTHROPIC_API_KEY = "k";
+  const key = await addDeal(t.store, { group: "Clothes", clothes: d.clothes, item: { price: 120, photos: ["https://img/1.jpg"] } });
+  t.tg.answerClaude = () => text("IT: Le hai mai lavate? | EN: Ever washed them?");
+  const u = tap(`aq:${key}`, { user: MARCO, chat: -100 });
+  u.callback_query.message.message_id = 8;
+  await t.update(u);
+  const codes = [...t.tg.texts().at(-1).matchAll(/<code>(.+?)<\/code>/g)].map((m) => m[1]);
+  assert.match(codes[0], /soletta.*taglia.*suola.*scatola e del dust bag.*prova d'acquisto/);
+  assert.equal(codes[1], "Le hai mai lavate?");
+  assert.match(REPLICA_QUESTION, /insole label, the inner size tag, the sole, the box and dust bag, and proof of purchase/);
+  assert.match(SYSTEM, /four white stitches at the heel/);
+});
+
+test("the Clothes intro lists the Replica sneakers; the kit says what to measure on them", async () => {
+  const { INTROS } = await import("../src/group.js");
+  assert.ok(INTROS.clothes.includes("Knitwear, cardigans, hoodies, sweatshirts, jackets, Margiela Replica sneakers"));
+  const d = { n: 5, title: "Margiela Replica", clothes: { kind: "replica low top", size: "42" } };
+  const out = kitText(d, { ...parseKit("PLATFORM: Vinted\nTITLE: Maison Margiela Replica 42\nDESCRIPTION:\nScarpe.\nEND\nPHOTOS: a\nPACKAGE: b"),
+    prices: { price: 250, lowest: 180, quick: 220 } });
+  assert.match(out, /📏 EU size and insole length/);
 });

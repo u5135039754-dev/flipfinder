@@ -62,6 +62,11 @@ clothes:
   shipping_cost: 6
   resell_costs: 2
   abroad: true               # Italy alone gives almost no deals: EU listings too (shipping and arrival time on the deal)
+  replica:                   # Maison Margiela Replica sneakers: the one shoe in Clothes ("replica" is allowed only here)
+    # Vinted returns nothing for any search with "replica" in it, and its shoe categories break the text
+    # search, so: "margiela gat" in every category. Only listings naming the model (replica, GAT, German
+    # Army Trainer) with a shoe size count.
+    query: margiela gat
 
 # Vinted adds a buyer protection fee on top of the price.
 # If the API gives the real total we use that, otherwise this estimate.

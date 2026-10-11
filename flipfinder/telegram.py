@@ -83,8 +83,9 @@ FAKE_ICONS = {"high": "🔴", "medium": "🟡", "low": "🟢"}
 def fake_line(deal: Deal) -> str:
     """'⚠️ Fake risk: medium 🟡 (only 8 reviews, 2 photos) · ask for label photos'."""
     why = f" ({html.escape(', '.join(deal.fake_why))})" if deal.fake_why else ""
-    return (f"⚠️ Fake risk: <b>{deal.fake_risk}</b> {FAKE_ICONS.get(deal.fake_risk, '')}{why} · "
-            "ask for photos of the inside label, care tag and codes")
+    ask = ("ask for photos of the insole label, inner tag, sole and box" if deal.kind.startswith("replica")
+           else "ask for photos of the inside label, care tag and codes")
+    return f"⚠️ Fake risk: <b>{deal.fake_risk}</b> {FAKE_ICONS.get(deal.fake_risk, '')}{why} · {ask}"
 
 
 # where vinted.it listings come from, and how long Vinted's cross-border parcels usually take

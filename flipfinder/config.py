@@ -37,6 +37,7 @@ class Search:
     vinted_only: bool = False            # no eBay or Subito for this search
     allow_keywords: list[str] = field(default_factory=list)   # global exclude words that don't apply here ("felpa")
     slot: int | None = None              # stagger slot (0/1) instead of the group's
+    model: str = ""                      # clothes: "replica" = Maison Margiela Replica sneakers
 
 
 @dataclass
@@ -58,12 +59,15 @@ class ClothesSettings:
     shipping_cost: float = 6
     resell_costs: float = 2
     abroad: bool = False                 # also listings shipping from other countries (clothes only; /abroad stays for the rest)
+    replica: dict = field(default_factory=dict)   # {query, catalog}: the Margiela Replica sneaker search
 
 
-def clothes_search(c: ClothesSettings, brand: str, index: int = 0, added: bool = False) -> Search:
+def clothes_search(c: ClothesSettings, brand: str, index: int = 0, added: bool = False, model: str = "",
+                   catalog: list | None = None) -> Search:
     """One brand's search; brands alternate between the two stagger slots so each run has half of them."""
-    return Search(query=brand.lower().strip(), price_from=c.price_from, price_to=c.price_to,
-                  filters={"catalog": list(c.catalog)}, exclude_keywords=list(c.exclude_keywords),
+    return Search(query=brand.lower().strip(), price_from=c.price_from, price_to=c.price_to, model=model,
+                  filters={"catalog": list(c.catalog if catalog is None else catalog)} if (c.catalog if catalog is None else catalog) else {},
+                  exclude_keywords=list(c.exclude_keywords),
                   shipping_cost=c.shipping_cost, resell_costs=c.resell_costs, max_roi=c.max_roi,
                   group="Clothes", clothes=True, vinted_only=True, allow_keywords=list(c.allow_keywords),
                   slot=index % 2, added=added)
@@ -205,9 +209,13 @@ def load(path: str | Path = "config.yaml") -> Config:
         shipping_cost=float(cr.get("shipping_cost", 6)),
         resell_costs=float(cr.get("resell_costs", 2)),
         abroad=bool(cr.get("abroad", False)),
+        replica=dict(cr.get("replica") or {}),
     )
     taken = {s.query.lower() for s in searches}
     searches += [clothes_search(clothes, b, i) for i, b in enumerate(clothes.brands) if b.lower() not in taken]
+    if clothes.replica.get("query"):   # Maison Margiela Replica sneakers: the one shoe in Clothes, its own categories
+        searches.append(clothes_search(clothes, clothes.replica["query"], len(clothes.brands), model="replica",
+                                       catalog=[int(x) for x in clothes.replica.get("catalog", [])]))   # [] = every category
     if not searches:
         raise SystemExit("No searches in config.yaml, add at least one.")
     budget = float(raw.get("budget", 72))

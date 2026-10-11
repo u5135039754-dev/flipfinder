@@ -57,6 +57,7 @@ What to look for:
 - Missing parts: power supply, cables, case, controller, charger, strap, box, accessories shown in other listings.
 - Locked or stolen risk (phones, tablets, consoles, laptops): iCloud, Google or account lock, blacklisted IMEI, "for parts", no box or receipt with a very low price, a brand-new seller.
 - Designer clothes (the listing says "category: designer clothes"): fakes are the main risk. Look for a clear photo of the inside neck label and the care/wash tag, and check the stitching, the logo or badge (shape, font, spacing, placement), buttons and zips, and any codes (QR, serial, Certilogo, hologram). Missing label photos, stock or catalogue photos, a blurry logo, or a price far below the market all raise the risk. Clothes are never repaired: stains, holes or pilling are a RISK, PARTS stays 0.
+- Maison Margiela Replica sneakers (kind "replica low top" or "replica high top"): one of the most faked sneakers. Check the insole label (font, the white tag with the numbers), the four white stitches at the heel, the inner size tag, the sole (text and shape), the box label and dust bag. LABEL is yes only with clear photos of the insole label and inner tag. A FAKE of high means signs of a fake in the photos, not just the model's reputation.
 - Repairs: the team repairs everything itself, so a repair costs only the part. Name the part and a typical price for it in Italy (AliExpress, Amazon or iFixit, aftermarket part). Difficulty: 🟢 easy (battery, iPad glass, buttons, controller sticks, guitar jacks or pots) / 🟡 medium (iPhone screen, back glass, charging port) / 🔴 hard (camera, Face ID, logic board or anything with soldering). A 🔴 repair is a NO unless the profit after the part is very high.
 
 Quick check format, exactly these 4 lines, nothing before or after:
@@ -94,6 +95,12 @@ Questions: answer in at most 5 short lines using the listing, the thread so far 
 // ❓ Seller questions for clothes always start with this one
 export const LABEL_QUESTION = "IT: Potresti mandarmi foto chiare dell'etichetta interna, dell'etichetta di lavaggio e di eventuali " +
   "codici (QR, seriale, ologramma)? | EN: Could you send clear photos of the inside label, the care tag and any codes (QR, serial, hologram)?";
+
+// ...and for Margiela Replica sneakers, this one
+export const REPLICA_QUESTION = "IT: Potresti mandarmi foto ravvicinate dell'etichetta sulla soletta, dell'etichetta interna con la taglia, " +
+  "della suola, della scatola e del dust bag, e una prova d'acquisto se ce l'hai? | EN: Could you send close-ups of the insole label, " +
+  "the inner size tag, the sole, the box and dust bag, and proof of purchase if you have it?";
+const RISK = ["low", "medium", "high"];
 
 const TOOLS = [
   { name: "get_deal", description: "One of our deals by its number (#n): listing, prices, market value, status. Read-only.",
@@ -398,18 +405,27 @@ export class AI {
     // a question isn't a condition ("Which Pencil model?"): left out
     const cond = /\?/.test(field("IF")) ? "" : clip(field("IF").replace(/^if\s+/i, ""), 50);
     const afterPart = fixed ? ` after the ~€${Math.round(parts)} part` : "";
-    // designer clothes: the AI's fake risk from the photos; no clear label photo caps a YES at "if the seller sends label photos"
+    // designer clothes: the AI's fake risk from the photos. Only the AI's own "high" (signs of a fake in the photos) is a NO;
+    // no clear label photo caps a YES at "if the seller sends label photos", Margiela Replica sneakers always at their photo list
     const fk = d.clothes ? text.match(/^\s*FAKE:\s*(low|medium|high)\b[^|\n]*(?:\|\s*LABEL:\s*(yes|no)\b)?[^|\n]*(?:\|\s*WHY:\s*(.+?))?\s*$/im) : null;
-    const fake = fk ? fk[1].toLowerCase() : d.clothes ? "medium" : null;
+    const aiFake = fk ? fk[1].toLowerCase() : null;
     const label = fk?.[2] ? fk[2].toLowerCase() === "yes" : false;
+    const replica = /^replica/.test(d.clothes?.kind || "");
+    // what's shown: never under the scanner's base (price, seller, abroad), at least medium without a clear label photo or from
+    // abroad, always high for Replica sneakers
+    const floors = d.clothes ? [aiFake || "medium", d.clothes.fake_base || "low", label ? "low" : "medium",
+      d.item?.country && d.item.country !== "IT" ? "medium" : "low", replica ? "high" : "low"] : [];
+    const fake = d.clothes ? RISK.reduce((top, r) => (floors.includes(r) ? r : top), "low") : null;
     const fakeWhy = fk?.[3] && !/^(none|n\/a|-)$/i.test(fk[3]) ? clip(fk[3].replace(/\.$/, ""), 70) : "";
     let first;
     if (flag) first = `❌ NO. ${flag[0].toUpperCase()}${flag.slice(1)}.`;
-    else if (fake === "high") first = `❌ NO. High fake risk${fakeWhy ? `: ${fakeWhy}` : " from the photos"}.`;
+    else if (aiFake === "high") first = `❌ NO. High fake risk${fakeWhy ? `: ${fakeWhy}` : " from the photos"}.`;
     else if (difficulty === "hard" && profit !== null && profit < 2 * minProfit) {
       first = `❌ NO. The 🔴 ${part ? `${part} repair` : "repair"} eats the profit.`;
     } else if (profit !== null && profit < minProfit) {
       first = profit < 0 ? `❌ NO. It loses €${-profit}${afterPart}.` : `❌ NO. Only €${profit} profit${afterPart}.`;
+    } else if (replica) {
+      first = `✅ YES, if the seller sends photos of the insole label, inner tag, sole and box.${profit !== null ? ` €${profit} profit.` : ""}`;
     } else if (d.clothes && !label) {
       first = `✅ YES, if the seller sends label photos.${profit !== null ? ` €${profit} profit.` : ""}`;
     } else first = `✅ YES${cond ? `, if ${cond}` : ""}.${profit !== null ? ` €${profit} profit${afterPart}.` : ""}`;
@@ -423,7 +439,7 @@ export class AI {
     if (fake) lines.push(`⚠️ Fake risk: ${fake} ${{ high: "🔴", medium: "🟡", low: "🟢" }[fake]}` +
       `${fakeWhy ? ` (${fakeWhy})` : ""}${label ? "" : " · no clear label photo"}`);
     return { verdict, lines, offer, offer_line: offerLine, red_flag: flag || null,
-      profit: fixed ? profit : null, parts: partsTotal, part, ...(fake ? { fake, label } : {}) };
+      profit: fixed ? profit : null, parts: partsTotal, part, ...(fake ? { fake, label, ai_fake: aiFake } : {}) };
   }
 
   /** The check as text (for threads, the test endpoint and 📊 Numbers). */
@@ -539,14 +555,15 @@ export class AI {
       if (why) return { error: why };
       await this.count(user);
       const task = "Task: seller questions (seller questions format)." +
-        (d.clothes ? " The question about label, care tag and code photos is already asked: write 1 or 2 others." : "") +
+        (d.clothes ? " The question about label, tag, sole and box photos is already asked: write 1 or 2 others." : "") +
         (d.ai?.text ? `\n<thread>\nquick check so far:\n${d.ai.text}\n</thread>` : "");
       const raw = await this.run([{ role: "user", content: await this.dealContent(d, task) }], { maxLines: 4 });
       if (!raw) return { error: DOWN_TEXT };
       const fresh = (await this.bot.store.deal(key)) || d;
       // clothes: the label/care tag/codes question always comes first, whatever the AI wrote
+      const first = /^replica/.test(d.clothes?.kind || "") ? REPLICA_QUESTION : LABEL_QUESTION;
       fresh.ai_questions = d.clothes
-        ? [LABEL_QUESTION, ...raw.split("\n").filter((l) => l.trim() && !/etichett/i.test(l)).slice(0, 2)].join("\n") : raw;
+        ? [first, ...raw.split("\n").filter((l) => l.trim() && !/etichett|soletta|scatola|suola/i.test(l)).slice(0, 2)].join("\n") : raw;
       await this.bot.store.saveDeal(key, fresh);
       d = fresh;
     }

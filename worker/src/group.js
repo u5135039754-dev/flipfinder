@@ -64,7 +64,7 @@ export const INTROS = {
     "Maison Margiela · Acne Studios · Stone Island · C.P. Company · Carhartt WIP · Arc'teryx · Ralph Lauren · Stüssy",
     "",
     "<b>👔 What</b>",
-    "Knitwear, cardigans, hoodies, sweatshirts, jackets",
+    "Knitwear, cardigans, hoodies, sweatshirts, jackets, Margiela Replica sneakers",
     "",
     "<b>🌍 From abroad</b>",
     "Shipping is included in the price, arrival time is shown on the deal",

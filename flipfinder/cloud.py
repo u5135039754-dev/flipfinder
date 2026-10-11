@@ -36,7 +36,7 @@ def deal_record(deal: Deal) -> dict:
         "repair": ({"part": deal.repair.part, "parts": deal.repair.parts, "cost": deal.repair.cost,
                     "difficulty": deal.repair.difficulty, "iphone_part": deal.repair.iphone_part} if deal.repair else None),
         **({"clothes": {"kind": deal.kind, "size": it.size, "brand": it.brand, "fake_risk": deal.fake_risk,
-                        "fake_why": deal.fake_why}} if deal.fake_risk else {}),
+                        "fake_why": deal.fake_why, "fake_base": deal.fake_base}} if deal.fake_risk else {}),
         # what the market value was worked out from, for the AI check
         "comparables": [{"title": c.title[:80], "price": c.price, "condition": c.condition, "source": c.source}
                         for c in (deal.sample or [])[:8]],

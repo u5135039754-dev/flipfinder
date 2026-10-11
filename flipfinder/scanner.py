@@ -351,7 +351,9 @@ class Scanner:
             rules = replace(rules, min_profit=float(c.rules["min_profit"]), min_roi=float(c.rules["min_roi"]),
                             min_rating=int(c.rules["min_rating"]), min_comparables=c.min_comparables, clothes=True,
                             fake_floor=c.fake_floor, seller_min_reviews=c.seller_min_reviews,
-                            seller_min_stars=c.seller_min_stars, fake_words=tuple(c.fake_words), repairs=False,
+                            seller_min_stars=c.seller_min_stars, repairs=False, model=s.model,
+                            # "replica" is the model's name in the Margiela Replica search, a fake word everywhere else
+                            fake_words=tuple(w for w in c.fake_words if not (s.model == "replica" and w.lower() == "replica")),
                             abroad=rules.abroad or c.abroad)
         now = time.time()
         tracked, scale = self.sold.coverage(_key(s), now)

@@ -52,6 +52,7 @@ class Deal:
     kind: str = ""                 # clothes: cardigan, knit, hoodie, sweatshirt or jacket
     fake_risk: str = ""            # clothes: high, medium or low (fake_risk())
     fake_why: list = field(default_factory=list)   # clothes: what raised or lowered the risk
+    fake_base: str = ""            # clothes: the risk without the "label not checked yet" floor (the AI checks the photos)
 
 
 @dataclass
@@ -84,6 +85,7 @@ class Rules:
     seller_min_reviews: int = 0     # skip sellers with fewer reviews...
     seller_min_stars: float = 0.0   # ...or a lower rating
     fake_words: tuple[str, ...] = ()   # replica, 1:1...: skipped in titles (and descriptions, see assess)
+    model: str = ""                 # clothes: "replica" = the Maison Margiela Replica sneaker search
     # rating knobs: profit/roi at which that part of the score maxes out
     rating_profit_cap: float = 50.0
     rating_roi_cap: float = 150.0
@@ -385,8 +387,46 @@ NOT_GARMENT = re.compile(r"\b(gilet|smanicato|scarpe|sneakers?|stivali|borsa|bor
                          r"mutande|calzini|intimo|portafoglio|portachiavi)\b")
 
 
-def clothes_kind(title: str) -> str | None:
+REPLICA = "replica"   # the Maison Margiela Replica sneaker: the only shoe in Clothes
+REPLICA_NOT = re.compile(r"\b(tabi|future|evolution|spliced|runner|fusion|stival[ei]|boots?|ciabatt[ae]|sandal[oi]?|sandals?|mules?|slides?|infradito|kids|bambin[oi])\b")
+REPLICA_HIGH = re.compile(r"\b(high|hi|alte|alta|alto|mid|montante|haute|hightop|high top)\b")
+
+
+REPLICA_NAMES = re.compile(r"\b(replica|gats?|german army|army trainers?)\b")   # how sellers name the model
+
+
+def replica_kind(title: str) -> str | None:
+    """'replica low top' or 'replica high top'; None for other Margiela shoes (Tabi, Future, boots...) or no model name."""
+    t = " ".join(normalize_text(title))
+    if not REPLICA_NAMES.search(t) or REPLICA_NOT.search(t):
+        return None
+    return "replica high top" if REPLICA_HIGH.search(t) else "replica low top"
+
+
+COLOURS = [   # first match wins; the canonical name is what comparables must share
+    ("paint", r"paint(er)?|vernice|splatter|pittura"), ("white", r"white|bianc(o|a|hi|he)|blanc(he)?|blanco|weiss|weiß"),
+    ("black", r"black|ner[oaie]|noir(e)?|negro|schwarz"), ("grey", r"gr[ae]y|grigi[oae]|gris|grau"),
+    ("beige", r"beige|cream|crema|ecru|off white|panna"), ("navy", r"navy|blu|blue|bleu|azul"),
+    ("brown", r"brown|marron[ei]?|marrone|braun|cognac|tan"), ("green", r"green|verd[ei]|vert|khaki|olive"),
+    ("red", r"red|ross[oaie]|rouge|rojo|bordeaux|burgundy"), ("pink", r"pink|rosa|rose"),
+]
+
+
+def colour_of(title: str) -> str | None:
+    t = " ".join(normalize_text(title))
+    return next((name for name, rx in COLOURS if re.search(rf"\b({rx})\b", t)), None)
+
+
+def shoe_size(size: str) -> float | None:
+    """EU shoe size (36-48, halves too) from the listing's size field."""
+    m = re.search(r"\b(3[4-9]|4[0-9])(?:[.,](5))?\b", size)
+    return float(m.group(1)) + (0.5 if m.group(2) else 0) if m else None
+
+
+def clothes_kind(title: str, model: str = "") -> str | None:
     """cardigan, hoodie, jacket, sweatshirt or knit from the title; None when it's something else or unclear."""
+    if model == REPLICA:
+        return replica_kind(title)
     t = " ".join(normalize_text(title))
     # "sans capuche", "senza cappuccio", "without hood" is a plain sweatshirt
     t = re.sub(r"\b(sans|senza|without|no|sin|ohne|zonder) (la |il |de |the )?(capuche|cappuccio|hood|hoodie|capucha|kapuze)\b",
@@ -427,14 +467,28 @@ def find_clothes_comparables(item: Item, pool: list[Item], rules: Rules, query: 
     else one size either side. Listings that look like fakes are left out: their words, and prices
     under fake_floor of the group's median. (comparables, basis, kind)
     """
-    kind = clothes_kind(item.title)
+    kind = clothes_kind(item.title, rules.model)
     if kind is None or not item.brand:
         return [], "not one of our garment types", None
     brand = item.brand.lower()
-    others = [p for p in pool if p.id != item.id and p.brand.lower() == brand and clothes_kind(p.title) == kind
+    others = [p for p in pool if p.id != item.id and p.brand.lower() == brand and clothes_kind(p.title, rules.model) == kind
               and not is_excluded(p, rules.fake_words)]
-    mine = size_rank(item.size)
     basis = f"{item.brand} {kind}"
+    if rules.model == REPLICA:
+        colour = colour_of(item.title)
+        if colour:   # same colourway; a title without one is compared with the whole model
+            others = [p for p in others if colour_of(p.title) == colour]
+            basis += f", {colour}"
+        mine_eu = shoe_size(item.size)
+        if mine_eu is None:
+            return [], f"{basis}: no shoe size", kind
+        others = [p for p in others if shoe_size(p.size) is not None and abs(shoe_size(p.size) - mine_eu) <= 1]
+        basis += f", EU {mine_eu:g} ±1"
+        if rules.fake_floor and len(others) >= 4:
+            floor = median(p.price for p in others) * rules.fake_floor
+            others = [p for p in others if p.price >= floor]
+        return others, basis, kind
+    mine = size_rank(item.size)
     if mine is not None:
         same = [p for p in others if size_rank(p.size) == mine]
         near = [p for p in others if size_rank(p.size) is not None and abs(size_rank(p.size) - mine) <= 1]
@@ -472,11 +526,28 @@ _PROOF = re.compile(r"\b(scontrino|ricevuta|receipt|fattura|invoice|cartellin[oi
                     r"codice|qr|certificat[oi]|ologramma|hologram)\b")
 
 
-def fake_risk(item: Item, value: float) -> tuple[str, list[str]]:
+RISK_LEVELS = ["low", "medium", "high"]
+
+
+def fake_risk(item: Item, value: float, model: str = "") -> tuple[str, list[str], str]:
     """
-    High, medium or low, and why: how far under the market it is, the seller's history, how many
-    photos there are, and whether the seller mentions a receipt, tags or codes.
+    (shown level, why, base level). The base: how far under the market it is, the seller's history, how
+    many photos there are, whether the seller mentions a receipt, tags or codes; at least medium from
+    abroad; always high for Margiela Replica sneakers. Shown: at least medium too while nobody has
+    checked the label photos (the AI does that from the photos).
     """
+    level, why = _risk_points(item, value)
+    if item.country and item.country != HOME_COUNTRY and level == "low":
+        level = "medium"
+        why.append("ships from abroad")
+    if model == REPLICA:
+        level = "high"
+        why.insert(0, "one of the most faked sneakers")
+    shown = level if level != "low" else "medium"
+    return shown, why + ([] if level != "low" else ["label photos not checked yet"]), level
+
+
+def _risk_points(item: Item, value: float) -> tuple[str, list[str]]:
     points, why = 0, []
     share = item.price / value if value else 1.0
     if share < 0.55:   # every deal is under the market; only a deep cut points to a fake
@@ -503,7 +574,8 @@ def _clothes_value(item: Item, pool: list[Item], rules: Rules, query: str) -> tu
     text = " ".join(normalize_text(item.description))
     desc_fake = any(re.search(rf"\b{re.escape(' '.join(normalize_text(w)))}\b", text)
                     for w in rules.fake_words if w not in TITLE_ONLY_FAKE_WORDS)
-    if not brand_matches(item.brand, query) or is_excluded(item, rules.fake_words) or desc_fake:
+    brand_query = "margiela" if rules.model == REPLICA else query   # "Maison (Martin) Margiela"; the model is in the title
+    if not brand_matches(item.brand, brand_query) or is_excluded(item, rules.fake_words) or desc_fake:
         return None, [], "", ""
     others, basis, kind = find_clothes_comparables(item, pool, rules, query)
     kept = remove_outliers([p.price for p in others])
@@ -734,8 +806,8 @@ def assess(item: Item, pool: list[Item], rules: Rules, query: str = "",
     hard = [k for k in rules.exclude_keywords if not is_damage_word(k)]
     if is_excluded(item, hard):
         return None
-    if query and not is_relevant(item.title, query, item.brand):
-        return None
+    if query and rules.model != REPLICA and not is_relevant(item.title, query, item.brand):
+        return None   # (the Replica search finds the model by its names instead: replica_kind)
     if item.country and item.country != HOME_COUNTRY and not rules.abroad:
         return None   # ships from abroad: off unless /abroad on
     fix = None
@@ -775,14 +847,14 @@ def assess(item: Item, pool: list[Item], rules: Rules, query: str = "",
     seller_block, seller_warn = seller_check(item.seller, roi)
     if seller_block:
         blocked.append(seller_block)
-    risk, risk_why = "", []
+    risk, risk_why, risk_base = "", [], ""
     if rules.clothes:
         if rules.fake_floor and item.price < rules.fake_floor * asking:
             blocked.append(f"{FAKE_TOO_CHEAP} ({item.price / asking:.0%} of the {kind} median): likely fake")
         trust = clothes_seller_block(item.seller, rules)
         if trust:
             blocked.append(trust)
-        risk, risk_why = fake_risk(item, asking)
+        risk, risk_why, risk_base = fake_risk(item, asking, rules.model)
     by_price = sorted(comps, key=lambda p: p.price)
     sample = [by_price[i * (n - 1) // 4] for i in range(5)]   # cheapest, quartiles, priciest
     deal = Deal(item, value, n, profit, roi, rating, basis, sample,
@@ -792,7 +864,7 @@ def assess(item: Item, pool: list[Item], rules: Rules, query: str = "",
                 cost=round(cost, 2), missing_part=missing, budget=rules.budget, check=rules.check,
                 asking_value=asking, sold_count=sold_n, sell_days=sell_days,
                 demand=demand(item, comps, rules, query, sell_days), seller_warnings=seller_warn, repair=fix,
-                kind=kind, fake_risk=risk, fake_why=risk_why)
+                kind=kind, fake_risk=risk, fake_why=risk_why, fake_base=risk_base)
     # How close it came: the weakest of profit/ROI/rating as a share of what the rule needs
     deal.closeness = round(min(
         1.0,
