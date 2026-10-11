@@ -257,6 +257,9 @@
   .sform { display: grid; gap: 12px; margin-bottom: 12px; }
   .preview { background: var(--soft); border-radius: 12px; padding: 10px 12px; font-size: 14px; display: grid; gap: 4px; }
   .chip:disabled { opacity: 0.5; }
+  /* full width between the card's 16px margins, like the rows above it */
+  .addbtn { display: flex; width: calc(100% - 32px); margin-top: 12px; }
+  .addbtn svg { flex: none; display: block; }
   .switch input:disabled + span { opacity: 0.45; }
   nav button.on svg { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 
@@ -945,8 +948,11 @@ function searchesSection(d) {
       }
       if (!tp.searches.length && tp.key !== "repairs") body.push(h("div", { class: "label", style: "padding:8px 2px" }, "No searches yet"));
       if (tp.can_add) {
-        body.push(h("button", { class: "btn" + (S.can_edit ? " primary" : ""), style: "width:100%;margin-top:10px",
-          onclick: () => searchForm(d, tp, null) }, S.can_edit ? "➕ Add search" : "💡 Suggest a search"));
+        const plus = svg("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "2.4",
+          "stroke-linecap": "round", width: "18", height: "18", "aria-hidden": "true" });
+        plus.innerHTML = '<path d="M12 5v14M5 12h14"/>';   // fixed icon path
+        body.push(h("button", { class: "btn addbtn" + (S.can_edit ? " primary" : ""), onclick: () => searchForm(d, tp, null) },
+          ...(S.can_edit ? [plus, "Add search"] : ["💡 Suggest a search"])));
       }
     }
     out.push(h("div", { class: "card topic" + (open ? " open" : "") }, head, ...body));
