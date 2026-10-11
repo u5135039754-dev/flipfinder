@@ -116,3 +116,13 @@ test("import moves deals.json and settings.json, keeps numbers and the queue", a
   assert.equal((await t.api("POST", "/api/deal", deal(3, 40))).body.n, 3);           // numbering continues
   assert.ok((await t.api("POST", "/api/import", { deals })).body.error);             // not twice by accident
 });
+
+test("POST /api/owner_dm: a plain-text note to the owner only, never the group", async () => {
+  const t = await setup();
+  const r = await t.api("POST", "/api/owner_dm", { text: "Need you: <check> the deploy" });
+  assert.equal(r.body.sent, true);
+  const sent = t.tg.sent();
+  assert.deepEqual(sent.map((p) => String(p.chat_id)), [String(OWNER)]);
+  assert.equal(sent[0].text, "Need you: &lt;check&gt; the deploy");
+  assert.equal((await t.api("POST", "/api/owner_dm", { text: " " })).body.sent, false);
+});

@@ -45,7 +45,7 @@ test("start and end duty: group posts, the pinned message, handover, who may end
   await t.cron(at(9));                                                  // posts and pins "On duty now"
   const pin = t.tg.sent().find((p) => p.text?.startsWith("👮 <b>Nobody is on duty"));
   assert.ok(pin && t.tg.sent("pinChatMessage").length === 1);
-  assert.deepEqual(pin.reply_markup.inline_keyboard.flat().map((b) => b.callback_data), ["duty:on", "duty:off", "duty:swap"]);
+  assert.deepEqual(pin.reply_markup.inline_keyboard.flat().map((b) => b.callback_data), ["duty:on", "duty:off", "duty:swap", "duty:ask"]);
   t.tg.clear();
   await tapAt(t, "duty:on", MARCO, at(9, 5));
   assert.ok(inGroup(t).some((x) => x.includes('Marco</a> is on duty (until 22:00)')));

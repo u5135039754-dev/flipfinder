@@ -75,7 +75,7 @@ export async function snapshot(bot, user) {
   return {
     me: { id: user.id, name: [user.first_name, user.last_name].filter(Boolean).join(" "), owner: user.id === bot.ownerId,
       manager: bot.team.isManager(user.id), team: bot.team.active },
-    schedule: await bot.team.grid(),
+    schedule: await bot.team.gridFor(user.id),
     stats: await dailyStats(bot, { days: 30 }),
     handbook: forApp(await bot.handbook.load()),
     deals: open.map(card).sort((a, b) => b.sent - a.sent),
@@ -150,6 +150,23 @@ export async function action(bot, user, body) {
       bot.capture.push(await bot.team.requestSwap(uid, Math.max(start, bot.now), start + 3600));
       break;
     }
+    case "ask_duty": {
+      const [a, b] = body.from && body.to ? (bot.team.parseWindow(`${body.day === "tomorrow" ? "tomorrow " : ""}${body.from}-${body.to}`) || [])
+        : await bot.team.askWindow(uid);
+      if (!a) throw new UserError("Pick the time, e.g. 14:00 to 18:00");
+      bot.capture.push(await bot.team.askDuty(uid, Number(body.to_id), a, b, { note: String(body.note || "") }));
+      break;
+    }
+    case "ask_accept": case "ask_decline": {
+      const fn = body.action === "ask_accept" ? "acceptAsk" : "declineAsk";
+      const said = await bot.team[fn](Number(body.n), uid);
+      if (!/^(✅|OK)/.test(said)) throw new UserError(said);
+      bot.capture.push(said);
+      break;
+    }
+    case "ask_cancel":
+      bot.capture.push(await bot.team.cancelAsk(Number(body.n), uid));
+      break;
     case "sell": {
       const d = await deal();
       await bot.cmd_sell(chat, [String(d.n), body.lang || "it"], uid);

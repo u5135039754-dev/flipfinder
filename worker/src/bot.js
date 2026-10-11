@@ -17,7 +17,7 @@ import { DEFAULT_WATCH, MAX_WATCH, findCoin, watchlist } from "./crypto.js";
 import { hhmm, rome, romeTs } from "./util.js";
 import { UserError, closeMatches, esc, euro, g, parseNumber, queryAndRange, splitArgs } from "./util.js";
 
-export const COMMANDS_VERSION = 24;   // bump when the list below changes, so it's registered again
+export const COMMANDS_VERSION = 25;   // bump when the list below changes, so it's registered again
 export const UNDOABLE = ["deposit", "withdraw", "fix", "personal", "refund"];   // /undo; buys and sales: /fix
 export const TREASURER_CMDS = new Set(["deposit", "withdraw", "paidby", "refund"]);
 export const POT_CHECK_MIN = 19 * 60 + 30;   // Sunday 19:30: the treasurer's pot balance screenshot
@@ -43,6 +43,7 @@ export const COMMANDS = [
   ["pot", "The shared pot: cash, stock, profit and what each member would get back"],
   ["roles", "Who does what in the team"],
   ["duty", "Who's on duty, with Start / End / Swap buttons"],
+  ["askduty", "Ask someone to take duty: /askduty Marco 14:00-18:00 (no time: your shift or the rest of today)"],
   ["task", "Tasks: /task add Photos for #12 @Anna by fri · /task done 3"],
   ["tasks", "Open tasks"],
   ["handbook", "The team handbook (owner: /handbook edit buying, then the new rules)"],
@@ -917,6 +918,29 @@ Add one with /watch link, remove with /unwatch sol`);
     await this.reply(chat, await this.team.pinText(), this.team.pinButtons().inline_keyboard);
   }
 
+  async cmd_askduty(chat, args, user) {
+    if (!args.length) throw new UserError("Who? e.g. /askduty Marco 14:00-18:00");
+    // the time is the last word(s): "14-18", "14:00-18:00", "tomorrow 9-12"; anything after it is a note
+    let name = args.join(" ");
+    let win = null;
+    let note = "";
+    for (let i = 1; i < args.length && !win; i++) {
+      for (const k of [4, 3, 2, 1]) {   // "tomorrow 14:00 - 18:00" is up to 4 words
+        if (i + k > args.length) continue;
+        const w = args.slice(i, i + k).join(" ");
+        const p = this.team.parseWindow(w);
+        if (p) {
+          win = p;
+          name = args.slice(0, i).join(" ");
+          note = args.slice(i + k).join(" ");
+          break;
+        }
+      }
+    }
+    const [start, end] = win || await this.team.askWindow(user);
+    await this.reply(chat, esc(await this.team.askDuty(user, name, start, end, { note }), false));
+  }
+
   async cmd_task(chat, args, user, msg) {
     const sub = (args[0] || "").toLowerCase();
     if (sub === "done") {
@@ -1779,6 +1803,35 @@ Add one with /watch link, remove with /unwatch sol`);
     return this.answer(cq, "Reply with the price");
   }
 
+  /** 🙋 Ask someone from the pinned message: who (dyp), then how long (dyt); dyo: ask the next person. */
+  async onAskDutyButton(cq, chat, msg, user, kind, rest) {
+    const [a, b, c] = rest.split(":");
+    try {
+      if (kind === "dyo") {
+        const text = await this.team.askOther(Number(a), user, Number(b));
+        if (text.startsWith("🙋")) await this.tg.call("editMessageReplyMarkup", { chat_id: chat, message_id: msg.message_id,
+          reply_markup: { inline_keyboard: [] } });
+        return this.answer(cq, text);
+      }
+      if (Number(b) !== user) return this.answer(cq, "That's someone else's question");
+      if (kind === "dyp") {
+        await this.tg.call("editMessageText", { chat_id: chat, message_id: msg.message_id, parse_mode: "HTML",
+          text: `🙋 For how long should ${esc(this.team.member(a)?.name || "")} take duty?`,
+          reply_markup: await this.team.askTimeButtons(user, Number(a)) });
+        return this.answer(cq, "Pick how long");
+      }
+      const today = rome(this.now).date;
+      const [start, end] = c === "shift" ? await this.team.askWindow(user)
+        : [this.now, c === "rest" ? romeTs(today, 22) : Math.min(this.now + Number(c) * 3600, romeTs(today, 22))];
+      const text = await this.team.askDuty(user, Number(a), start, end);
+      await this.tg.call("editMessageText", { chat_id: chat, message_id: msg.message_id, text: esc(text, false), parse_mode: "HTML" });
+      return this.answer(cq, text);
+    } catch (e) {
+      if (!(e instanceof UserError)) throw e;
+      return this.answer(cq, e.message);
+    }
+  }
+
   // --- reminders' buttons
   async onKeepRelease(cq, user, kind, key) {
     const d = await this.store.deal(key);
@@ -1904,6 +1957,11 @@ Add one with /watch link, remove with /unwatch sol`);
     if (kind === "duty") {
       if (rest === "on") return this.answer(cq, await this.team.start(user));
       if (rest === "off") return this.answer(cq, await this.team.end(user));
+      if (rest === "ask") {
+        await this.tg.sendTo(chat, `🙋 ${esc(this.team.member(user)?.name || "")}, who should take duty?`,
+          { buttons: this.team.askPickButtons(user), replyTo: msg.message_id });
+        return this.answer(cq, "Pick who");
+      }
       await this.tg.sendTo(chat, `🙋 ${esc(this.team.member(user)?.name || "")}, how long do you need covered?`,
         { buttons: this.team.swapChoices(user), replyTo: msg.message_id });
       return this.answer(cq, "Pick how long");
@@ -1916,6 +1974,9 @@ Add one with /watch link, remove with /unwatch sol`);
       return this.answer(cq, await this.team.requestSwap(user, this.now, end));
     }
     if (kind === "swt") return this.answer(cq, await this.team.takeSwap(Number(rest), user));
+    if (kind === "dya") return this.answer(cq, await this.team.acceptAsk(Number(rest), user));
+    if (kind === "dyn") return this.answer(cq, await this.team.declineAsk(Number(rest), user));
+    if (kind === "dyp" || kind === "dyt" || kind === "dyo") return this.onAskDutyButton(cq, chat, msg, user, kind, rest);
     if (kind === "keep" || kind === "rel") return this.onKeepRelease(cq, user, kind, rest);
     if (["c", "b", "l", "s", "up", "dn", "m", "rp"].includes(kind)) return this.onDealButton(cq, chat, user, kind, rest);
     if (["kt", "kd", "kr", "kl"].includes(kind)) return this.onKitButton(cq, chat, msg, user, kind, rest);

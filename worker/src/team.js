@@ -313,7 +313,7 @@ export class Team {
 
   pinButtons() {
     return { inline_keyboard: [[{ text: "🟢 Start duty", callback_data: "duty:on" }, { text: "🔴 End duty", callback_data: "duty:off" }],
-      [{ text: "🙋 Need a swap", callback_data: "duty:swap" }]] };
+      [{ text: "🙋 Need a swap", callback_data: "duty:swap" }, { text: "🙋 Ask someone", callback_data: "duty:ask" }]] };
   }
 
   /** Keeps the pinned message current (posting and pinning it the first time). */
@@ -395,6 +395,244 @@ export class Team {
     return warn ? "It's yours (over your 20%, see the group)" : "It's yours, thanks!";
   }
 
+  // --- asking one person to take duty (/askduty, 🙋 Ask someone): a private message with ✅ Accept / ❌ Can't
+  /** The default time to ask for: my shift now (or my next one today), else from now to 22:00. */
+  async askWindow(id) {
+    const d = await this.duty();
+    const today = this.today();
+    const end = romeTs(today, DUTY_TO);
+    if (d.on?.id === Number(id)) return [this.now, Math.min(d.on.until || end, end)];
+    const s = (await this.schedule())[today] || {};
+    for (let h = Math.max(rome(this.now).hour, DUTY_FROM); h < DUTY_TO; h++) {
+      if (s[h] !== Number(id)) continue;
+      let e = h;
+      while (e < DUTY_TO && s[e] === Number(id)) e++;
+      return [Math.max(this.now, romeTs(today, h)), romeTs(today, e)];
+    }
+    return [Math.max(this.now, romeTs(today, DUTY_FROM)), end];
+  }
+
+  /** "14:00-18:00", "14-18", "tomorrow 9:30–12" -> [start, end] (Italy time), or null. */
+  parseWindow(text) {
+    const t = text.trim().toLowerCase();
+    const m = t.match(/^(?:(today|tomorrow)\s*)?(\d{1,2})(?:[:.](\d{2}))?\s*[-–—]\s*(\d{1,2})(?:[:.](\d{2}))?$/);
+    if (!m) return null;
+    const date = m[1] === "tomorrow" ? addDays(this.today(), 1) : this.today();
+    const [h1, m1, h2, m2] = [m[2], m[3] || 0, m[4], m[5] || 0].map(Number);
+    if (h1 > 24 || h2 > 24 || m1 > 59 || m2 > 59) return null;
+    return [romeTs(date, h1, m1), romeTs(date, h2, m2)];
+  }
+
+  askDay(ts) {
+    const r = rome(ts);
+    if (r.date === this.today()) return "";
+    return r.date === addDays(this.today(), 1) ? " tomorrow" : ` ${r.weekday} ${r.day} ${r.month}`;
+  }
+
+  askButtons(n) {
+    return { inline_keyboard: [[{ text: "✅ Accept", callback_data: `dya:${n}` }, { text: "❌ Can't", callback_data: `dyn:${n}` }]] };
+  }
+
+  /** The other members to ask instead (after a ❌ or no answer). */
+  otherButtons(n, ask) {
+    const tried = new Set([ask.from, ask.to, ...(ask.tried || [])]);
+    const row = this.members().filter((m) => m.role && !tried.has(m.id))
+      .map((m) => ({ text: `🙋 Ask ${m.name}`, callback_data: `dyo:${n}:${m.id}` }));
+    return row.length ? { inline_keyboard: row.map((b) => [b]) } : undefined;
+  }
+
+  async askDuty(fromId, toText, start, end, { tried = [], note = "" } = {}) {
+    const from = this.member(fromId);
+    if (!from) throw new UserError("Only team members ask for duty");
+    const to = typeof toText === "number" ? this.member(toText) : this.find(String(toText || ""));
+    if (!to || !to.role) throw new UserError(`I don't know "${toText}" in the team. /roles lists everyone`);
+    if (to.id === from.id) throw new UserError("That's you: tap 🟢 Start duty instead");
+    // keep it inside the duty day (08:00-22:00) and from now on
+    const day = rome(start).date;
+    start = Math.max(start, romeTs(day, DUTY_FROM), this.now);
+    end = Math.min(end, romeTs(day, DUTY_TO));
+    if (end <= start) throw new UserError("That time is over or outside duty hours (08:00–22:00)");
+    if (end - start < 15 * 60) throw new UserError("Ask for at least 15 minutes");
+    const d = await this.duty();
+    d.asks ??= {};
+    d.next_ask ??= 1;
+    if (Object.values(d.asks).some((a) => a.status === "open" && a.from === from.id && a.to === to.id)) {
+      throw new UserError(`You already asked ${to.name}: waiting for an answer`);
+    }
+    const n = d.next_ask++;
+    note = String(note || "").replace(/\s+/g, " ").trim().slice(0, 200);
+    const ask = { n, from: from.id, to: to.id, start, end, status: "open", at: this.now, reminded: 0, tried, note, msgs: [] };
+    d.asks[n] = ask;
+    const when = `${hhmm(start)}–${hhmm(end)}${this.askDay(start)}`;
+    const text = `🙋 <b>${esc(from.name)} asks you to take duty ${when}</b>` + (note ? `
+💬 ${esc(note)}` : "");
+    let res = await this.bot.tg.sendTo(String(to.id), text, { buttons: this.askButtons(n) });
+    if (res) ask.msgs.push({ chat: String(to.id), id: res.message_id });
+    else {   // never opened the bot in private: ask in the group instead
+      res = await this.groupPost(`🙋 ${mention(to)}, ${esc(from.name)} asks you to take duty ${when}` + (note ? `
+💬 ${esc(note)}` : ""),
+        this.askButtons(n));
+      if (res) ask.msgs.push({ chat: String(res.chat.id), id: res.message_id });
+    }
+    await this.saveDuty();
+    return `🙋 Asked ${to.name} for ${when}${res ? "" : " (I couldn't reach them)"}`;
+  }
+
+  async closeAsk(ask, label) {
+    for (const m of ask.msgs || []) {
+      await this.bot.tg.call("editMessageReplyMarkup", { chat_id: m.chat, message_id: m.id,
+        reply_markup: { inline_keyboard: [[{ text: label, callback_data: "noop" }]] } });
+    }
+  }
+
+  /** ✅ Accept: on duty for that time (the asker's blocks become theirs), the group and the asker are told. */
+  async acceptAsk(n, id) {
+    const d = await this.duty();
+    const ask = d.asks?.[n];
+    if (!ask) return "That request is gone";
+    if (ask.to !== Number(id)) return "That request is for someone else";
+    if (ask.status !== "open") return ask.status === "accepted" ? "You already accepted it" : "That request is closed";
+    if (ask.end <= this.now) {
+      ask.status = "expired";
+      await this.saveDuty();
+      return "That time is already over";
+    }
+    const m = this.member(id);
+    const from = this.member(ask.from);
+    Object.assign(ask, { status: "accepted", answered_at: this.now });
+    const sched = await this.schedule();
+    const kept = new Set();
+    for (let t = romeTs(rome(ask.start).date, rome(ask.start).hour); t < ask.end; t += 3600) {
+      const r = rome(t);
+      const day = (sched[r.date] ??= {});
+      if (!day[r.hour] || day[r.hour] === ask.from) day[r.hour] = m.id;
+      else if (day[r.hour] !== m.id) kept.add(day[r.hour]);
+    }
+    await this.saveSchedule();
+    // the time has started: they're on duty now (whoever was on hands over)
+    if (ask.start <= this.now + 300 && d.on?.id !== m.id) {
+      if (d.on) d.log.push({ id: d.on.id, start: d.on.since, end: this.now });
+      d.on = { id: m.id, since: this.now, until: ask.end };
+      d.nobody_ping = 0;
+    } else if (d.on?.id === m.id) d.on.until = Math.max(d.on.until, ask.end);
+    const lim = this.limit(m);
+    const date = rome(ask.start).date;
+    const after = ((await this.hoursOn(date))[m.id] || 0) + (ask.end - Math.max(ask.start, this.now)) / 3600;
+    const warn = lim.cap && after > lim.cap ? `\n⚠️ That puts ${esc(m.name)} at ${hours(after)} h on that day (max ${lim.cap} h)` : "";
+    const note = kept.size ? `\n(${[...kept].map((x) => esc(this.member(x)?.name || "?")).join(", ")} keeps their own hours in that time)` : "";
+    const when = `${hhmm(ask.start)}–${hhmm(ask.end)}${this.askDay(ask.start)}`;
+    await this.closeAsk(ask, "✅ Accepted");
+    await this.groupPost(`✅ ${mention(m)} takes duty ${when} (asked by ${esc(from?.name || "")})${warn}${note}`);
+    if (from) await this.dm(from.id, `✅ ${esc(m.name)} accepted: on duty ${when}`);
+    await this.saveDuty();
+    await this.updatePin();
+    return `✅ You're on duty ${when}`;
+  }
+
+  /** ❌ Can't: the asker is told, with buttons to ask someone else. */
+  async declineAsk(n, id) {
+    const d = await this.duty();
+    const ask = d.asks?.[n];
+    if (!ask) return "That request is gone";
+    if (ask.to !== Number(id)) return "That request is for someone else";
+    if (ask.status !== "open") return "That request is closed";
+    Object.assign(ask, { status: "declined", answered_at: this.now });
+    await this.closeAsk(ask, "❌ Can't");
+    const m = this.member(id);
+    const when = `${hhmm(ask.start)}–${hhmm(ask.end)}${this.askDay(ask.start)}`;
+    const others = this.otherButtons(n, ask);
+    await this.dm(ask.from, `❌ ${esc(m?.name || "")} can't take duty ${when}.` + (others ? " Ask someone else?" : ""), others);
+    await this.saveDuty();
+    return `OK, I told ${this.member(ask.from)?.name || "them"}`;
+  }
+
+  /** 🙋 Ask <other> after a ❌ or no answer: the same time, the next person. */
+  async askOther(n, id, toId) {
+    const d = await this.duty();
+    const ask = d.asks?.[n];
+    if (!ask) return "That request is gone";
+    if (ask.from !== Number(id)) return "That's someone else's request";
+    if (ask.status === "accepted") return "Someone already took it";
+    if (ask.status === "open") return "Still waiting for an answer";
+    if (ask.passed) return "You already asked someone else";
+    const tried = [...new Set([...(ask.tried || []), ask.to])];
+    const res = await this.askDuty(id, Number(toId), ask.start, ask.end, { tried, note: ask.note });
+    (await this.duty()).asks[n].passed = true;
+    await this.saveDuty();
+    return res;
+  }
+
+  /** The 5-minute job: no answer in 15 minutes -> one reminder; 15 more -> the asker is told. */
+  async askTick() {
+    const d = await this.duty();
+    for (const [n, ask] of Object.entries(d.asks || {})) {
+      if (ask.status === "open" && ask.end <= this.now) {
+        ask.status = "expired";
+        await this.closeAsk(ask, "⌛ Time's over");
+      } else if (ask.status === "open" && !ask.reminded && this.now - ask.at >= 15 * 60) {
+        ask.reminded = this.now;
+        const from = this.member(ask.from);
+        const text = `⏰ Reminder: ${esc(from?.name || "someone")} asks you to take duty ` +
+          `${hhmm(ask.start)}–${hhmm(ask.end)}${this.askDay(ask.start)}` + (ask.note ? `
+💬 ${esc(ask.note)}` : "");
+        const res = await this.bot.tg.sendTo(String(ask.to), text, { buttons: this.askButtons(n) });
+        if (res) ask.msgs.push({ chat: String(ask.to), id: res.message_id });
+      } else if (ask.status === "open" && ask.reminded && this.now - ask.reminded >= 15 * 60) {
+        ask.status = "no_answer";
+        await this.closeAsk(ask, "⌛ No answer");
+        const m = this.member(ask.to);
+        const others = this.otherButtons(n, ask);
+        await this.dm(ask.from, `⌛ ${esc(m?.name || "")} didn't answer about duty ${hhmm(ask.start)}–${hhmm(ask.end)}` +
+          `${this.askDay(ask.start)}.` + (others ? " Ask someone else?" : ""), others);
+      }
+      if (this.now - ask.end > 2 * DAY) delete d.asks[n];
+    }
+  }
+
+  /** Open requests I sent or got, for the app. */
+  async asksFor(id) {
+    const d = await this.duty();
+    return Object.values(d.asks || {}).filter((a) => a.status === "open" && (a.from === Number(id) || a.to === Number(id)))
+      .map((a) => ({ n: a.n, from: a.from, to: a.to, start: a.start, end: a.end,
+        note: a.note || "", from_name: this.member(a.from)?.name || "", to_name: this.member(a.to)?.name || "" }));
+  }
+
+  /** The asker takes a request back (the other person's message says so). */
+  async cancelAsk(n, id) {
+    const d = await this.duty();
+    const ask = d.asks?.[n];
+    if (!ask || ask.from !== Number(id)) throw new UserError("That request isn't yours");
+    if (ask.status !== "open") throw new UserError(ask.status === "accepted" ? "Already accepted" : "That request is closed");
+    Object.assign(ask, { status: "cancelled", answered_at: this.now });
+    await this.closeAsk(ask, "↩️ Cancelled");
+    await this.saveDuty();
+    return `↩️ Cancelled the request to ${this.member(ask.to)?.name || "them"}`;
+  }
+
+  /** The pinned message's 🙋 Ask someone: pick who, then how long. */
+  askPickButtons(id) {
+    const row = this.members().filter((m) => m.role && m.id !== Number(id))
+      .map((m) => ({ text: m.name, callback_data: `dyp:${m.id}:${id}` }));
+    const rows = [];
+    for (let i = 0; i < row.length; i += 3) rows.push(row.slice(i, i + 3));
+    return { inline_keyboard: rows };
+  }
+
+  async askTimeButtons(id, toId) {
+    const left = Math.max(0, (romeTs(this.today(), DUTY_TO) - this.now) / 3600);
+    const row = [1, 2, 3].filter((h) => h < left).map((h) => ({ text: `Next ${h} h`, callback_data: `dyt:${toId}:${id}:${h}` }));
+    row.push({ text: "Rest of today", callback_data: `dyt:${toId}:${id}:rest` });
+    const d = await this.duty();
+    const s = (await this.schedule())[this.today()] || {};
+    const hasShift = d.on?.id === Number(id) || Object.entries(s).some(([h, x]) => x === Number(id) && Number(h) >= rome(this.now).hour);
+    const rows = [row];
+    if (hasShift) {
+      const [a, b] = await this.askWindow(id);
+      rows.unshift([{ text: `My shift ${hhmm(a)}–${hhmm(b)}`, callback_data: `dyt:${toId}:${id}:shift` }]);
+    }
+    return { inline_keyboard: rows };
+  }
+
   // --- the weekly schedule (Mini App)
   async toggleBlock(id, date, hour) {
     if (!(hour >= DUTY_FROM && hour < DUTY_TO)) throw new UserError("Duty runs 08:00–22:00");
@@ -430,6 +668,11 @@ export class Team {
       members: this.members().map((m) => ({ ...m, ...this.limit(m), today: Math.round((done[m.id] || 0) * 10) / 10 })),
       on: d.on ? { ...d.on, name: this.member(d.on.id)?.name || "" } : null,
     };
+  }
+
+  /** The grid plus the open duty requests I sent or got. */
+  async gridFor(id) {
+    return { ...(await this.grid()), asks: await this.asksFor(id) };
   }
 
   // --- tasks
@@ -556,6 +799,7 @@ export class Team {
     for (const k of Object.keys(d.late)) if (!k.startsWith(r.date)) delete d.late[k];
     d.log = d.log.filter((e) => this.now - e.end < 60 * DAY);
     for (const [n, sw] of Object.entries(d.swaps)) if (this.now - sw.end > 14 * DAY) delete d.swaps[n];
+    if (this.bot.tg.callsLeft > 6) await this.askTick();
     // tasks 3 days late (or 3 days old without a due date)
     const tasks = await this.tasks();
     let changed = false;

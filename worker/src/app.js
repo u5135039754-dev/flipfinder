@@ -10,7 +10,7 @@ import { Telegram } from "./telegram.js";
 import { Bot, COMMANDS, COMMANDS_VERSION } from "./bot.js";
 import { compare, findRepost, fullText, keyboard } from "./deals.js";
 import { TOPIC_FOR_GROUP, dealTopic, dueReminders, weeklyDue, weeklyReport } from "./group.js";
-import { DAY, UserError, inQuietHours, nowSeconds, rome } from "./util.js";
+import { DAY, UserError, esc, inQuietHours, nowSeconds, rome } from "./util.js";
 import { action, snapshot, verifyInitData } from "./webapp.js";
 import { runCrypto } from "./crypto.js";
 import { recordRun } from "./team.js";
@@ -328,6 +328,14 @@ const API = {
     const flushed = await store.get("flushed", 0);
     if (flushed) await store.put("flushed", 0);
     return { notified, flushed };
+  },
+
+  /** A private note to the owner only (e.g. the dev assistant saying it needs them); plain text. */
+  async "POST /api/owner_dm"({ tg, bot }, body) {
+    const text = String(body.text || "").trim().slice(0, 1000);
+    if (!text) return { sent: false, error: "text is empty" };
+    const sent = await tg.sendTo(String(bot.ownerId), esc(text, false));
+    return { sent: sent !== null };
   },
 
   /** One-time move of deals.json / settings.json (and the home area) into private storage. */

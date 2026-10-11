@@ -197,7 +197,7 @@
   .seg button.on { background: var(--card); color: var(--text); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18); }
 
   /* inputs, switches */
-  input[type=number], input[type=text] { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line);
+  input[type=number], input[type=text], input[type=time] { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line);
     border-radius: 12px; padding: 12px; font: inherit; font-size: 16px; }
   .switch { position: relative; width: 48px; height: 28px; flex: none; }
   .switch input { opacity: 0; width: 0; height: 0; }
@@ -217,6 +217,18 @@
     font-size: 11px; font-weight: 600; padding: 4px 0; }
   nav svg { width: 24px; height: 24px; padding: 3px 10px; box-sizing: content-box; border-radius: 999px; transition: background 0.2s; }
   nav button.on { color: var(--accent); }
+  nav button { position: relative; }
+  nav .count { position: absolute; top: 0; left: calc(50% + 6px); min-width: 18px; height: 18px; border-radius: 9px; padding: 0 5px;
+    background: var(--bad); color: #fff; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; box-sizing: border-box; }
+  /* duty requests */
+  .req { border-left: 4px solid var(--accent); }
+  .req.in { border-left-color: var(--warn); }
+  .req .who { font-weight: 700; }
+  .req .note { margin-top: 6px; font-size: 14px; }
+  .reqrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
+  .reqrow:first-of-type { border-top: 0; }
+  .pick { display: flex; flex-wrap: wrap; gap: 8px; }
+  .times { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   nav button.on svg { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 
   /* sheets, toasts, pull to refresh */
@@ -380,6 +392,8 @@ function render(animate = true) {
     const icon = svg("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "1.8", "stroke-linecap": "round", "stroke-linejoin": "round" });
     icon.innerHTML = ICONS[id];   // fixed icon paths, never user data
     b.append(icon, label);
+    const incoming = id === "schedule" ? (d?.schedule?.asks || []).filter((a) => a.to === d.me.id).length : 0;
+    if (incoming) b.append(h("span", { class: "count", "aria-label": `${incoming} open requests` }, String(incoming)));
     return b;
   }));
   document.getElementById("cash").textContent = d?.pot?.started ? `Pot ${euro0(d.pot.cash)}` : "";
@@ -679,7 +693,15 @@ function scheduleTab(d) {
   if (!d.me.team) return [empty("📅", "The schedule starts with roles", "The owner sets them with /setrole name buyer|seller|manager.")];
   const byId = Object.fromEntries(sc.members.map((m) => [m.id, m]));
   const onMe = sc.on && sc.on.id === d.me.id;
-  const out = [dutyButton(sc, onMe, byId)];
+  const out = [...requestCards(d, sc), dutyButton(sc, onMe, byId),
+    h("button", { class: "btn primary", style: "width:100%;margin-top:14px", onclick: () => askSheet(d, sc) }, "🙋 Ask someone to take duty")];
+  const outgoing = (sc.asks || []).filter((a) => a.from === d.me.id);
+  if (outgoing.length) {
+    out.push(h("h2", {}, "Outgoing requests"), h("div", { class: "card" }, outgoing.map((a) =>
+      h("div", { class: "reqrow" },
+        h("div", {}, h("div", { class: "who" }, a.to_name), h("div", { class: "label" }, `${askWhen(a, sc)} · waiting`)),
+        h("button", { class: "btn danger", onclick: () => act({ action: "ask_cancel", n: a.n }) }, "Cancel")))));
+  }
   if (sc.on && !onMe) {
     out.push(h("div", { class: "card", style: "display:flex;align-items:center;gap:12px;margin-top:14px" },
       h("span", { class: "dot", style: `width:14px;height:14px;margin:0;background:${personColor(byId[sc.on.id])}` }),
@@ -739,6 +761,63 @@ function scheduleTab(d) {
     h("div", { class: "chips", style: "margin-top:6px" }, sc.members.filter((m) => m.role).map((m) =>
       h("span", { class: "chip" }, h("span", { class: "dot", style: `background:${personColor(m)}` }), m.name)))));
   return out;
+}
+
+// --- duty requests: incoming (Accept / Can't), the ask form
+function askWhen(a, sc) {
+  const day = new Date(a.start * 1000).toLocaleDateString("en-CA", { timeZone: "Europe/Rome" });
+  return `${hhmm(a.start)}–${hhmm(a.end)}${day === sc.today ? "" : " tomorrow"}`;
+}
+
+function requestCards(d, sc) {
+  const incoming = (sc.asks || []).filter((a) => a.to === d.me.id);
+  if (!incoming.length) return [];
+  return [h("h2", { style: "margin-top:0" }, "Incoming requests"), ...incoming.map((a) => h("div", { class: "card req in" },
+    h("div", {}, h("span", { class: "who" }, a.from_name), " asks you to take duty"),
+    h("div", { class: "label", style: "margin-top:4px" }, askWhen(a, sc)),
+    a.note ? h("div", { class: "note" }, `💬 ${a.note}`) : null,
+    h("div", { class: "actions" },
+      h("button", { class: "btn good grow", onclick: () => act({ action: "ask_accept", n: a.n }) }, "✅ Accept"),
+      h("button", { class: "btn grow", onclick: () => act({ action: "ask_decline", n: a.n }) }, "❌ Can't"))))];
+}
+
+/** Who, when (my shift / custom), a note, Send. */
+function askSheet(d, sc) {
+  tap();
+  const people = sc.members.filter((m) => m.role && m.id !== d.me.id);
+  if (!people.length) return toast("Nobody else has a role yet", true);
+  const st = { to: null, mode: "default", day: "today" };
+  const now = romeNow();
+  const pad = (x) => String(x).padStart(2, "0");
+  const from = h("input", { type: "time", value: `${pad(Math.max(now.h, sc.from) % 24)}:00`, step: "900" });
+  const to = h("input", { type: "time", value: `${pad(Math.min(Math.max(now.h, sc.from) + 2, sc.to))}:00`, step: "900" });
+  const note = h("input", { type: "text", placeholder: "Note (optional), e.g. dentist at 15", maxlength: "200" });
+  const who = h("div", { class: "pick" });
+  const when = h("div");
+  const paint = () => {
+    who.replaceChildren(...people.map((m) => h("button", { class: "chip" + (st.to === m.id ? " on" : ""),
+      onclick: () => { tap(); st.to = m.id; paint(); } }, h("span", { class: "dot", style: `background:${personColor(m)}` }), m.name)));
+    const def = sc.on && sc.on.id === d.me.id ? `Now until the end of my shift (${hhmm(sc.on.until)})` : "My next shift today, or now until 22:00";
+    when.replaceChildren(
+      h("div", { class: "seg", style: "margin-bottom:10px" }, [["default", "My shift"], ["custom", "Custom"]].map(([k, label]) =>
+        h("button", { class: st.mode === k ? "on" : "", onclick: () => { tap(); st.mode = k; paint(); } }, label))),
+      st.mode === "default" ? h("div", { class: "label" }, def) : h("div", {},
+        h("div", { class: "seg", style: "margin-bottom:10px" }, [["today", "Today"], ["tomorrow", "Tomorrow"]].map(([k, label]) =>
+          h("button", { class: st.day === k ? "on" : "", onclick: () => { tap(); st.day = k; paint(); } }, label))),
+        h("div", { class: "times" }, h("label", {}, h("div", { class: "label", style: "margin-bottom:6px" }, "From"), from),
+          h("label", {}, h("div", { class: "label", style: "margin-bottom:6px" }, "To"), to))));
+  };
+  paint();
+  const close = sheet("🙋 Ask someone to take duty", [], null, h("div", { style: "display:grid;gap:14px;margin-bottom:14px" },
+    h("div", {}, h("div", { class: "label", style: "margin-bottom:8px" }, "Who"), who),
+    h("div", {}, h("div", { class: "label", style: "margin-bottom:8px" }, "When"), when),
+    note,
+    h("button", { class: "btn primary", onclick: async () => {
+      if (!st.to) return toast("Pick who to ask", true);
+      const body = { action: "ask_duty", to_id: st.to, note: note.value };
+      if (st.mode === "custom") Object.assign(body, { from: from.value, to: to.value, day: st.day });
+      if (await act(body)) close();
+    } }, "Send")));
 }
 
 // the round Start / End duty button, with a live timer while you're on
