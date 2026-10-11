@@ -9,7 +9,7 @@ from .analyzer import Deal
 
 log = logging.getLogger(__name__)
 
-PLATFORMS = {"vinted": "Vinted", "ebay": "eBay", "subito": "Subito"}
+PLATFORMS = {"vinted": "Vinted", "ebay": "eBay", "subito": "Subito", "mercatino": "Mercatino Musicale"}
 SYMBOLS = {"EUR": "€", "GBP": "£", "USD": "$", "PLN": "zł "}
 
 

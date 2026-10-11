@@ -158,3 +158,11 @@ test("POST /api/update: the draft to the owner; the group only once the 📢 Upd
   assert.deepEqual([t.tg.sent()[0].chat_id, t.tg.sent()[0].message_thread_id], [GROUP, 99]);
   assert.equal(t.tg.sent("sendMediaGroup")[0].message_thread_id, "99");
 });
+
+test("POST /api/mm_contact: the contact for Mercatino Musicale's User-Agent, kept in the private settings", async () => {
+  const t = await setup();
+  assert.equal((await t.api("POST", "/api/mm_contact", { email: "nope" })).body.ok, false);
+  assert.equal((await t.api("POST", "/api/mm_contact", { email: "me@example.com" })).body.ok, true);
+  assert.equal((await t.settings()).mm_contact, "me@example.com");
+  assert.equal((await t.api("GET", "/api/state")).body.settings.mm_contact, "me@example.com");   // the scanner reads it
+});

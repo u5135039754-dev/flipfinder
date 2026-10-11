@@ -15,6 +15,7 @@ from .config import Config, Search
 from .ebay import CATEGORY_FOR_VINTED_CATALOG as EBAY_CATEGORY_FOR_VINTED_CATALOG
 from .ebay import EbayClient
 from .subito import CATEGORY_FOR_VINTED_CATALOG, SubitoClient
+from .mercatino import MercatinoClient
 from .sold import SoldTracker
 from .storage import SeenStore
 from .settings import search_group
@@ -207,6 +208,13 @@ class Scanner:
                                    town_travel_costs=sb.town_travel_costs, wide_regions=list(sb.wide_regions),
                                    wide_radius_km=sb.wide_radius_km, tiers=list(sb.tiers),
                                    request_delay=cfg.request_delay) if sb.enabled else None
+        mm = getattr(cfg, "mercatino", None)
+        try:
+            self.mercatino = (MercatinoClient(mm.contact, cfg.seen_file.parent / "mercatino.json", daily_cap=mm.daily_cap)
+                              if mm and mm.enabled and mm.contact else None)
+        except ValueError:
+            self.mercatino = None
+        self.mercatino_pages = 0
         self.subito_new: list[Item] = []
         self.first_subito = False
         self.subito_pools = 0
@@ -385,6 +393,46 @@ class Scanner:
         if search_group(s) in MUSIC and not s.budget and music.get("max_price"):
             return float(music["max_price"])
         return self.cfg.rules.max_price
+
+    # --- Mercatino Musicale (permission on its conditions: see mercatino.py) ---------------
+    def _scan_mercatino(self) -> list[Deal]:
+        """
+        A few music searches a run, in turn (pages_per_run search pages, newest first), used listings only. A search's
+        first page is remembered without alerting; its listings build Mercatino's own comparables over the days.
+        """
+        mm = self.mercatino
+        music = [s for s in self.cfg.searches if s.enabled and search_group(s) in MUSIC and not s.budget and s.uses("mercatino")]
+        deals: list[Deal] = []
+        for _ in range(self.cfg.mercatino.pages_per_run):
+            if not music or not mm.can_fetch():
+                break
+            s = music[mm.state["turn"] % len(music)]
+            mm.state["turn"] += 1
+            cap = self._price_to(s)
+            items = [i for i in mm.search(s.query) if i.condition.lower().startswith("usato") and s.wants(i)
+                     and (s.price_from is None or i.price >= s.price_from)]
+            self.mercatino_pages += 1
+            mm.remember(s.query, items)
+            if not mm.seeded(s.query) and not self.first_run:   # its current listings are a backlog, not news
+                for i in items:
+                    self.seen.add(i.key)
+                mm.mark_seeded(s.query)
+                continue
+            fresh = [i for i in items if i.key not in self.seen and (cap is None or i.price <= cap)]
+            pool = (self.pools.get(_key(s), any_age=True) or []) + mm.pool(s.query)
+            rules = self._rules(s)
+            for item in fresh:
+                self.seen.add(item.key)
+                if is_pickup_only(f"{item.title}\n{item.description}"):
+                    continue   # hand delivery somewhere in Italy: not for us
+                self.checked += 1
+                deal = assess(item, pool, rules, s.query)   # shipping: the search's estimate (the page doesn't say)
+                if deal and not deal.blocked:
+                    deals.append(tag(deal, s))
+                elif is_near_miss(deal):
+                    self.near_misses.append((s.query, deal))
+        log.info("Mercatino Musicale: %d page(s) this run, %d today (limit %d)", self.mercatino_pages, mm.pages_today, mm.daily_cap)
+        return deals
 
     # --- the app's ➕ Add search preview ---------------------------------------------
     def preview(self, s: Search) -> dict:
@@ -664,6 +712,12 @@ class Scanner:
             except Exception as e:  # one broken search shouldn't kill the rest
                 self.failed_searches += 1
                 log.error("Search '%s' failed: %s", s.query, e)
+        if getattr(self, "mercatino", None):
+            try:
+                deals += self._scan_mercatino()
+            except Exception as e:   # never stops the scan
+                log.error("Mercatino Musicale failed: %s", e)
+            self.mercatino.save()
         if self.seed_candidates:
             deals += self._best_seed_deals()
         if self.first_run:
@@ -813,7 +867,7 @@ class Scanner:
         return self.failed_searches == len(self.cfg.searches)
 
 
-PLATFORM_NAMES = {"vinted": "Vinted", "ebay": "eBay", "subito": "Subito"}
+PLATFORM_NAMES = {"vinted": "Vinted", "ebay": "eBay", "subito": "Subito", "mercatino": "Mercatino Musicale"}
 
 
 def describe_miss(query: str, m: Deal) -> str:

@@ -607,7 +607,9 @@ def jackson_kind(title: str) -> str:
     js = JACKSON_JS.search(t)
     line = f"js{js.group(1)}" if js else next((name for name, rx in JACKSON_LINES if rx.search(t)), "other")
     shape = next((name for name, rx in JACKSON_SHAPES if rx.search(t)), "other")
-    return f"{line} {shape}" + (" lefty" if LEFTY.search(t) else "")
+    strings = re.search(r"\bjs ?\d{1,2}x?[a-z]{0,3} ?([78])\b|\b([78]) ?(corde|strings?)\b", t)   # JS32-8: an 8-string
+    return (f"{line} {shape}" + (f" {strings.group(1) or strings.group(2)}-string" if strings else "")
+            + (" lefty" if LEFTY.search(t) else ""))
 
 
 def _jackson_value(item: Item, pool: list[Item], rules: Rules) -> tuple[float | None, list[Item], str, str]:

@@ -12,7 +12,8 @@ const TOPIC_LABELS = { guitars: "Music" };   // "Borys added 'boss katana' to Mu
 // the group a search added in a topic's card gets: its rules come with it
 export const TOPIC_GROUP = { guitars: "Guitars", electronics: "Electronics", budget: "Budget", clothes: "Clothes" };
 export const TOPIC_RULES = ["min_profit", "min_roi", "max_price"];
-export const EXTRA_PLATFORMS = ["ebay", "subito"];   // Vinted is always on: market values come from it
+export const EXTRA_PLATFORMS = ["ebay", "subito", "mercatino"];   // Vinted is always on: market values come from it
+const MUSIC_ONLY = ["mercatino"];   // Mercatino Musicale: music searches only
 const PREVIEW_MAX_AGE = 3600;     // the scanner picks a preview up within a run (~5 min); after an hour it's dropped
 const PREVIEWS_PER_PERSON = 3;
 
@@ -63,15 +64,16 @@ export class Searches {
       key, name: this.label(key), icon: TOPIC_ICONS[key] || "📂", rules: this.rules(view, key), can_add: key in TOPIC_GROUP,
       ...(key === "repairs" ? { repairs: this.bot.settings.repairs !== false } : {}),
       searches: view.searches.filter((s) => key !== "repairs" && this.topicOf(s) === key).map((s) => ({
-        query: s.query, price_from: s.price_from ?? null, price_to: s.price_to ?? null, enabled: s.enabled !== false,
+        query: s.query, price_from: s.price_from ?? null, price_to: s.price_to ?? null, max_price: s.max_price ?? null,
+        enabled: s.enabled !== false,
         budget: Boolean(s.budget), clothes: Boolean(s.clothes), added: Boolean(s.added), week: week[s.query.toLowerCase()] || 0,
         platforms: ["vinted", ...(s.platforms ? s.platforms.filter((p) => EXTRA_PLATFORMS.includes(p))
-          : s.clothes ? [] : [view.ebay && "ebay", view.subito && "subito"].filter(Boolean))],
+          : s.clothes ? [] : [view.ebay && "ebay", view.subito && "subito", key === "guitars" && view.mercatino && "mercatino"].filter(Boolean))],
         must: s.must || [], exclude: s.exclude || [], size: s.size || "",
       })),
     }));
     return { can_edit: this.bot.team.isManager(userId), owner: userId === this.bot.ownerId, topics,
-      platforms: { ebay: view.ebay, subito: view.subito } };
+      platforms: { ebay: view.ebay, subito: view.subito, mercatino: view.mercatino } };
   }
 
   // --- checks
@@ -96,7 +98,8 @@ export class Searches {
     if (from !== null && to !== null && from >= to) throw new UserError("Min price must be under max price");
     const must = words(spec.must).slice(0, 10);
     const exclude = words(spec.exclude).slice(0, 20);
-    const platforms = ["vinted", ...EXTRA_PLATFORMS.filter((p) => (spec.platforms || []).includes(p))];
+    const platforms = ["vinted", ...EXTRA_PLATFORMS.filter((p) => (spec.platforms || []).includes(p)
+      && (topic === "guitars" || !MUSIC_ONLY.includes(p)))];
     const size = topic === "clothes" ? String(spec.size || "").trim().slice(0, 10) : "";
     return { query, topic, price_from: from, price_to: to, platforms, must, exclude, size };
   }

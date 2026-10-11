@@ -51,7 +51,7 @@ def set_budget(cfg, amount: float):
             s.price_to, s.price_to_is_budget = cfg.budget, s.price_to_is_budget or s.price_to is None
 
 
-PLATFORMS = ("vinted", "ebay", "subito")
+PLATFORMS = ("vinted", "ebay", "subito", "mercatino")
 
 
 def search_extras(s, a: dict):
@@ -133,6 +133,8 @@ def apply_settings(cfg, settings: dict):
         cfg.clothes.rules = {**cfg.clothes.rules, **{k: (int(v) if k == "min_rating" else float(v))
                                                      for k, v in (settings.get("clothes_rules") or {}).items()
                                                      if k in ("min_profit", "min_roi", "min_rating", "max_price")}}
+    if getattr(cfg, "mercatino", None) is not None:   # the contact for its User-Agent: private, from the Worker
+        cfg.mercatino.contact = str(settings.get("mm_contact") or "")
     cfg.value_adjust = {str(k).lower(): float(v) for k, v in (settings.get("value_adjust") or {}).items() if 0.5 <= float(v) <= 1.5}
     return cfg
 

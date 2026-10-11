@@ -42,7 +42,7 @@ test("the Searches section: topics in order with their rules, searches and deals
     ["budget", "Budget", "💸"], ["clothes", "Clothes", "👕"], ["repairs", "Repairs", "🔧"]]);
   const music = s.topics[0];
   assert.deepEqual(music.rules, { min_profit: 20, min_roi: 35, max_price: 200, note: "Music gear's own rules" });
-  assert.deepEqual(music.searches.find((x) => x.query === "boss katana"), { query: "boss katana", price_from: 80, price_to: 300,
+  assert.deepEqual(music.searches.find((x) => x.query === "boss katana"), { query: "boss katana", price_from: 80, price_to: 300, max_price: null,
     enabled: true, budget: false, clothes: false, added: false, week: 1, platforms: ["vinted", "ebay", "subito"], must: [], exclude: [], size: "" });
   assert.deepEqual(s.topics[4].searches, []);
   assert.equal(s.topics[4].repairs, true);

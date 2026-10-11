@@ -69,6 +69,15 @@ clothes:
     # Army Trainer) with a shoe size count.
     query: margiela gat
 
+# Mercatino Musicale (mercatinomusicale.com): read with the site's written permission, for personal use, on its
+# conditions: public search pages only (never /ajax/), one request every 5-10 s, under ~1,000 pages a day, no
+# republishing (deals go out without their photos), a User-Agent with a contact email (private, in the Worker).
+# Music searches only, a couple of pages a run in turn.
+mercatino:
+  enabled: true
+  pages_per_run: 2
+  daily_cap: 900
+
 # Vinted adds a buyer protection fee on top of the price.
 # If the API gives the real total we use that, otherwise this estimate.
 buyer_protection:

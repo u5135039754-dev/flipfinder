@@ -149,6 +149,15 @@ class SubitoSettings:
 
 
 @dataclass
+class MercatinoSettings:
+    """Mercatino Musicale (permission from the site, on its conditions: see mercatino.py). Music searches only."""
+    enabled: bool = False
+    pages_per_run: int = 2            # one search result page each, ~576 a day at a run every 5 min
+    daily_cap: int = 900              # under the site's ~1,000 pages a day
+    contact: str = ""                 # the User-Agent's contact email: from the Worker's private settings
+
+
+@dataclass
 class Config:
     domain: str
     interval_minutes: float
@@ -169,6 +178,7 @@ class Config:
     ebay: EbaySettings = field(default_factory=EbaySettings)
     subito: SubitoSettings = field(default_factory=SubitoSettings)
     clothes: ClothesSettings = field(default_factory=ClothesSettings)
+    mercatino: MercatinoSettings = field(default_factory=MercatinoSettings)
 
 
 def _flat(values) -> list[str]:
@@ -302,5 +312,8 @@ def load(path: str | Path = "config.yaml") -> Config:
             pool_refresh_minutes=float(sb.get("pool_refresh_minutes", 180)),
         ),
         clothes=clothes,
+        mercatino=MercatinoSettings(enabled=bool((raw.get("mercatino") or {}).get("enabled", False)),
+                                    pages_per_run=int((raw.get("mercatino") or {}).get("pages_per_run", 2)),
+                                    daily_cap=min(950, int((raw.get("mercatino") or {}).get("daily_cap", 900)))),
     )
     return cfg

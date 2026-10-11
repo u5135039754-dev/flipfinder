@@ -388,6 +388,16 @@ const API = {
     return { sent: msg !== null && album !== null, to: body.to === "group" ? "group" : "owner" };
   },
 
+  /** The contact email for Mercatino Musicale's User-Agent (their condition): private, kept in settings, never in the repo. */
+  async "POST /api/mm_contact"({ bot }, body) {
+    const email = String(body.email || "").trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 120) return { ok: false, error: "not an email" };
+    bot.settings.mm_contact = email;
+    bot.changed = true;
+    await bot.save();
+    return { ok: true };
+  },
+
   /** One-time move of deals.json / settings.json (and the home area) into private storage. */
   async "POST /api/import"({ store }, body) {
     const have = await store.db.prepare("SELECT COUNT(*) AS c FROM deals").first();

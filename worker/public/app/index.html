@@ -897,10 +897,11 @@ function dutyButton(sc, onMe) {
 }
 
 // --- Settings → Searches: a card per topic with its rules and searches; owner/managers edit, others suggest
-const PLATFORM_NAMES = { vinted: "Vinted", ebay: "eBay", subito: "Subito" };
+const PLATFORM_NAMES = { vinted: "Vinted", ebay: "eBay", subito: "Subito", mercatino: "Mercatino" };
 const RULE_NAMES = { min_profit: "Min profit", min_roi: "Min ROI", max_price: "Max price" };
 const topicRuleText = (name, v) => (v == null ? "–" : name === "min_roi" ? `${v}%` : euro0(v));
-const range = (x) => `${x.price_from != null ? euro0(x.price_from) : "any"} – ${x.price_to != null ? euro0(x.price_to) : "no max"}`;
+const range = (x) => `${x.price_from != null ? euro0(x.price_from) : "any"} – ${x.price_to != null ? euro0(x.price_to)
+  : x.max_price != null ? `${euro0(x.max_price)} max` : "no max"}`;   // max_price: the search's own cap (Jackson €300)
 
 function searchesSection(d) {
   const S = d.searches;
@@ -972,11 +973,12 @@ function searchForm(d, tp, x) {
   const [must, mustBox] = input("Must have (optional, commas)", { value: (x?.must || []).join(", "), placeholder: "e.g. mini" });
   const [excl, exclBox] = input("Leave out (optional, commas)", { value: (x?.exclude || []).join(", "), placeholder: "e.g. cover, case" });
   const [size, sizeBox] = input("Size (optional)", { value: x?.size || "", placeholder: "e.g. M or 42", maxlength: "10" });
-  const plat = { ebay: (x?.platforms || []).includes("ebay"), subito: (x?.platforms || []).includes("subito") };
+  const extra = ["ebay", "subito", ...(tp.key === "guitars" ? ["mercatino"] : [])];   // Mercatino Musicale: music only
+  const plat = Object.fromEntries(extra.map((p) => [p, (x?.platforms || []).includes(p)]));
   const platRow = h("div", { class: "pick" });
   const paintPlat = () => platRow.replaceChildren(
     h("span", { class: "chip on", "aria-disabled": "true" }, "✓ Vinted"),
-    ...["ebay", "subito"].map((p) => h("button", { class: "chip" + (plat[p] ? " on" : ""), "aria-pressed": String(plat[p]),
+    ...extra.map((p) => h("button", { class: "chip" + (plat[p] ? " on" : ""), "aria-pressed": String(plat[p]),
       disabled: !S.platforms[p], onclick: () => { tap(); plat[p] = !plat[p]; paintPlat(); } },
     `${plat[p] ? "✓ " : ""}${PLATFORM_NAMES[p]}${S.platforms[p] ? "" : " (off)"}`)));
   paintPlat();

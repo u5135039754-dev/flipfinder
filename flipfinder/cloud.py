@@ -50,13 +50,14 @@ def catalog(cfg) -> dict:
     return {
         "searches": [{"query": s.query, "price_from": s.price_from, "price_to": s.price_to, "budget": s.budget,
                       "group": search_group(s), "price_to_is_budget": s.price_to_is_budget,
-                      **({"clothes": True} if s.clothes else {})} for s in cfg.searches],
+                      **({"clothes": True} if s.clothes else {}),
+                      **({"max_price": s.max_price} if s.max_price is not None else {})} for s in cfg.searches],
         "rules": {"min_profit": cfg.rules.min_profit, "min_roi": cfg.rules.min_roi,
                   "min_rating": cfg.rules.min_rating, "max_roi": cfg.rules.max_roi,
                   **({"max_price": cfg.rules.max_price} if cfg.rules.max_price is not None else {})},
         "budget_rules": cfg.budget_rules, "music_rules": cfg.music_rules, "clothes_rules": cfg.clothes.rules,
         "budget": cfg.budget_setting,
-        "ebay": cfg.ebay.enabled, "subito": cfg.subito.enabled,
+        "ebay": cfg.ebay.enabled, "subito": cfg.subito.enabled, "mercatino": cfg.mercatino.enabled,
     }
 
 
