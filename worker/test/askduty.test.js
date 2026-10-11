@@ -150,3 +150,16 @@ test("Mini App: ask with a note, incoming and outgoing lists, accept from the ap
   assert.equal(t.tg.sent("editMessageReplyMarkup")[0].reply_markup.inline_keyboard[0][0].text, "↩️ Cancelled");
   assert.equal((await app(t, { id: OWNER, first_name: "Boss" }, { action: "ask_accept", n: 2 })).status, 400);
 });
+
+test("someone who never opened the bot in private: asked in the group, the asker is told why", async () => {
+  const t = await setup({ settings: { ...team, bot_username: "flip_bot" } });
+  t.tg.fail = (method, p) => (method === "sendMessage" && String(p.chat_id) === String(LUCA)
+    ? { ok: false, error_code: 403, description: "Forbidden: bot can't initiate conversation with a user" } : null);
+  await send(t, "/askduty Luca 18-20", MARCO, at(14));
+  const post = t.tg.sent().find((p) => String(p.chat_id) === GROUP && p.text?.includes("asks you to take duty"));
+  assert.match(post.text, /Luca<\/a>, Marco asks you to take duty 18:00–20:00\n📩 Open a private chat with @flip_bot/);
+  assert.deepEqual(post.reply_markup.inline_keyboard[0].map((b) => b.callback_data), ["dya:1", "dyn:1"]);
+  assert.match(dmTo(t, MARCO).at(-1).text, /Asked Luca for 18:00–20:00 in the group \(Luca hasn't opened a private chat/);
+  await tapAt(t, "dya:1", LUCA, at(14, 5), Number(GROUP));               // accepting in the group works the same
+  assert.match(said(t), /You're on duty 18:00–20:00/);
+});

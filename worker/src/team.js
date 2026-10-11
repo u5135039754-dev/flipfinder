@@ -469,13 +469,17 @@ export class Team {
     let res = await this.bot.tg.sendTo(String(to.id), text, { buttons: this.askButtons(n) });
     if (res) ask.msgs.push({ chat: String(to.id), id: res.message_id });
     else {   // never opened the bot in private: ask in the group instead
+      const bot = await this.bot.botUsername().catch(() => "");
+      const open = bot ? `
+📩 Open a private chat with @${esc(bot)} (tap Start) to get these privately next time` : "";
       res = await this.groupPost(`🙋 ${mention(to)}, ${esc(from.name)} asks you to take duty ${when}` + (note ? `
-💬 ${esc(note)}` : ""),
-        this.askButtons(n));
+💬 ${esc(note)}` : "") + open, this.askButtons(n));
       if (res) ask.msgs.push({ chat: String(res.chat.id), id: res.message_id });
+      if (res) ask.in_group = true;
     }
     await this.saveDuty();
-    return `🙋 Asked ${to.name} for ${when}${res ? "" : " (I couldn't reach them)"}`;
+    const where = !res ? " (I couldn't reach them)" : ask.in_group ? ` in the group (${to.name} hasn't opened a private chat with the bot yet)` : " in private";
+    return `🙋 Asked ${to.name} for ${when}${where}`;
   }
 
   async closeAsk(ask, label) {

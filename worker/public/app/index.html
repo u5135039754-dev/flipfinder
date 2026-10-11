@@ -46,6 +46,15 @@
     --stock: #eb6834;
     --line-profit: #1baf7a;
   }
+  /* Settings → Appearance: a fixed light or dark look instead of following Telegram */
+  :root[data-force="dark"] {
+    --bg: #0f1218; --card: #191e27; --card-2: #202633; --text: #eef1f6; --muted: #8b93a5;
+    --accent: #3d8bfd; --accent-text: #ffffff;
+  }
+  :root[data-force="light"] {
+    --bg: #f1f2f6; --card: #ffffff; --card-2: #f6f7f9; --text: #000000; --muted: #8e8e93;
+    --accent: #3390ec; --accent-text: #ffffff;
+  }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { margin: 0; background: var(--bg); color: var(--text); }
   body { font: 15px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
@@ -913,6 +922,10 @@ function settingsTab(d) {
   const s = d.settings;
   const edit = (label, onclick) => h("button", { class: "btn", onclick }, label);
   const out = [h("button", { class: "btn hb-link", style: "margin-top:8px", onclick: () => openHandbook("settings") }, "📖 Team handbook"),
+    h("h2", {}, "Appearance"),
+    h("div", { class: "seg", style: "grid-template-columns:1fr 1fr 1fr" }, [["auto", "Auto"], ["light", "☀️ Light"], ["dark", "🌙 Dark"]].map(([k, label]) =>
+      h("button", { class: themePref === k ? "on" : "", "aria-pressed": String(themePref === k), onclick: () => { tap(); setTheme(k); } }, label))),
+    h("div", { class: "label", style: "margin:-4px 4px 4px" }, themePref === "auto" ? "Follows your Telegram theme" : "Only on your account: the others keep their own"),
     h("h2", {}, "Budget mode"), h("div", { class: "card" },
     h("div", { class: "row" }, h("div", {}, h("div", { style: "font-weight:600" }, `Budget ${euro(s.budget_setting)}`),
       h("div", { class: "label" }, `In effect: ${euro(s.budget)} (never more than the pot's cash)`)),
@@ -973,14 +986,44 @@ window.addEventListener("touchend", async () => {
   ptr.style.height = "0";
 });
 
+// Appearance: "auto" follows Telegram; "light"/"dark" fix it. Kept on this phone (localStorage) and,
+// where Telegram supports it, in the user's Telegram cloud so it follows them to other devices.
+const THEMES = ["auto", "light", "dark"];
+let themePref = "auto";
+try { themePref = THEMES.includes(localStorage.getItem("ff-theme")) ? localStorage.getItem("ff-theme") : "auto"; } catch {}
+
 function applyTheme() {
-  document.documentElement.dataset.theme = tg?.colorScheme === "light" ? "light" : "dark";
+  const root = document.documentElement;
+  const look = themePref === "auto" ? (tg?.colorScheme === "light" ? "light" : "dark") : themePref;
+  root.dataset.theme = look;
+  if (themePref === "auto") delete root.dataset.force;
+  else root.dataset.force = themePref;
+  const bg = themePref === "auto" ? "bg_color" : getComputedStyle(root).getPropertyValue("--bg").trim();
+  try { tg?.setHeaderColor?.(bg); tg?.setBackgroundColor?.(bg); } catch {}
 }
+
+function setTheme(pref) {
+  themePref = THEMES.includes(pref) ? pref : "auto";
+  try { localStorage.setItem("ff-theme", themePref); } catch {}
+  try { tg?.CloudStorage?.setItem?.("theme", themePref); } catch {}
+  applyTheme();
+  render(false);
+}
+
 applyTheme();
+try {
+  tg?.CloudStorage?.getItem?.("theme", (err, v) => {
+    if (!err && THEMES.includes(v) && v !== themePref) {
+      themePref = v;
+      try { localStorage.setItem("ff-theme", v); } catch {}
+      applyTheme();
+      render(false);
+    }
+  });
+} catch {}
 tg?.onEvent?.("themeChanged", () => { applyTheme(); render(false); });
 tg?.ready();
 tg?.expand();
-try { tg?.setHeaderColor?.("bg_color"); tg?.setBackgroundColor?.("bg_color"); } catch {}
 render();
 load();
 document.addEventListener("visibilitychange", () => { if (!document.hidden) load(false); });
