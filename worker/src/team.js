@@ -5,6 +5,7 @@
 //   kv "tasks", kv "health" (per-day scan counts for the report).
 
 import { Telegram } from "./telegram.js";
+import { TOPIC_FOR_GROUP } from "./group.js";
 import { DAY, UserError, addDays, esc, hhmm, rome, romeTs } from "./util.js";
 
 export const ROLES = {
@@ -835,6 +836,25 @@ export class Team {
     }
     const team = this.members().filter((m) => m.role);
     return team.length ? `👮 Nobody on duty: ${team.map(mention).join(" ")}` : "";
+  }
+
+  /** The person a topic always tags (/tagalways clothes <name>), or null. */
+  tagAlways(topic) {
+    const id = this.bot.settings.tag_always?.[topic];
+    const m = id ? this.member(id) : null;
+    return m && this.hasRole(m.id) ? m : null;
+  }
+
+  /**
+   * The @mentions under a deal: whoever is on duty (dealMention), plus its topic's always-tag person, never
+   * the same person twice. A ❌ NO (or a deal going to Rejected) tags nobody.
+   */
+  async alertMention(d, ts = this.now) {
+    if (d.rejected || d.ai?.verdict === "no") return "";
+    const base = await this.dealMention(ts);
+    const always = this.tagAlways(TOPIC_FOR_GROUP[d.group || ""] || "");
+    if (!always || base.includes(`tg://user?id=${always.id}`)) return base;
+    return [base, `📌 ${mention(always)}`].filter(Boolean).join(" · ");
   }
 
   /** New deals nobody claimed within 10 minutes: ping the people who aren't on duty. */

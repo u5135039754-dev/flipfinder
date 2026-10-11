@@ -215,7 +215,7 @@ const API = {
       else if (!first) late = job;   // still thinking: out now in its topic, moved if the answer is NO
     }
     d.rejected = d.ai?.verdict === "no" && bot.ai.rejects();
-    d.mention = d.rejected ? "" : await bot.team.dealMention(now);
+    d.mention = await bot.team.alertMention(d, now);   // on duty + the topic's /tagalways person; nobody for a NO
     d.messages = await tg.sendAlert(fullText(d), d.photo, keyboard(body.key, d, cfg.enabled), dealTopic(d, ctx.settings.topics),
       d.mention, { silent: d.rejected });
     d.alerted_at = now;
@@ -468,9 +468,13 @@ export async function runCron(env, opts = {}) {
     const queued = (await store.deals("WHERE queued = 1")).filter(([, d]) => d.status === "new");
     queued.sort((a, b) => compare(b[1].score || [0, 0, 0, 0], a[1].score || [0, 0, 0, 0]));
     let flushed = 0;
+    const batch = {};   // topics with a /tagalways person: their overnight deals go out untagged, then one message tags once
     for (const [key, d] of queued.slice(0, MAX_QUEUE_FLUSH)) {
       if (tg.callsLeft < 8) break;   // the rest go out in 5 minutes
-      d.mention = await bot.team.dealMention(now);
+      const topic = TOPIC_FOR_GROUP[d.group || ""] || "";
+      const once = Boolean(bot.team.tagAlways(topic));
+      d.mention = once ? "" : await bot.team.dealMention(now);
+      if (once && d.ai?.verdict !== "no") (batch[topic] ??= []).push(d);
       d.messages = [...(d.messages || []), ...(await tg.sendAlert(fullText(d), d.photo, keyboard(key, d, bot.ai.config.enabled),
         dealTopic(d, settings.topics), d.mention))];
       d.queued = false;
@@ -479,6 +483,14 @@ export async function runCron(env, opts = {}) {
       flushed += d.messages.length ? 1 : 0;
     }
     if (flushed) await store.put("flushed", Number(await store.get("flushed", 0)) + flushed);
+    for (const [topic, list] of Object.entries(batch)) {
+      const ping = await bot.team.alertMention(list[0], now);
+      if (!ping) continue;
+      const nums = list.map((x) => `#${x.n ?? "?"}`).join(", ");
+      for (const gid of tg.groups) {
+        await tg.sendTo(gid, `☀️ ${list.length} ${list.length === 1 ? "deal" : "deals"} from overnight: ${nums}\n${ping}`, { topic });
+      }
+    }
   }
   // claims with no update, things bought but not listed, things listed but not sold
   await bot.reminders(dueReminders(await store.deals("WHERE status IN ('claimed', 'bought', 'listed')"), now));

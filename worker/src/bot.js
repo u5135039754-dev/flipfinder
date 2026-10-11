@@ -18,7 +18,7 @@ import { DEFAULT_WATCH, MAX_WATCH, findCoin, watchlist } from "./crypto.js";
 import { hhmm, rome, romeTs } from "./util.js";
 import { UserError, closeMatches, esc, euro, g, parseNumber, queryAndRange, splitArgs } from "./util.js";
 
-export const COMMANDS_VERSION = 26;   // bump when the list below changes, so it's registered again
+export const COMMANDS_VERSION = 27;   // bump when the list below changes, so it's registered again
 export const UNDOABLE = ["deposit", "withdraw", "fix", "personal", "refund"];   // /undo; buys and sales: /fix
 export const TREASURER_CMDS = new Set(["deposit", "withdraw", "paidby", "refund"]);
 export const POT_CHECK_MIN = 19 * 60 + 30;   // Sunday 19:30: the treasurer's pot balance screenshot
@@ -64,6 +64,7 @@ export const COMMANDS = [
   ["repairs", "Owner only: repair deals (damaged but fixable): /repairs on or /repairs off"],
   ["abroad", "Owner only: Vinted listings from other countries: /abroad on or /abroad off (Italy only)"],
   ["remind", "Owner only: the \"not claimed yet\" digest: /remind on or /remind off"],
+  ["tagalways", "Owner only: always @mention someone on a topic's deals: /tagalways clothes Anna, /tagalways clothes off"],
   ["setname", "Owner only: the name the bot uses for someone: /setname 123456789 Anna"],
   ["ledger", "Every money action, newest last: /ledger or /ledger 30"],
   ["deposit", "Owner or treasurer: money put in: /deposit Marco 100"],
@@ -77,7 +78,7 @@ export const COMMANDS = [
   ["allow", "Owner only: first step for a new member: /allow 123456789, then /setrole"],
   ["intro", "Owner only: post or update the pinned intro in every topic"],
 ];
-const OWNER_ONLY = new Set(["allow", "intro", "deposit", "withdraw", "fix", "undo", "split", "setrole", "removerole", "delnote", "setname", "remind", "repairs", "abroad", "reports", "paidby", "refund", "settreasurer"]);
+const OWNER_ONLY = new Set(["tagalways", "allow", "intro", "deposit", "withdraw", "fix", "undo", "split", "setrole", "removerole", "delnote", "setname", "remind", "repairs", "abroad", "reports", "paidby", "refund", "settreasurer"]);
 export const LOCKED = "🔒 You're not a member of FLIP MAFIA";
 const IN_GROUP = new Set(["member", "administrator", "creator", "restricted"]);
 // the fast lane's settings (the scanner has the same defaults in flipfinder/fastlane.py)
@@ -384,6 +385,35 @@ Add one with /watch link, remove with /unwatch sol`);
     const role = args.at(-1).toLowerCase();
     if (role === "none") return this.takeRole(chat, name);
     await this.reply(chat, this.team.setRole(name, role));
+  }
+
+  /** /tagalways <topic> <name|off>: someone tagged on every deal in that topic (plus whoever is on duty). */
+  async cmd_tagalways(chat, args, user) {
+    if (user !== this.ownerId) throw new UserError("Only the owner can use /tagalways");
+    const topics = this.searches.topicKeys().filter((k) => k !== "repairs");
+    const now = this.settings.tag_always || {};
+    if (!args.length) {
+      const lines = topics.map((k) => `${this.searches.label(k)}: ${now[k] ? esc(this.team.nameOf(now[k])) : "nobody"}`);
+      return this.reply(chat, ["📌 <b>Always tagged</b> (plus whoever is on duty)", ...lines, "",
+        `/tagalways &lt;${topics.join("|")}&gt; &lt;name&gt; or off`].join("\n"));
+    }
+    const topic = topics.find((k) => k === args[0].toLowerCase() || this.searches.label(k).toLowerCase() === args[0].toLowerCase());
+    if (!topic) throw new UserError(`Which topic? ${topics.join(", ")}`);
+    const rest = args.slice(1).join(" ").trim();
+    if (!rest) throw new UserError(`Who? e.g. /tagalways ${topic} Anna, or /tagalways ${topic} off`);
+    if (rest.toLowerCase() === "off") {
+      const next = { ...now };
+      delete next[topic];
+      this.settings.tag_always = next;
+      this.changed = true;
+      return this.reply(chat, `📌 ${this.searches.label(topic)}: nobody tagged always (whoever is on duty still is)`);
+    }
+    const m = this.team.find(rest);
+    if (!m || !this.team.hasRole(m.id)) throw new UserError(`I don't know "${rest}" in the team. /roles lists everyone`);
+    this.settings.tag_always = { ...now, [topic]: m.id };
+    this.changed = true;
+    await this.reply(chat, `📌 ${this.searches.label(topic)}: ${esc(m.name)} is tagged on every deal (✅ YES or not checked yet; ` +
+      "never on a ❌ NO), plus whoever is on duty. Overnight deals: one tag at 08:00.");
   }
 
   async cmd_repairs(chat, args, user) {
