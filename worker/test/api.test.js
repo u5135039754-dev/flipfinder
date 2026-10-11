@@ -126,3 +126,15 @@ test("POST /api/owner_dm: a plain-text note to the owner only, never the group",
   assert.equal(sent[0].text, "Need you: &lt;check&gt; the deploy");
   assert.equal((await t.api("POST", "/api/owner_dm", { text: " " })).body.sent, false);
 });
+
+test("POST /api/owner_dm with a file: a document to the owner, the text as its caption", async () => {
+  const t = await setup();
+  const b64 = Buffer.from("PNGDATA").toString("base64");
+  const r = await t.api("POST", "/api/owner_dm", { text: "Schedule <light>", file: { name: "a.png", type: "image/png", b64 } });
+  assert.equal(r.body.sent, true);
+  const doc = t.tg.sent("sendDocument")[0];
+  assert.equal(doc.chat_id, String(OWNER));
+  assert.equal(doc.caption, "Schedule &lt;light&gt;");
+  assert.deepEqual(doc.document, { name: "a.png", type: "image/png", text: "PNGDATA" });
+  assert.equal((await t.api("POST", "/api/owner_dm", { file: { b64: "%%%" } })).body.sent, false);
+});
