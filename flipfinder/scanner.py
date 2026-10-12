@@ -34,6 +34,10 @@ MAX_POOL_REBUILDS = 4
 # with the job's own setup, so one slow machine can't hit the workflow's time limit.
 RUN_BUDGET = 270
 REVERB_EVERY_MIN = 15      # Reverb: every 3rd run (it rarely finds anything)
+# the last part of the budget is kept for Mercatino and Reverb (they come last), so searches stop this much
+# earlier when either runs this run; they may still start up to TAIL_GRACE after the budget
+TAIL_RESERVE = 30
+TAIL_GRACE = 15
 MUSIC = {"Guitars", "Amps", "Pedals", "Studio"}
 BIG_MUSIC = {"Guitars", "Amps"}   # shipping costs a lot: skipped on Vinted when it's over MAX_SHIP_SHARE of the price
 MAX_SHIP_SHARE = 0.2
@@ -850,6 +854,9 @@ class Scanner:
         self.carry = getattr(self, "carry", set())
         self.run_start = getattr(self, "run_start", time.time())
         self.deadline = getattr(self, "deadline", self.run_start + RUN_BUDGET)
+        reverb_due = time.time() - getattr(self, "reverb_state", {}).get("last_pass", 0.0) >= REVERB_EVERY_MIN * 60 - 30
+        tail = bool(getattr(self, "mercatino", None)) or bool(getattr(self, "reverb", None) and reverb_due)
+        reserve = TAIL_RESERVE if tail else 0
         for s in sorted(self.cfg.searches, key=lambda x: (_sid(x) not in self.carry, self._tier(x))):
             if not s.enabled:
                 continue
@@ -861,7 +868,7 @@ class Scanner:
                 # e.g. a €500+ Gibson under the music max price: nothing to find, and Vinted refuses the range
                 log.info("'%s' skipped: its prices start at €%g, over its max price €%g", s.query, s.price_from, cap)
                 continue
-            if time.time() >= self.deadline:
+            if time.time() >= self.deadline - reserve:
                 if self.known.has(s):
                     left.append(_sid(s))   # due but not reached: first next run
                 continue
@@ -876,14 +883,13 @@ class Scanner:
                 self.failed_searches += 1
                 log.error("Search '%s' failed: %s", s.query, e)
         self.carry_next = left
-        if getattr(self, "mercatino", None) and time.time() < self.deadline:
+        if getattr(self, "mercatino", None) and time.time() < self.deadline + TAIL_GRACE:
             try:
                 deals += self._scan_mercatino()
             except Exception as e:   # never stops the scan
                 log.error("Mercatino Musicale failed: %s", e)
             self.mercatino.save()
-        reverb_due = time.time() - getattr(self, "reverb_state", {}).get("last_pass", 0.0) >= REVERB_EVERY_MIN * 60 - 30
-        if getattr(self, "reverb", None) and reverb_due and time.time() < self.deadline:
+        if getattr(self, "reverb", None) and reverb_due and time.time() < self.deadline + TAIL_GRACE:
             self.reverb_state["last_pass"] = time.time()
             try:
                 deals += self._scan_reverb()

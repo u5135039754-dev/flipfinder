@@ -268,3 +268,37 @@ def test_fast_subito_rotates_within_its_time_and_finds_deals(tmp_path, monkeypat
     calls.clear()
     deals, done, total = sc.fast_subito([phone], t.time() - 1, start=1)
     assert (done, calls) == (0, [])
+
+
+def test_last_30s_kept_for_mercatino_and_reverb(tmp_path, monkeypatch):
+    """When Mercatino or Reverb runs, searches stop 30 s before the budget so they still get their turn."""
+    import time as t
+    from flipfinder import scanner as scmod
+    cfg = config.load()
+    cfg.seen_file = tmp_path / "seen.json"
+    cfg.subito.enabled = False
+    cfg.stagger = False
+    for s in cfg.searches:
+        s.every_minutes = s.slow_minutes = 0
+    def run(with_tail):
+        sc = Scanner(cfg)
+        for s in cfg.searches:
+            sc.known.add(s)
+        sc.seen.add("vinted:0")
+        sc.first_run = False
+        sc.reverb = None
+        sc.deadline = t.time() + 20            # 20 s left: inside the 30 s kept for the tail
+        tail = []
+        sc.mercatino = type("M", (), {"save": lambda self: None})() if with_tail else None
+        ran = []
+        monkeypatch.setattr(sc, "scan_search", lambda s: ran.append(s) or [])
+        monkeypatch.setattr(sc, "_scan_mercatino", lambda: tail.append("mm") or [])
+        monkeypatch.setattr(sc, "_fetch_subito", lambda: None)
+        monkeypatch.setattr(sc, "check_sold", lambda: None)
+        sc.scan()
+        return ran, tail
+    ran, tail = run(True)
+    assert ran == [] and tail == ["mm"]          # searches wait, Mercatino runs
+    ran, tail = run(False)
+    assert len(ran) > 0 and tail == []           # nothing at the end: searches use the full budget
+    assert scmod.TAIL_RESERVE == 30
