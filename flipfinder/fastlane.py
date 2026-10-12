@@ -21,7 +21,11 @@ DEFAULTS = {
     "groups": ["Guitars", "Amps", "Pedals", "Electronics", "Audio"],
     "per_run": 8,            # searches per pass (~4 s each: a pass stays under 40 s); the list rotates
     "backoff_until": 0,      # after a Vinted 403/429: every BACKOFF_INTERVAL min until then
+    "subito": False,         # Subito's newest listings too (/fast subito on|off)
+    "subito_radius": 100,    # km for pickup listings in the fast lane
+    "subito_backoff_until": 0,   # after a Subito 403/429: Subito every BACKOFF_INTERVAL min until then
 }
+PASS_BUDGET = 40             # seconds: Subito calls only start while a pass is younger than this
 BACKOFF_INTERVAL = 5
 BACKOFF_SECONDS = 3600
 QUIET_UNTIL_HOUR = 8         # same as the Worker: no deal alerts 00:00-08:00 Italy time
@@ -48,6 +52,15 @@ def due(fs: dict, now: float | None = None, last_started: float = 0) -> tuple[bo
         return False, f"too soon (every {every} min" + (", backing off after a Vinted block)"
                                                         if now < (fs.get("backoff_until") or 0) else ")")
     return True, ""
+
+
+def subito_due(fs: dict, now: float, last_subito: float = 0) -> bool:
+    """Subito in this pass: switched on, and when backing off after a block only every BACKOFF_INTERVAL minutes."""
+    if not fs.get("subito"):
+        return False
+    if now < (fs.get("subito_backoff_until") or 0):
+        return now - (last_subito or 0) >= BACKOFF_INTERVAL * 60 - SLACK_SECONDS
+    return True
 
 
 def searches_for(cfg, fs: dict, group_of) -> list:

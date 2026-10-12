@@ -103,6 +103,10 @@ def item_from_subito(ad: dict) -> Item | None:
     )
 
 
+class SubitoBlocked(RuntimeError):
+    """Subito said 403/429 while in the fast lane: stop now, never wait."""
+
+
 @dataclass
 class SubitoClient:
     region: int                           # Subito ids of the home area (private, from the Worker)
@@ -118,6 +122,8 @@ class SubitoClient:
     wide_categories: tuple = (39,)                            # Strumenti Musicali
     request_delay: float = 2.0
     calls: int = 0
+    fast: bool = False       # the fast lane: on 403/429 stop at once (SubitoBlocked) instead of waiting
+    blocked: int = 0         # 403/429 answers so far
     session: requests.Session = field(default_factory=requests.Session)
 
     def __post_init__(self):
@@ -129,6 +135,10 @@ class SubitoClient:
             time.sleep(self.request_delay + random.uniform(0, 1))
             r = self.session.get(SEARCH_URL, params={"t": "s", **params}, timeout=20)
             self.calls += 1
+            if r.status_code in (403, 429):
+                self.blocked += 1
+                if self.fast:
+                    raise SubitoBlocked(f"Subito said {r.status_code}")
             if r.status_code == 429:
                 log.warning("Subito rate limit, waiting")
                 time.sleep(30 * (attempt + 1))
@@ -184,6 +194,17 @@ class SubitoClient:
         # Subito's own condition field: "Danneggiato" = damaged / for parts
         items = [i for i in items if not i.condition.lower().startswith("danneggiat")]
         return [self.delivery(i) for i in items if self.in_area(i)]
+
+    def newest_nearby(self, category: int, radius: float, limit: int = 50) -> list[Item]:
+        """
+        The fast lane's pickup check: the newest listings of a category in the home region (music: the wide
+        regions), kept within `radius` km, with the usual pickup travel cost (or the seller's shipping, if cheaper).
+        """
+        if category in self.wide_categories and self.wide_regions and self.wide_radius_km:
+            return self.newest_in_area(category, limit)
+        ads = self._get({"c": category, "r": self.region, "sort": "datedesc", "lim": limit, "start": 0})
+        items = [i for i in map(item_from_subito, ads) if i and not i.condition.lower().startswith("danneggiat")]
+        return [self.delivery(i) for i in items if self.in_area(i, radius)]
 
     def pickup_radius(self, category: int) -> float:
         return self.wide_radius_km if category in self.wide_categories and self.wide_regions and self.wide_radius_km else self.radius_km

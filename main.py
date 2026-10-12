@@ -81,6 +81,17 @@ def fast_pass(cloud: Cloud | None, args) -> int:
     queries = fastlane.this_pass(cfg, fs, search_group, last.get("passes", 0))
     scanner = Scanner(cfg)
     deals = scanner.fast_scan(queries)
+    sub_calls = sub_total = sub_blocked = 0
+    sub_next = last.get("subito_next", 0)
+    if fastlane.subito_due(fs, time.time(), last.get("subito_last", 0)) and scanner.subito:
+        sub_deals, sub_calls, sub_total = scanner.fast_subito(fastlane.searches_for(cfg, fs, search_group),
+                                                              started + fastlane.PASS_BUDGET, sub_next,
+                                                              float(fs.get("subito_radius") or 100))
+        sub_blocked = scanner.subito.blocked
+        sub_next = (sub_next + sub_calls) % sub_total if sub_total else 0   # sub_calls = steps done (rotation)
+        sub_calls = scanner.subito.calls                                     # requests made (music asks several regions)
+        known = {d.item.key for d in deals}
+        deals += [d for d in sub_deals if d.item.key not in known]
     sent_keys = []
     for deal in deals[:MAX_ALERTS_PER_SCAN]:
         if args.dry_run:
@@ -90,13 +101,15 @@ def fast_pass(cloud: Cloud | None, args) -> int:
             sent_keys.append(deal.item.key)
     secs = round(time.time() - started, 1)
     vinted = scanner.client
-    logging.info("Fast lane: %d searches, %d Vinted page loads, %d blocked (403/429), %d new listing(s) checked, "
-                 "%d deal(s), %.1fs", len(queries), vinted.requests, vinted.blocked, scanner.checked, len(deals), secs)
+    logging.info("Fast lane: %d searches, %d Vinted page loads, %d blocked (403/429), %d Subito calls of %d, %d blocked, "
+                 "%d new listing(s) checked, %d deal(s), %.1fs", len(queries), vinted.requests, vinted.blocked,
+                 sub_calls, sub_total, sub_blocked, scanner.checked, len(deals), secs)
     if cloud and not args.dry_run:
         if sent_keys:
             cloud.analyze(sent_keys)
         cloud.fast_report({"started": started, "secs": secs, "requests": vinted.requests, "blocked": vinted.blocked,
-                           "searches": len(queries), "checked": scanner.checked, "deals": len(deals), "sent": len(sent_keys)})
+                           "searches": len(queries), "checked": scanner.checked, "deals": len(deals), "sent": len(sent_keys),
+                           "subito_requests": sub_calls, "subito_blocked": sub_blocked, "subito_next": sub_next})
     return 0
 
 

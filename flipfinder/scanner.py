@@ -15,7 +15,7 @@ from .analyzer import (FAKE_SELLER, NEW_SELLER, Deal, Rules, assess, blend_sold,
 from .config import Config, Search
 from .ebay import CATEGORY_FOR_VINTED_CATALOG as EBAY_CATEGORY_FOR_VINTED_CATALOG
 from .ebay import EbayClient
-from .subito import CATEGORY_FOR_VINTED_CATALOG, SubitoClient
+from .subito import CATEGORY_FOR_VINTED_CATALOG, SubitoBlocked, SubitoClient
 from .mercatino import MercatinoClient
 from .reverb import ReverbClient, assess_reverb
 from .sold import SoldTracker
@@ -682,6 +682,53 @@ class Scanner:
             deals += [tag(d, s) for d in self._evaluate(s, fresh, pool, self._rules(s))]
         deals.sort(key=lambda d: (d.budget, d.per_euro if d.budget else 0, d.rating, d.profit), reverse=True)
         return deals
+
+    def fast_subito(self, searches: list[Search], until: float, start: int = 0, radius: float = 100) -> tuple[list[Deal], int, int]:
+        """
+        The fast lane's Subito part: for the categories of the fast-lane searches, the newest listings nearby (pickup
+        within `radius` km) and Italy-wide with shipping, as many of those calls as fit before `until`, starting at
+        `start` so the rest come first next pass. New ones are checked against the saved price pools. Returns the deals,
+        the calls made and how many calls a full round has. A 403/429 stops Subito for this pass at once.
+        """
+        if not self.subito:
+            return [], 0, 0
+        self.subito.fast = True
+        subs = [x for x in searches if x.enabled and x.uses("subito") and self.known.has(x)]
+        cats = sorted({self._subito_category(x) for x in subs})
+        tasks = [(c, kind) for c in cats for kind in ("near", "ship")]
+        found: dict[str, Item] = {}
+        done = 0
+        for k in range(len(tasks)):
+            if time.time() >= until:
+                break
+            cat, kind = tasks[(start + k) % len(tasks)]
+            try:
+                items = self.subito.newest_nearby(cat, radius) if kind == "near" else self.subito.newest_shipping(cat)
+            except SubitoBlocked as e:
+                log.warning("Fast lane: %s, Subito stops for this pass", e)
+                done += 1
+                break
+            except Exception as e:
+                log.error("Fast lane: Subito category %s failed: %s", cat, e)
+                done += 1
+                continue
+            done += 1
+            for i in items:
+                i.category = cat
+                found.setdefault(i.key, i)
+        self.subito_new = [i for i in found.values() if i.key not in self.seen]
+        deals: list[Deal] = []
+        for x in subs:
+            fresh = [i for i in self._subito_for(x) if i.key not in self.seen and x.wants(i)]
+            if not fresh:
+                continue
+            keys = [_key(x), "subito " + _key(x)] + ([f"ebay {self._ebay_category(x)} " + _key(x)] if self.ebay and x.uses("ebay") else [])
+            cached = [i for p in (self.pools.get(k, any_age=True) for k in keys) if p for i in p]
+            if not cached:
+                continue
+            log.info("Fast lane Subito '%s': %d new", x.query, len(fresh))
+            deals += [tag(d, x) for d in self._evaluate(x, fresh, _merge(cached, fresh), self._rules(x))]
+        return deals, done, len(tasks)
 
     def _seed(self, s: Search, listed: list[Item], fresh: list[Item]):
         """

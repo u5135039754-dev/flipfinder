@@ -84,7 +84,7 @@ export const LOCKED = "🔒 You're not a member of FLIP MAFIA";
 const IN_GROUP = new Set(["member", "administrator", "creator", "restricted"]);
 // the fast lane's settings (the scanner has the same defaults in flipfinder/fastlane.py)
 export const FAST_DEFAULTS = { enabled: false, interval: 2, groups: ["Guitars", "Amps", "Pedals", "Electronics", "Audio"],
-  per_run: 8, backoff_until: 0 };
+  per_run: 8, backoff_until: 0, subito: false, subito_radius: 100, subito_backoff_until: 0 };
 const FAST_BACKOFF = 3600;
 
 export function claimerName(user) {
@@ -794,6 +794,11 @@ Add one with /watch link, remove with /unwatch sol`);
       set({ enabled: true, interval: n });
       return this.reply(chat, `⚡ Fast lane on: the newest listings every ${n} min (${this.fastSettings().per_run} searches a pass)`);
     }
+    if (a === "subito" && (rest[0] === "on" || rest[0] === "off")) {
+      set({ subito: rest[0] === "on" });
+      return this.reply(chat, rest[0] === "on" ? "⚡ Fast lane: Subito's newest too (pickup within 100 km + shipping from all Italy)"
+        : "⚡ Fast lane: Vinted only (Subito stays in the full scan every 5 min)");
+    }
     if (a === "per") {
       const n = Number(rest[0]);
       if (!Number.isInteger(n) || n < 1 || n > 20) throw new UserError("1 to 20 searches a pass, e.g. /fast per 8");
@@ -824,8 +829,11 @@ Add one with /watch link, remove with /unwatch sol`);
     lines.push(runs.length
       ? `Last hour: ${runs.length} passes, ${avg("secs").toFixed(1)} s each on average, ` +
         `${Math.round(runs.reduce((s, r) => s + r.requests, 0))} Vinted page loads, ` +
-        `${runs.reduce((s, r) => s + r.blocked, 0)} blocked, ${runs.reduce((s, r) => s + r.sent, 0)} deal(s) sent`
+        `${runs.reduce((s, r) => s + r.blocked, 0)} blocked, ${runs.reduce((s, r) => s + r.sent, 0)} deal(s) sent` +
+        (fs.subito ? `\nSubito: ${runs.reduce((s, r) => s + (r.subito_requests || 0), 0)} calls, ` +
+          `${runs.reduce((s, r) => s + (r.subito_blocked || 0), 0)} blocked` : "")
       : "No passes in the last hour");
+    if (fs.subito_backoff_until > this.now) lines.push(`⚠️ Subito backing off after a block: every 5 min until ${hhmm(fs.subito_backoff_until)}`);
     lines.push("", "The full scan (every 5 min), eBay (every 20 min) and Subito don't change.");
     return lines.join("\n");
   }
@@ -845,12 +853,23 @@ Add one with /watch link, remove with /unwatch sol`);
     await this.store.put("fast_week", week);
     const stats = await this.store.get("fast_stats", []);
     stats.push({ at: this.now, secs: Number(r.secs) || 0, requests: Number(r.requests) || 0, blocked: Number(r.blocked) || 0,
-      searches: Number(r.searches) || 0, checked: Number(r.checked) || 0, deals: Number(r.deals) || 0, sent: Number(r.sent) || 0 });
+      searches: Number(r.searches) || 0, checked: Number(r.checked) || 0, deals: Number(r.deals) || 0, sent: Number(r.sent) || 0,
+      subito_requests: Number(r.subito_requests) || 0, subito_blocked: Number(r.subito_blocked) || 0 });
     await this.store.put("fast_stats", stats.slice(-300));
     // when the last pass started and how many ran: the scanner's "too soon?" check and rotation
     const state = await this.store.get("fast_state", { last_started: 0, passes: 0 });
-    await this.store.put("fast_state", { last_started: Number(r.started) || this.now, passes: (state.passes || 0) + 1 });
+    await this.store.put("fast_state", { ...state, last_started: Number(r.started) || this.now, passes: (state.passes || 0) + 1,
+      // Subito: where the rotation goes on next pass, and when it last ran (for the back-off)
+      subito_next: Number(r.subito_next) || 0,
+      subito_last: Number(r.subito_requests) > 0 ? this.now : (state.subito_last || 0) });
     const fs = this.fastSettings();
+    if (Number(r.subito_blocked) > 0 && !(fs.subito_backoff_until > this.now)) {
+      this.settings.fast = { ...(this.settings.fast || {}), subito_backoff_until: this.now + FAST_BACKOFF };
+      this.changed = true;
+      await this.tg.call("sendMessage", { chat_id: this.ownerId, parse_mode: "HTML",
+        text: `⚠️ <b>Fast lane</b>: Subito refused ${Number(r.subito_blocked)} request(s) (403/429). Subito in the fast lane ` +
+          "slows to every 5 min for an hour, then goes back to every pass by itself. The full scan carries on as usual." });
+    }
     if (!(Number(r.blocked) > 0) || fs.backoff_until > this.now) return { backoff: fs.backoff_until > this.now };
     this.settings.fast = { ...(this.settings.fast || {}), backoff_until: this.now + FAST_BACKOFF };
     this.changed = true;

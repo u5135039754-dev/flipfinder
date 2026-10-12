@@ -202,3 +202,69 @@ def test_reverb_every_third_run(tmp_path, monkeypatch):
     sc.deadline = t.time() + 300
     sc.scan()
     assert calls == [1, 1]
+
+
+def test_fast_lane_subito_timing():
+    from flipfinder import fastlane
+    fs = {**fastlane.DEFAULTS, "enabled": True}
+    assert not fastlane.subito_due(fs, 1000.0)                              # off until /fast subito on
+    fs["subito"] = True
+    assert fastlane.subito_due(fs, 1000.0)
+    fs["subito_backoff_until"] = 5000.0                                      # backing off after a block
+    assert not fastlane.subito_due(fs, 1100.0, last_subito=1000.0)          # only every 5 min
+    assert fastlane.subito_due(fs, 1300.0, last_subito=1000.0)
+
+
+def test_subito_fast_mode_stops_at_once_on_a_block(monkeypatch):
+    import time as t
+    from flipfinder.subito import SubitoBlocked
+    sb = SubitoClient(region=1, province=1, center=(45.0, 9.0), fast=True)
+    slept = []
+    monkeypatch.setattr(t, "sleep", lambda s: slept.append(s))
+    monkeypatch.setattr(sb.session, "get", lambda *a, **k: type("R", (), {"status_code": 429})())
+    try:
+        sb.newest_shipping(10)
+        assert False, "should have stopped"
+    except SubitoBlocked:
+        pass
+    assert sb.blocked == 1 and sb.calls == 1 and not any(s >= 30 for s in slept)   # no 30 s back-off wait
+
+
+def test_fast_subito_rotates_within_its_time_and_finds_deals(tmp_path, monkeypatch):
+    import time as t
+    from flipfinder.scanner import _key
+    cfg = config.load()
+    cfg.seen_file = tmp_path / "seen.json"
+    sc = Scanner(cfg)
+    sc.seen.add("vinted:0")
+    sc.first_run = False
+    phone = next(s for s in cfg.searches if s.query == "iphone 13")
+    for s in cfg.searches:
+        sc.known.add(s)
+    cat = sc._subito_category(phone)
+    sc.pools.put(_key(phone), [Item(id=900 + i, title="iPhone 13 128GB", price=300, total_price=300, currency="EUR",
+                                    url="u", brand="Apple") for i in range(12)])
+    calls = []   # (market ~€300, so a €185 phone is a deal within the €200 cap and the 60% ROI limit)
+
+    class FakeSubito:
+        blocked = 0
+        calls = 0
+        fast = False
+
+        def newest_nearby(self, c, radius):
+            calls.append(("near", c, radius))
+            return [Item(id=5, title="iPhone 13 128GB", price=185, total_price=185, currency="EUR", url="u", source="subito",
+                         delivery="pickup", shipping=8.0, location="Town", distance_km=40)] if c == cat else []
+
+        def newest_shipping(self, c):
+            calls.append(("ship", c))
+            return []
+
+    sc.subito = FakeSubito()
+    deals, done, total = sc.fast_subito([phone], t.time() + 30, start=0, radius=100)
+    assert total == 2 and done == 2 and calls[0] == ("near", cat, 100)
+    assert len(deals) == 1 and deals[0].item.source == "subito"
+    # out of time: nothing more starts; the next pass picks up from `start`
+    calls.clear()
+    deals, done, total = sc.fast_subito([phone], t.time() - 1, start=1)
+    assert (done, calls) == (0, [])

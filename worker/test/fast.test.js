@@ -62,5 +62,33 @@ test("pass reports: averages for /fast; a Vinted block backs off for an hour and
   assert.match(text, /Last hour: 4 passes, 31\.5 s each on average, 36 Vinted page loads, 3 blocked, 1 deal\(s\) sent/);
   // the scanner gets when the last pass started and how many ran
   await pass(DAYTIME + 500, { started: DAYTIME + 470 });
-  assert.deepEqual((await t.api("GET", "/api/state")).body.fast, { last_started: DAYTIME + 470, passes: 5 });
+  assert.deepEqual((await t.api("GET", "/api/state")).body.fast, { last_started: DAYTIME + 470, passes: 5, subito_next: 0, subito_last: 0 });
+});
+
+
+test("Subito in the fast lane: /fast subito on|off, calls counted, a block backs Subito off for an hour (told once)", async () => {
+  const t = await setup({ settings: { fast: { enabled: true, interval: 1 } } });
+  await t.update(msg("/fast subito on"));
+  assert.match(t.tg.texts().at(-1), /Subito's newest too/);
+  assert.equal((await t.settings()).fast.subito, true);
+  const pass = (at, extra = {}) => t.api("POST", "/api/fast", { secs: 38, requests: 9, blocked: 0, sent: 0,
+    subito_requests: 4, subito_blocked: 0, subito_next: 3, ...extra }, { at });
+  await pass(DAYTIME);
+  let st = (await t.api("GET", "/api/state")).body.fast;
+  assert.equal(st.subito_next, 3);
+  assert.equal(st.subito_last, DAYTIME);
+  t.tg.clear();
+  await pass(DAYTIME + 60, { subito_requests: 1, subito_blocked: 1, subito_next: 4 });
+  const told = t.tg.sent().filter((p) => p.chat_id === OWNER);
+  assert.equal(told.length, 1);
+  assert.match(told[0].text, /Subito refused 1 request\(s\) \(403\/429\)\. Subito in the fast lane slows to every 5 min/);
+  assert.equal((await t.settings()).fast.subito_backoff_until, DAYTIME + 60 + 3600);
+  assert.equal((await t.settings()).fast.backoff_until ?? 0, 0);            // Vinted keeps its own pace
+  await pass(DAYTIME + 120, { subito_requests: 1, subito_blocked: 1 });
+  assert.equal(t.tg.sent().filter((p) => p.chat_id === OWNER).length, 1);   // told once
+  t.tg.clear();
+  t.now = DAYTIME + 200;
+  await t.update(msg("/fast"));
+  assert.match(t.tg.texts()[0], /Subito: 6 calls, 2 blocked/);
+  assert.match(t.tg.texts()[0], /Subito backing off after a block/);
 });
