@@ -24,6 +24,10 @@ jobs:
       - name: Health check start
         run: '[ -z "$HEALTHCHECK_URL" ] || curl -fsS -m 10 --retry 3 -o /dev/null "$HEALTHCHECK_URL/start" || true'
 
+      # the scanner's time budget counts from here (it stops starting searches 4.5 min in)
+      - name: Run start
+        run: echo "FLIPFINDER_RUN_START=$(date +%s)" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import logging
 import time
 from dataclasses import asdict, replace
@@ -28,6 +29,11 @@ log = logging.getLogger(__name__)
 # expire together and push a run past the workflow timeout, so only this many are
 # rebuilt per run; the rest keep their older pool until their turn.
 MAX_POOL_REBUILDS = 4
+# A run stops starting new searches this long after it began (the workflow passes its start time), finishes
+# cleanly and saves everything; the searches it didn't reach go first next run. Keeps a run near 5 minutes
+# with the job's own setup, so one slow machine can't hit the workflow's time limit.
+RUN_BUDGET = 270
+REVERB_EVERY_MIN = 15      # Reverb: every 3rd run (it rarely finds anything)
 MUSIC = {"Guitars", "Amps", "Pedals", "Studio"}
 BIG_MUSIC = {"Guitars", "Amps"}   # shipping costs a lot: skipped on Vinted when it's over MAX_SHIP_SHARE of the price
 MAX_SHIP_SHARE = 0.2
@@ -224,7 +230,7 @@ class Scanner:
             self.reverb = ReverbClient(rv.token, rv.region) if rv and rv.enabled and rv.token else None
         except ValueError:
             self.reverb = None
-        self.reverb_state = {"turn": 0, "seeded": []}
+        self.reverb_state = {"turn": 0, "seeded": [], "last_pass": 0.0}
         if self.reverb:
             try:
                 self.reverb_state.update(json.loads((cfg.seen_file.parent / "reverb.json").read_text(encoding="utf-8")))
@@ -239,6 +245,13 @@ class Scanner:
         self.first_run = self.seen.is_empty
         self.pools = PoolCache(data_dir / "pools.json", cfg.pool_refresh_minutes)
         self.known = KnownSearches(data_dir / "searches.json", self.pools)
+        self.run_start = float(os.environ.get("FLIPFINDER_RUN_START") or time.time())
+        self.deadline = self.run_start + RUN_BUDGET
+        self.carry_path = data_dir / "carry.json"
+        try:
+            self.carry = set(json.loads(self.carry_path.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            self.carry = set()
         self.ebay_state = EbayState(data_dir / "ebay.json")
         self.sold = SoldTracker(data_dir / "sold.json")
         self.notices: list[str] = []   # for the Summary topic (e.g. sold-price checks lowered)
@@ -781,40 +794,58 @@ class Scanner:
         calls_before = self.ebay.calls if self.ebay else 0
         self.subito_pools = self.ebay_pools = 0
         self._fetch_subito()
-        # budget searches first: an overlapping normal search ("boss") would otherwise mark
-        # their listings as seen under the normal rules before they're checked
+        # What sells fastest first: electronics and clothes, then budget, then music (Mercatino and Reverb come
+        # after the loop). Budget stays before music: an overlapping music search ("boss") would otherwise mark
+        # their listings as seen under the music rules first. Searches the last run didn't reach go first of all.
         new_this_run = 0
-        for s in sorted(self.cfg.searches, key=lambda x: not x.budget):
+        left: list[str] = []
+        ran = 0
+        self.carry = getattr(self, "carry", set())
+        self.run_start = getattr(self, "run_start", time.time())
+        self.deadline = getattr(self, "deadline", self.run_start + RUN_BUDGET)
+        for s in sorted(self.cfg.searches, key=lambda x: (_sid(x) not in self.carry, self._tier(x))):
             if not s.enabled:
                 continue
-            if self.known.has(s) and not self._turn(s):
+            carried = _sid(s) in self.carry
+            if self.known.has(s) and not carried and not self._turn(s):
                 continue
-            if not self.known.has(s) and not self.first_run:
-                if new_this_run >= MAX_NEW_PER_RUN:
-                    continue
-                new_this_run += 1
             cap = self._price_to(s)
             if s.price_from is not None and cap is not None and s.price_from >= cap:
                 # e.g. a €500+ Gibson under the music max price: nothing to find, and Vinted refuses the range
                 log.info("'%s' skipped: its prices start at €%g, over its max price €%g", s.query, s.price_from, cap)
                 continue
+            if time.time() >= self.deadline:
+                if self.known.has(s):
+                    left.append(_sid(s))   # due but not reached: first next run
+                continue
+            if not self.known.has(s) and not self.first_run:
+                if new_this_run >= MAX_NEW_PER_RUN:
+                    continue
+                new_this_run += 1
+            ran += 1
             try:
                 deals += self.scan_search(s)
             except Exception as e:  # one broken search shouldn't kill the rest
                 self.failed_searches += 1
                 log.error("Search '%s' failed: %s", s.query, e)
-        if getattr(self, "reverb", None):
-            try:
-                deals += self._scan_reverb()
-            except Exception as e:   # never stops the scan
-                log.error("Reverb failed: %s", e)
-            (self.cfg.seen_file.parent / "reverb.json").write_text(json.dumps(self.reverb_state), encoding="utf-8")
-        if getattr(self, "mercatino", None):
+        self.carry_next = left
+        if getattr(self, "mercatino", None) and time.time() < self.deadline:
             try:
                 deals += self._scan_mercatino()
             except Exception as e:   # never stops the scan
                 log.error("Mercatino Musicale failed: %s", e)
             self.mercatino.save()
+        reverb_due = time.time() - getattr(self, "reverb_state", {}).get("last_pass", 0.0) >= REVERB_EVERY_MIN * 60 - 30
+        if getattr(self, "reverb", None) and reverb_due and time.time() < self.deadline:
+            self.reverb_state["last_pass"] = time.time()
+            try:
+                deals += self._scan_reverb()
+            except Exception as e:   # never stops the scan
+                log.error("Reverb failed: %s", e)
+            (self.cfg.seen_file.parent / "reverb.json").write_text(json.dumps(self.reverb_state), encoding="utf-8")
+        log.info("RUN-PLAN searched=%d carried_in=%d left_for_next=%d elapsed=%.0fs budget=%ds%s", ran, len(self.carry),
+                 len(left), time.time() - self.run_start, RUN_BUDGET,
+                 " (time budget reached: the rest go first next run)" if left else "")
         if self.seed_candidates:
             deals += self._best_seed_deals()
         if self.first_run:
@@ -839,10 +870,15 @@ class Scanner:
             log.info("eBay: %s, %d API calls today (UTC)",
                      "searched this run" if self.ebay_due else "skipped this run (searched every "
                      f"{self.cfg.ebay.interval_minutes:g} min)", self.ebay_state.calls_today)
-        self.check_sold()
+        if time.time() < self.deadline + 30:
+            self.check_sold()
+        else:
+            log.info("Sold-price checks skipped this run (time budget)")
         self.seen.save()
         self.pools.save()
         self.known.save()
+        if getattr(self, "carry_path", None):
+            self.carry_path.write_text(json.dumps(self.carry_next), encoding="utf-8")
         # budget deals by profit per euro spent, then the rest by rating
         deals.sort(key=lambda d: (d.budget, d.per_euro if d.budget else 0, d.rating, d.profit), reverse=True)
         self.near_misses.sort(key=lambda m: (m[1].closeness, m[1].profit), reverse=True)
@@ -976,6 +1012,13 @@ class Scanner:
         if late[other] >= STAGGER_OVERDUE * 60 and late[other] > late[slot]:
             return other
         return slot
+
+    def _tier(self, s: Search) -> int:
+        """Order inside a run: 0 electronics, clothes and the rest, 1 budget, 2 music."""
+        from .settings import search_group
+        if s.budget:
+            return 1
+        return 2 if search_group(s) in MUSIC else 0
 
     def _turn(self, s: Search) -> bool:
         """

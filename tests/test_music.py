@@ -130,3 +130,75 @@ def test_new_searches_start_a_few_a_run(tmp_path, monkeypatch):
     sc.first_run = False
     sc.scan()
     assert len(ran) == MAX_NEW_PER_RUN          # none of them ran before: only a few start this run
+
+
+def test_time_budget_order_and_carry_over(tmp_path, monkeypatch):
+    """Electronics/clothes, then budget, then music; past the budget nothing new starts, and the rest go first next run."""
+    import json
+    from flipfinder.scanner import _sid
+    from flipfinder.settings import search_group
+    cfg = config.load()
+    cfg.seen_file = tmp_path / "seen.json"
+    cfg.subito.enabled = False
+    cfg.stagger = False
+    for s in cfg.searches:
+        s.every_minutes = s.slow_minutes = 0
+    sc = Scanner(cfg)
+    for s in cfg.searches:
+        sc.known.add(s)                          # all known: no "new search" cap in the way
+    sc.seen.add("vinted:0")
+    sc.first_run = False
+    ran = []
+    def fake(s):
+        ran.append(s)
+        if len(ran) == 5:
+            sc.deadline = 0                      # time's up after the 5th search
+        return []
+    monkeypatch.setattr(sc, "scan_search", fake)
+    monkeypatch.setattr(sc, "_fetch_subito", lambda: None)
+    monkeypatch.setattr(sc, "check_sold", lambda: None)
+    sc.scan()
+    tiers = [sc._tier(s) for s in ran]
+    assert len(ran) == 5 and tiers == sorted(tiers) and tiers[0] == 0       # fast sellers first
+    carried = json.loads((tmp_path / "carry.json").read_text())
+    enabled = [s for s in cfg.searches if s.enabled]
+    ran_ids = {_sid(s) for s in ran}
+    runnable = [s for s in enabled if not (s.price_from is not None and sc._price_to(s) is not None
+                                           and s.price_from >= sc._price_to(s))]
+    assert set(carried) == {_sid(s) for s in runnable} - ran_ids                # everything not reached waits
+    # next run: the carried ones go first, even the music ones whose turn it isn't
+    sc2 = Scanner(cfg)
+    sc2.seen.add("vinted:0")
+    sc2.first_run = False
+    ran2 = []
+    monkeypatch.setattr(sc2, "scan_search", lambda s: ran2.append(s) or [])
+    monkeypatch.setattr(sc2, "_fetch_subito", lambda: None)
+    monkeypatch.setattr(sc2, "check_sold", lambda: None)
+    sc2.scan()
+    assert [_sid(s) for s in ran2[:len(carried)]] == [_sid(s) for s in sorted((s for s in enabled if _sid(s) in carried),
+                                                                              key=sc2._tier)]
+    assert json.loads((tmp_path / "carry.json").read_text()) == []
+
+
+def test_reverb_every_third_run(tmp_path, monkeypatch):
+    import time as t
+    cfg = config.load()
+    cfg.seen_file = tmp_path / "seen.json"
+    cfg.subito.enabled = False
+    sc = Scanner(cfg)
+    sc.reverb = object()                          # pretend Reverb is set up
+    sc.seen.add("vinted:0")
+    sc.first_run = False
+    calls = []
+    monkeypatch.setattr(sc, "scan_search", lambda s: [])
+    monkeypatch.setattr(sc, "_fetch_subito", lambda: None)
+    monkeypatch.setattr(sc, "check_sold", lambda: None)
+    monkeypatch.setattr(sc, "_scan_reverb", lambda: calls.append(1) or [])
+    sc.scan()
+    sc.deadline = t.time() + 300
+    sc.scan()                                     # 5 minutes later in real life: too soon
+    assert calls == [1]
+    sc.reverb_state["last_pass"] -= 15 * 60
+    sc.deadline = t.time() + 300
+    sc.scan()
+    assert calls == [1, 1]
