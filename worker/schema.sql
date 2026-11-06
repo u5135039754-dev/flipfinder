@@ -18,6 +18,11 @@ CREATE TABLE IF NOT EXISTS deals (
 );
 CREATE INDEX IF NOT EXISTS deals_status ON deals (status);
 CREATE INDEX IF NOT EXISTS deals_n ON deals (n);
+-- D1's free tier counts rows read: recent deals ("sent >= ?"), the overnight queue and the 30-day prune by index,
+-- not by reading the whole table
+CREATE INDEX IF NOT EXISTS deals_sent ON deals (sent);
+CREATE INDEX IF NOT EXISTS deals_status_sent ON deals (status, sent);
+CREATE INDEX IF NOT EXISTS deals_queued ON deals (queued);
 
 -- 👎 votes, kept to tune the filters
 CREATE TABLE IF NOT EXISTS feedback (

@@ -131,7 +131,10 @@ export class Bot {
   }
 
   async pot() {
-    this._pot ??= summarize(await this.store.ledger(), await this.allDeals());
+    // only stock counts here: bought and listed deals (by the status index), never the whole table. The scanner's
+    // /api/state needs the pot every minute (fast lane), and D1's free tier allows 5M rows read a day
+    this._pot ??= summarize(await this.store.ledger(),
+      this._deals ?? await this.store.deals("WHERE status IN ('bought', 'listed')"));
     return this._pot;
   }
 

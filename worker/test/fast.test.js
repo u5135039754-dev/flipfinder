@@ -92,3 +92,20 @@ test("Subito in the fast lane: /fast subito on|off, calls counted, a block backs
   assert.match(t.tg.texts()[0], /Subito: 6 calls, 2 blocked/);
   assert.match(t.tg.texts()[0], /Subito backing off after a block/);
 });
+
+test("the scanner's state every minute never reads the whole deals table (D1's free tier counts rows read)", async () => {
+  const t = await setup();
+  for (let i = 1; i <= 30; i++) {
+    await t.store.addDeal(`vinted:${i}`, { title: `x${i}`, sent: DAYTIME - 40 * 86400, text: "x", cost: 10, value: 20, profit: 5 });
+  }
+  const sold = await t.store.addDeal("vinted:99", { title: "in stock", sent: DAYTIME, text: "x", paid: 80 });
+  await t.store.saveDeal("vinted:99", { ...sold, status: "bought", paid: 80 });
+  const seen = [];
+  const prepare = t.env.DB.prepare;
+  t.env.DB.prepare = (sql) => { seen.push(sql); return prepare(sql); };
+  const r = await t.api("GET", "/api/state");
+  t.env.DB.prepare = prepare;
+  assert.equal(r.status, 200);
+  const deals = seen.filter((q) => /FROM deals/.test(q));
+  assert.ok(deals.every((q) => /WHERE/.test(q)), deals.join("\n"));
+});
