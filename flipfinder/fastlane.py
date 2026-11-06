@@ -66,7 +66,9 @@ def subito_due(fs: dict, now: float, last_subito: float = 0) -> bool:
 def searches_for(cfg, fs: dict, group_of) -> list:
     """The searches in the chosen groups, in the order of the groups (guitars first)."""
     order = [g.lower() for g in fs["groups"]]
-    picked = [s for s in cfg.searches if s.enabled and not s.budget and group_of(s).lower() in order]
+    # gaming PCs stay in the full scan: each one needs its page opened and its specs read
+    picked = [s for s in cfg.searches if s.enabled and not s.budget and getattr(s, "model", "") != "pc"
+              and group_of(s).lower() in order]
     return sorted(picked, key=lambda s: order.index(group_of(s).lower()))
 
 

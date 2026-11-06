@@ -21,6 +21,7 @@ log = logging.getLogger(__name__)
 
 TOKEN_URL = "https://api.ebay.com/identity/v1/oauth2/token"
 SEARCH_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search"
+ITEM_URL = "https://api.ebay.com/buy/browse/v1/item/get_item_by_legacy_id"
 SCOPE = "https://api.ebay.com/oauth/api_scope"
 
 # Without a category, eBay results are mostly accessories and parts (for "iphone 13":
@@ -31,6 +32,7 @@ CATEGORY_FOR_VINTED_CATALOG = {
     3035: 178893,    # smartwatches -> Smartwatch
     3728: 171485,    # tablets -> Tablet e eBook reader
     3580: 175672,    # laptops -> Notebook, laptop e portatili
+    3581: 179,       # desktop computers -> PC desktop e all-in-one
     3602: 27386,     # graphics cards -> Schede video e grafiche
     3025: 139971,    # consoles -> Console
     4840: 3858,      # pedals -> Chitarre e bassi
@@ -161,3 +163,18 @@ class EbayClient:
             r.raise_for_status()
             return [i for i in map(item_from_ebay, r.json().get("itemSummaries", [])) if i]
         raise RuntimeError(f"eBay kept refusing the search for {query!r}")
+
+    def details(self, item: Item) -> tuple[str, str]:
+        """
+        One listing's item specifics ("Memoria RAM: 16 GB; Processore: ...") and its description as plain text:
+        the search only gives titles. One API call (gaming PCs whose title leaves specs out).
+        """
+        headers = {"X-EBAY-C-MARKETPLACE-ID": self.marketplace, "Authorization": f"Bearer {self._auth()}"}
+        time.sleep(self.request_delay)
+        r = self.session.get(ITEM_URL, params={"legacy_item_id": str(item.id)}, headers=headers, timeout=20)
+        self.calls += 1
+        r.raise_for_status()
+        d = r.json()
+        aspects = "; ".join(f"{a.get('name')}: {a.get('value')}" for a in d.get("localizedAspects") or [] if a.get("value"))
+        text = re.sub(r"<[^>]+>", " ", d.get("description") or d.get("shortDescription") or "")
+        return aspects, re.sub(r"\s+", " ", text).strip()[:3000]

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import logging
+import re
 import time
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
@@ -173,6 +174,23 @@ class KnownSearches:
         self.path.write_text(json.dumps(self.last), encoding="utf-8")
 
 
+PC_DETAILS_PER_RUN = 8    # gaming PC pages opened per run (Vinted/eBay; config pc.details_per_run), the rest next run
+PC_AI_PER_RUN = 8         # gaming PC descriptions the AI reads per run (config pc.ai_per_run)
+# facts a title often leaves out: only the listing's page or the AI can rule on them
+PC_OPEN_FACTS = {"graphics card not found", "RAM not found", "SSD not found", "HDD only", "integrated graphics"}
+
+
+def pc_form(s: Search) -> str:
+    """A gaming PC search's form, from its Vinted category."""
+    from .pc import LAPTOP_CATALOG
+    return "laptop" if LAPTOP_CATALOG in (s.filters.get("catalog") or []) else "desktop"
+
+
+def new_pc_stats() -> dict:
+    return {"found": 0, "opened": 0, "waiting": 0, "ai": 0, "meets": 0, "no_value": 0, "blocked": 0, "passed": 0,
+            "skipped": {}, "skip_examples": [], "meet_examples": []}
+
+
 def tag(deal: Deal, s: Search) -> Deal:
     """Which search found it, and its category (for the group topic)."""
     deal.query, deal.group = s.query, search_group(s)
@@ -262,6 +280,9 @@ class Scanner:
         self.ebay_due = False
         self.pool_rebuilds = 0
         self.first_ebay = False
+        self.cloud = None   # the Worker (main.py sets it): the AI reads gaming PC specs the patterns can't
+        self.pc_opened = self.pc_ai = 0
+        self.pc_stats = new_pc_stats()
         # filled by each scan(), for logs and the daily summary
         self.checked = 0
         self.failed_searches = 0
@@ -363,8 +384,13 @@ class Scanner:
         """This run's new Subito listings (pickup or shipping) that belong to this search."""
         def cap(i):
             return self._pickup_cap(s) if self._is_music_pickup(s, i) else self._price_to(s)
+        if s.model == "pc":   # gaming PCs: any PC listing of the search's form, whatever words it uses
+            from .pc import is_pc_title
+            relevant = lambda i: is_pc_title(i.title, pc_form(s))   # noqa: E731
+        else:
+            relevant = lambda i: is_relevant(i.title, s.query, i.brand)   # noqa: E731
         out = [i for i in self.subito_new
-               if is_relevant(i.title, s.query, i.brand) and self._subito_category(s) == i.category
+               if relevant(i) and self._subito_category(s) == i.category
                and (s.price_from is None or i.price >= s.price_from)
                and (cap(i) is None or i.price <= cap(i))]
         if s.clothes:   # Subito has no brand field: the search's brand, so the clothes checks can compare it
@@ -406,6 +432,11 @@ class Scanner:
             rules = replace(rules, max_price=float(s.max_price))
         if s.model and not s.clothes:
             rules = replace(rules, model=s.model)
+        if s.model == "pc":   # gaming PCs: Italy only, never repaired, valued on what the same combo sold for
+            pcs = getattr(self.cfg, "pc", None) or {}
+            rules = replace(rules, repairs=False, abroad=False, pc_form=pc_form(s),
+                            pc_asking_factor=float(pcs.get("asking_factor") or 0),
+                            pc_ship_min=float(pcs.get("desktop_ship_min") or 15))
         if s.clothes:   # designer clothes: their own minimums (/setrule clothes ...) and the fake checks
             c = self.cfg.clothes
             rules = replace(rules, min_profit=float(c.rules["min_profit"]), min_roi=float(c.rules["min_roi"]),
@@ -418,7 +449,25 @@ class Scanner:
         now = time.time()
         tracked, scale = self.sold.coverage(_key(s), now)
         return replace(rules, match_brand=s.match_brand, check=s.check, missing_part_cost=s.missing_part_cost,
-                       sold=self.sold.sold_for(_key(s), now), tracked_days=tracked, sold_scale=scale, now=now)
+                       sold=self._pc_sold(s, now) if s.model == "pc" else self.sold.sold_for(_key(s), now),
+                       tracked_days=tracked, sold_scale=scale, now=now)
+
+    def _pc_sold(self, s: Search, now: float) -> list:
+        """Gaming PCs: what sold across every PC search of the same form (one combo shows up under several)."""
+        out, ids = [], set()
+        for x in self.cfg.searches:
+            if x.model == "pc" and pc_form(x) == pc_form(s):
+                for r in self.sold.sold_for(_key(x), now):
+                    if r[0].id not in ids:
+                        ids.add(r[0].id)
+                        out.append(r)
+        return out
+
+    def _pc_pool(self, s: Search) -> list[Item]:
+        """Every saved PC pool of the same form (for the asking-price fallback and the by-platform line)."""
+        return _merge(*[self.pools.get(k, any_age=True) or [] for x in self.cfg.searches
+                        if x.model == "pc" and pc_form(x) == pc_form(s)
+                        for k in (_key(x), "subito " + _key(x), f"ebay {self._ebay_category(x)} " + _key(x))])
 
     def _is_music_pickup(self, s: Search, item: Item) -> bool:
         return item.source == "subito" and item.delivery == "pickup" and search_group(s) in MUSIC and not s.budget
@@ -605,6 +654,8 @@ class Scanner:
 
     def _evaluate(self, s: Search, fresh: list[Item], pool: list[Item], rules: Rules) -> list[Deal]:
         """New listings against the price pool: the deals (with real Vinted shipping), near misses noted."""
+        if s.model == "pc" and not self.first_run:
+            return self._evaluate_pc(s, fresh, _merge(pool, self._pc_pool(s)), rules)
         deals = []
         for item in fresh:
             self.seen.add(item.key)
@@ -645,6 +696,118 @@ class Scanner:
             elif deal and any(b.startswith(NEW_SELLER) for b in deal.blocked):
                 self.seller_skipped += 1
                 log.info("'%s': skipped a deal, brand-new seller at +%.0f%% ROI (item %s)", s.query, deal.roi, item.id)
+        return deals
+
+    def _pc_skip(self, item: Item, why: list[str]):
+        self.seen.add(item.key)
+        st = self.pc_stats
+        for w in why:
+            k = re.sub(r"^\d+ GB (SSD|RAM).*", r"small \1", re.sub(r"^(GTX|GT|RX|MX|RTX)\b.*under.*", "weak card", w))
+            st["skipped"][k] = st["skipped"].get(k, 0) + 1
+        if len(st["skip_examples"]) < 40:
+            st["skip_examples"].append((item.source, item.price, item.title[:70], why))
+
+    def _pc_open(self, item: Item, form: str) -> tuple[dict, dict]:
+        """A PC listing's page (Vinted, eBay; Subito's text comes with the search): (specs, delivery details)."""
+        from . import pc
+        extra, attributes, out = "", "", {"shipping": None, "pickup_only": False, "city": ""}
+        if item.source == "vinted":
+            d = self.client.details(item)
+            out = {"shipping": d.shipping, "city": d.city,
+                   "pickup_only": not d.shipping_available or is_pickup_only(f"{item.title}\n{d.description}")}
+            if pc.foreign(f"{item.title}\n{d.description}"):
+                item.country = "??"   # written in another language: from abroad, no need for the profile page
+                return pc.parse(item.title, d.description or "", "", form), {**out, "text": "", "attributes": ""}
+            item.seller = self._vinted_seller(d)
+            item.country = (item.seller or {}).pop("country", "") or ""
+            item.description = (d.description or "")[:1500]
+            if d.photos:
+                item.photos = d.photos[:4]
+            extra = d.description or ""
+        elif item.source == "ebay" and self.ebay:
+            attributes, extra = self.ebay.details(item)
+            item.description = extra[:1500]
+        else:
+            extra = item.description
+        return pc.parse(item.title, extra, attributes, form), {**out, "text": extra, "attributes": attributes}
+
+    def _evaluate_pc(self, s: Search, fresh: list[Item], pool: list[Item], rules: Rules) -> list[Deal]:
+        """
+        Gaming PCs: specs first. A quick look at the title drops the hopeless ones (a weak card, DDR3, a small SSD);
+        the rest get their page opened (a few per run, a good card in the title first; the others wait for the next
+        run), the AI reads the text the patterns couldn't, and only a PC that meets every minimum is valued.
+        """
+        from . import pc
+        st = self.pc_stats
+        form = rules.pc_form
+        pcs = getattr(self.cfg, "pc", None) or {}
+        per_run, ai_per_run = int(pcs.get("details_per_run", PC_DETAILS_PER_RUN)), int(pcs.get("ai_per_run", PC_AI_PER_RUN))
+        todo = []
+        for item in fresh:
+            if self.first_ebay and item.source == "ebay":
+                self.seen.add(item.key)
+                continue
+            first = pc.parse(item.title, item.description if item.source == "subito" else "", form=form)
+            # what the title alone rules out (missing facts may still be in the description)
+            fatal = [p for p in pc.problems(first) if p not in PC_OPEN_FACTS]
+            if item.source == "vinted" and pc.foreign(item.title):
+                fatal.append("abroad")   # a title in another language: from abroad, not worth a page
+            st["found"] += 1
+            if fatal:
+                self._pc_skip(item, fatal)
+                continue
+            todo.append((not pc.gpu_ok(first["gpu"] or ""), item))
+        todo.sort(key=lambda x: x[0])   # a good card in the title first
+        opened = []
+        for _, item in todo:
+            if item.source != "subito" and self.pc_opened >= per_run:
+                st["waiting"] += 1   # left unseen: the next run opens it
+                continue
+            self.seen.add(item.key)
+            try:
+                if item.source != "subito":
+                    self.pc_opened += 1
+                spec, how = self._pc_open(item, form)
+            except Exception as e:
+                log.warning("'%s': couldn't open a PC listing (%s)", s.query, type(e).__name__)
+                self._pc_skip(item, ["page didn't open"])
+                continue
+            st["opened"] += 1
+            if item.country and item.country != "IT":
+                self._pc_skip(item, ["abroad"])
+                continue
+            opened.append((item, spec, how))
+        ask = [(item, how) for item, spec, how in opened if pc.needs_ai(spec)][:max(0, ai_per_run - self.pc_ai)]
+        read = {}
+        if ask and self.cloud:
+            self.pc_ai += len(ask)
+            st["ai"] += len(ask)
+            read = self.cloud.pc_specs([{"key": i.key, "title": i.title, "description": h["text"][:2500],
+                                         "attributes": h["attributes"]} for i, h in ask])
+        deals = []
+        for item, spec, how in opened:
+            spec = pc.merge(spec, read.get(item.key))
+            why = pc.problems(spec)
+            if why:
+                self._pc_skip(item, why)
+                continue
+            item.specs = spec
+            self.checked += 1
+            r = self._pickup_rules(s, item, rules)
+            deal = (assess(item, pool, r, s.query, shipping=how["shipping"], pickup_only=how["pickup_only"],
+                           city=how["city"]) if item.source == "vinted" else assess(item, pool, r, s.query))
+            st["meets"] += 1
+            if len(st["meet_examples"]) < 40:
+                st["meet_examples"].append((s, item, deal))
+            if deal is None:
+                st["no_value"] += 1
+            elif deal.blocked:
+                st["blocked"] += 1
+                if is_near_miss(deal):
+                    self.near_misses.append((s.query, deal))
+            else:
+                st["passed"] += 1
+                deals.append(deal)
         return deals
 
     def fast_scan(self, queries: list[str]) -> list[Deal]:
@@ -899,6 +1062,11 @@ class Scanner:
         log.info("RUN-PLAN searched=%d carried_in=%d left_for_next=%d elapsed=%.0fs budget=%ds%s", ran, len(self.carry),
                  len(left), time.time() - self.run_start, RUN_BUDGET,
                  " (time budget reached: the rest go first next run)" if left else "")
+        st = getattr(self, "pc_stats", None)
+        if st and st["found"]:
+            log.info("PC-STATS found=%d opened=%d waiting=%d ai=%d meet_minimums=%d no_value=%d blocked=%d passed=%d skipped=%s",
+                     st["found"], st["opened"], st["waiting"], st["ai"], st["meets"], st["no_value"], st["blocked"],
+                     st["passed"], json.dumps(st["skipped"], sort_keys=True))
         if self.seed_candidates:
             deals += self._best_seed_deals()
         if self.first_run:
@@ -974,6 +1142,15 @@ class Scanner:
                     found.setdefault(i.key, i)
             except Exception as e:   # Subito trouble shouldn't stop the Vinted/eBay scan
                 log.error("Subito category %s failed: %s", cat, e)
+        pcs = getattr(self.cfg, "pc", None) or {}
+        pc_cats = sorted({self._subito_category(s) for s in self.cfg.searches if s.enabled and s.model == "pc" and s.uses("subito")})
+        for cat in pc_cats:   # gaming PCs: pickup within pc.pickup_km (a whole region, not just the home province)
+            try:
+                for i in self.subito.newest_nearby(cat, float(pcs.get("pickup_km") or 100)):
+                    i.category = cat
+                    found.setdefault(i.key, i)
+            except Exception as e:
+                log.error("Subito PC pickup listings (category %s) failed: %s", cat, e)
         state_path.parent.mkdir(parents=True, exist_ok=True)
         state_path.write_text(json.dumps(sorted(seeded)), encoding="utf-8")
         self.subito_new = list(found.values())

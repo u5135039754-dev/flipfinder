@@ -53,6 +53,7 @@ class Deal:
     fake_risk: str = ""            # clothes: high, medium or low (fake_risk())
     fake_why: list = field(default_factory=list)   # clothes: what raised or lowered the risk
     fake_base: str = ""            # clothes: the risk without the "label not checked yet" floor (the AI checks the photos)
+    pc: dict = field(default_factory=dict)   # gaming PCs: form, the spec line, dongle needed, the combo it was valued on
 
 
 @dataclass
@@ -85,8 +86,11 @@ class Rules:
     seller_min_reviews: int = 0     # skip sellers with fewer reviews...
     seller_min_stars: float = 0.0   # ...or a lower rating
     fake_words: tuple[str, ...] = ()   # replica, 1:1...: skipped in titles (and descriptions, see assess)
-    model: str = ""                 # "replica" (Margiela sneakers) or "jackson": model-line comparables
+    model: str = ""                 # "replica" (Margiela sneakers), "jackson" or "pc": model-line comparables
     max_ship_share: float = 0.0     # guitars/amps on Vinted: skipped when shipping is over this share of the price
+    pc_form: str = ""               # gaming PCs: "desktop" or "laptop" (the search's Vinted category)
+    pc_asking_factor: float = 0.0   # gaming PCs: >0 values from asking prices x this until enough sold (0 = sold only)
+    pc_ship_min: float = 0.0        # desktops by courier: never counted cheaper than this
     # rating knobs: profit/roi at which that part of the score maxes out
     rating_profit_cap: float = 50.0
     rating_roi_cap: float = 150.0
@@ -622,6 +626,44 @@ def _jackson_value(item: Item, pool: list[Item], rules: Rules) -> tuple[float | 
     return round(median(kept), 2), comps, f"Jackson {kind}", kind
 
 
+PC_SOLD_MIN = 3        # sold PCs of the same combo needed for a resale value
+PC_ASKING_MIN = 5      # asking-price listings of the same combo, when asking prices are allowed (pc_asking_factor)
+
+
+def _pc_value(item: Item, pool: list[Item], rules: Rules) -> tuple[float | None, list[Item], str, str, int]:
+    """
+    A gaming PC's resale value: the median price the same form + graphics card + CPU tier sold for (titles of
+    sold listings, sold.py). (value, comparables, basis, combo, sold used); None when too few sold.
+    """
+    from . import pc
+    spec = item.specs or {}
+    want = pc.combo(spec)
+    if not want:
+        return None, [], "PC: no graphics card", "", 0
+    tier_known = bool((spec.get("cpu") or {}).get("tier"))
+
+    def same(title: str) -> bool:
+        c = pc.title_combo(title, rules.pc_form or spec["form"])
+        if c is None:
+            return False
+        return c == want if tier_known else c.rsplit(" · ", 1)[0] == want   # CPU not stated: same card, any CPU
+    sold = [x[0] for x in rules.sold if x[0].id != item.id and same(x[0].title)]
+    kept = remove_outliers([s.price for s in sold])
+    n_sold = len(kept)
+    label = want + ("" if tier_known else " · any CPU")
+    if n_sold >= PC_SOLD_MIN:
+        comps = [s for s in sold if kept[0] <= s.price <= kept[-1]]
+        return round(median(kept), 2), comps, f"PC sold: {label}", label, len(comps)
+    if rules.pc_asking_factor > 0:
+        asking = [p for p in pool if p.id != item.id and same(p.title)]
+        kept = remove_outliers([p.price for p in asking])
+        if len(kept) >= PC_ASKING_MIN:
+            comps = [p for p in asking if kept[0] <= p.price <= kept[-1]]
+            return (round(median(kept) * rules.pc_asking_factor, 2), comps,
+                    f"PC asking x{rules.pc_asking_factor:g}: {label}", label, 0)
+    return None, [], f"PC: {n_sold} sold {label}", label, 0
+
+
 def _comparables(item: Item, pool: list[Item], min_comparables: int,
                  query: str, match_brand: bool = True) -> tuple[float | None, list[Item], str]:
     others, basis = find_comparables(item, pool, min_comparables, query, match_brand)
@@ -843,8 +885,8 @@ def assess(item: Item, pool: list[Item], rules: Rules, query: str = "",
     hard = [k for k in rules.exclude_keywords if not is_damage_word(k)]
     if is_excluded(item, hard):
         return None
-    if query and rules.model != REPLICA and not is_relevant(item.title, query, item.brand):
-        return None   # (the Replica search finds the model by its names instead: replica_kind)
+    if query and rules.model not in (REPLICA, "pc") and not is_relevant(item.title, query, item.brand):
+        return None   # (the Replica search finds the model by its names, PCs by their specs instead)
     if item.country and item.country != HOME_COUNTRY and not rules.abroad:
         return None   # ships from abroad: off unless /abroad on
     fix = None
@@ -854,7 +896,12 @@ def assess(item: Item, pool: list[Item], rules: Rules, query: str = "",
         if fix is None:
             return None          # repairs off, or a fault we can't name and price
     kind = ""
-    if rules.clothes:
+    pc_sold = 0
+    if rules.model == "pc":
+        if not item.specs:
+            return None   # the scanner reads the specs first (pc.parse, the AI)
+        asking, comps, basis, kind, pc_sold = _pc_value(item, pool, rules)
+    elif rules.clothes:
         asking, comps, basis, kind = _clothes_value(item, pool, rules, query)
     elif rules.model == "jackson":
         asking, comps, basis, kind = _jackson_value(item, pool, rules)
@@ -862,7 +909,10 @@ def assess(item: Item, pool: list[Item], rules: Rules, query: str = "",
         asking, comps, basis = _comparables(item, pool, rules.min_comparables, query, rules.match_brand)
     if asking is None:
         return None
-    value, sold_n, sell_days = blend_sold(item, asking, rules, query)
+    if rules.model == "pc":   # already what the same combo sold for
+        value, sold_n, sell_days = asking, pc_sold, None
+    else:
+        value, sold_n, sell_days = blend_sold(item, asking, rules, query)
     if rules.value_factor != 1.0:
         value = round(value * rules.value_factor, 2)   # e.g. iPhones sold 15% under what we predicted
     n = len(comps)
@@ -872,6 +922,17 @@ def assess(item: Item, pool: list[Item], rules: Rules, query: str = "",
         shipping = item.shipping
     ship = 0.0 if pickup_only else (shipping if shipping is not None else rules.shipping_cost)
     missing = rules.missing_part_cost if rules.missing_part_cost and MISSING_PART.search(item.title) else 0.0
+    pc_info = {}
+    if rules.model == "pc":
+        from . import pc
+        spec = item.specs
+        courier = not pickup_only and item.delivery != "pickup"
+        if spec["form"] == "desktop" and courier and rules.pc_ship_min:
+            ship = max(ship, rules.pc_ship_min)   # a tower by courier: a big, heavy box, whatever the cheapest option says
+        dongle = pc.needs_dongle(spec)
+        missing += pc.DONGLE if dongle else 0.0   # WiFi/Bluetooth not stated: a USB dongle
+        pc_info = {"form": spec["form"], "line": pc.line(spec), "dongle": dongle, "combo": kind,
+                   "pickup": not courier, "ai": bool(spec.get("ai"))}
     cost = item.total_price + ship + missing + (fix.cost if fix else 0.0)
     if fix and fix.iphone_part:
         # iOS shows "unknown part" after a non-original screen/battery/camera: it sells for less
@@ -908,7 +969,7 @@ def assess(item: Item, pool: list[Item], rules: Rules, query: str = "",
                     " ".join(normalize_text(text))) else "") if x),
                 asking_value=asking, sold_count=sold_n, sell_days=sell_days,
                 demand=demand(item, comps, rules, query, sell_days), seller_warnings=seller_warn, repair=fix,
-                kind=kind, fake_risk=risk, fake_why=risk_why, fake_base=risk_base)
+                kind=kind, fake_risk=risk, fake_why=risk_why, fake_base=risk_base, pc=pc_info)
     # How close it came: the weakest of profit/ROI/rating as a share of what the rule needs
     deal.closeness = round(min(
         1.0,

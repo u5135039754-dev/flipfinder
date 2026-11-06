@@ -25,10 +25,13 @@ def format_deal(deal: Deal) -> str:
     it = deal.item
     c = it.currency
     cond = it.condition.replace("-", " ").capitalize() if it.source == "reverb" else it.condition   # "very-good" -> "Very good"
-    extras = " · ".join(x for x in (it.brand, deal.kind, it.size, cond) if x)
+    pc = getattr(deal, "pc", None) or {}
+    extras = " · ".join(x for x in (it.brand, "" if pc else deal.kind, it.size, cond) if x)
     lines = [
         f"{'🔧' if deal.repair else '🔥'} <b>{html.escape(it.title[:120])}</b>",   # photo captions max out at 1024 chars
     ]
+    if pc:
+        lines.append(f"{'💻 <b>Laptop</b>' if pc['form'] == 'laptop' else '🖥 <b>Desktop</b>'} · {html.escape(pc['line'])}")
     if deal.repair:
         r = deal.repair
         lines.append(f"🔧 <b>Repair deal</b>: {r.line()}" +
@@ -67,8 +70,9 @@ def format_deal(deal: Deal) -> str:
         value_line(deal),
         *([demand_line(deal)] if deal.demand else []),
         *platform_lines(deal),
-        *([f"🔋 No battery/charger: +{money(deal.missing_part, c)} to buy one (included)"]
-          if deal.missing_part else []),
+        *([f"📶 WiFi/Bluetooth not stated: ask the seller · +{money(deal.missing_part, c)} for a USB dongle (included)"]
+          if pc.get("dongle") else
+          [f"🔋 No battery/charger: +{money(deal.missing_part, c)} to buy one (included)"] if deal.missing_part else []),
         *([f"🔧 Part + tools: {money(deal.repair.cost, c)} (included)"] if deal.repair else []),
         f"💰 Possible profit: <b>{money(deal.profit, c)}</b>",
         f"📈 Percentage: <b>+{deal.roi:.0f}%</b>",
@@ -133,6 +137,16 @@ def seller_lines(deal: Deal) -> list[str]:
 
 def value_line(deal: Deal) -> str:
     c = deal.item.currency
+    pc = getattr(deal, "pc", None) or {}
+    if pc:   # "desktop · gtx 1660 super · i5" -> "GTX 1660 Super + i5 desktops"
+        from .pc import label_gpu
+        form, gpu, *cpu = pc.get("combo", "").split(" · ") + [""] * 2
+        tier = {"old amd": "older AMD", "any CPU": "any CPU"}.get(cpu[0], cpu[0] if cpu[0][:1] == "i" else cpu[0].title())
+        what = f"{label_gpu(gpu)}{' + ' + tier if tier else ''} {form}s".strip()
+        if deal.sold_count:
+            return f"🏷 Resale: <b>{money(deal.market_value, c)}</b> (median of {deal.sold_count} sold {html.escape(what)})"
+        return (f"🏷 Resale: <b>{money(deal.market_value, c)}</b> (asking prices of {deal.comparables} "
+                f"{html.escape(what)}, lowered: not enough sold yet)")
     if deal.sold_count:
         return (f"🏷 Market value: <b>{money(deal.market_value, c)}</b> ({deal.sold_count} sold · "
                 f"asking {money(deal.asking_value, c)}, median of {deal.comparables})")

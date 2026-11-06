@@ -191,6 +191,7 @@ class Config:
     clothes: ClothesSettings = field(default_factory=ClothesSettings)
     mercatino: MercatinoSettings = field(default_factory=MercatinoSettings)
     reverb: ReverbSettings = field(default_factory=ReverbSettings)
+    pc: dict = field(default_factory=dict)   # gaming PCs (config `pc:`): pickup_km, desktop_ship_min, asking_factor...
 
 
 def _flat(values) -> list[str]:
@@ -331,5 +332,6 @@ def load(path: str | Path = "config.yaml") -> Config:
                               searches_per_run=int((raw.get("reverb") or {}).get("searches_per_run", 6)),
                               pool_pages=int((raw.get("reverb") or {}).get("pool_pages", 2)),
                               token=os.getenv("REVERB_TOKEN", "")),
+        pc=dict(raw.get("pc") or {}),
     )
     return cfg

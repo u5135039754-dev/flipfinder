@@ -89,6 +89,16 @@ reverb:
   searches_per_run: 6
   pool_pages: 2
 
+# Gaming PCs (the `model: pc` searches, Electronics topic): desktops and laptops that meet the minimums in
+# flipfinder/pc.py (RAM 8 GB+ DDR4, GTX 1050 or better, SSD 256 GB+), valued on what the same form + graphics card +
+# CPU tier sold for. The main rules apply (min profit, ROI), with their own €200 max price (max_price on each search).
+pc:
+  pickup_km: 100             # Subito desktops for pickup: within this distance (a region, not just the province)
+  desktop_ship_min: 15       # a tower by courier is a big heavy box: never counted cheaper than this
+  asking_factor: 0           # 0 = resale from sold listings only; e.g. 0.85 = asking prices x 0.85 until enough sold
+  details_per_run: 8         # listing pages opened per run (Vinted/eBay), the rest wait for the next run
+  ai_per_run: 8              # descriptions the AI reads per run when the patterns miss RAM, card or SSD
+
 # Vinted adds a buyer protection fee on top of the price.
 # If the API gives the real total we use that, otherwise this estimate.
 buyer_protection:
@@ -772,6 +782,111 @@ searches:
     exclude_keywords: *electronics
     shipping_cost: 7
     resell_costs: 2
+
+  # Gaming PCs (desktops 3581, laptops 3580; eBay 179 / 175672; Subito Informatica). Vinted's search matches
+  # loosely, so a few broad words find more than model numbers: "gtx" already covers every GTX. Specs are read
+  # from the listing (pc.py, the AI for messy text), never from the search word.
+  - query: pc gaming
+    model: pc
+    price_from: 60
+    max_price: 200
+    filters: {catalog: [3581]}
+    exclude_keywords: &pc_excl [solo case, case vuoto, scheda madre, solo scheda, senza scheda video, senza gpu,
+                                no gpu, per pezzi, ricambi, non funziona, non si accende, non parte, mining, minare,
+                                scambio, permuta, "ne s'allume", en panne, no funciona, defekt, for parts, not working]
+    max_roi: 150             # far below what the same combo sells for: usually a scam or a broken PC
+    shipping_cost: 25        # a tower by courier (pickup costs the trip instead)
+    resell_costs: 10         # a big box and padding when we sell it on
+    every_minutes: 10
+    check: &pc_check ask for a screenshot of the specs (Task Manager or CPU-Z/GPU-Z) and a photo of it running a game
+  - query: pc fisso gaming
+    model: pc
+    price_from: 60
+    max_price: 200
+    filters: {catalog: [3581]}
+    exclude_keywords: *pc_excl
+    max_roi: 150
+    shipping_cost: 25
+    resell_costs: 10
+    every_minutes: 10
+    check: *pc_check
+  - query: computer gaming
+    model: pc
+    price_from: 60
+    max_price: 200
+    filters: {catalog: [3581]}
+    exclude_keywords: *pc_excl
+    max_roi: 150
+    shipping_cost: 25
+    resell_costs: 10
+    every_minutes: 10
+    check: *pc_check
+  - query: gtx
+    model: pc
+    price_from: 60
+    max_price: 200
+    filters: {catalog: [3581]}
+    exclude_keywords: *pc_excl
+    max_roi: 150
+    shipping_cost: 25
+    resell_costs: 10
+    every_minutes: 10
+    check: *pc_check
+  - query: rtx
+    model: pc
+    price_from: 60
+    max_price: 200
+    filters: {catalog: [3581]}
+    exclude_keywords: *pc_excl
+    max_roi: 150
+    shipping_cost: 25
+    resell_costs: 10
+    every_minutes: 10
+    check: *pc_check
+  - query: rx
+    model: pc
+    price_from: 60
+    max_price: 200
+    filters: {catalog: [3581]}
+    exclude_keywords: *pc_excl
+    max_roi: 150
+    shipping_cost: 25
+    resell_costs: 10
+    every_minutes: 10
+    check: *pc_check
+  - query: notebook gaming
+    model: pc
+    price_from: 60
+    max_price: 200
+    filters: {catalog: [3580]}
+    exclude_keywords: *pc_excl
+    max_roi: 150
+    shipping_cost: 9
+    resell_costs: 3
+    every_minutes: 10
+    check: *pc_check
+  - query: notebook gtx
+    model: pc
+    price_from: 60
+    max_price: 200
+    filters: {catalog: [3580]}
+    exclude_keywords: *pc_excl
+    max_roi: 150
+    shipping_cost: 9
+    resell_costs: 3
+    every_minutes: 10
+    check: *pc_check
+  - query: notebook rtx
+    model: pc
+    price_from: 60
+    max_price: 200
+    filters: {catalog: [3580]}
+    exclude_keywords: *pc_excl
+    max_roi: 150
+    shipping_cost: 9
+    resell_costs: 3
+    every_minutes: 10
+    check: *pc_check
 
   # ---------------------------------------------------------------------------
   # Budget mode: total cost (price + buyer fee + shipping, or pickup for Subito) must

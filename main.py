@@ -157,6 +157,7 @@ def main() -> int:
             logging.warning("No settings from the Worker this run: config.yaml only, Subito off")
         prepare(cfg, state)
         scanner = Scanner(cfg)
+        scanner.cloud = cloud   # the AI reads gaming PC specs the patterns can't
         try:
             deals = scanner.scan()
             ok = not scanner.failed

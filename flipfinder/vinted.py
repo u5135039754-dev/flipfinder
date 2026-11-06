@@ -51,6 +51,7 @@ class Item:
     description: str = ""             # the seller's text (Vinted: from the item page), for the AI check
     country: str = ""                 # where it ships from, ISO code ("IT", "ES"): Vinted, from the seller's profile
     category: int | None = None       # Subito: the category it was fetched from
+    specs: dict | None = None         # gaming PCs: what pc.parse (and the AI) read from the listing
 
     @property
     def key(self) -> str:

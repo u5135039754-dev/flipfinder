@@ -31,7 +31,7 @@ HEADERS = {"User-Agent": "Subito/8.0 (Android)", "X-Subito-Channel": "20", "Acce
 # Vinted catalog filter -> Subito category, so most searches need no extra config
 CATEGORY_FOR_VINTED_CATALOG = {
     3661: 12, 3678: 12, 3035: 12,     # phones, earphones, smartwatches -> Telefonia
-    3728: 10, 3580: 10, 3602: 10,     # tablets, laptops, graphics cards -> Informatica
+    3728: 10, 3580: 10, 3581: 10, 3602: 10,   # tablets, laptops, desktops, graphics cards -> Informatica
     3025: 44,                         # consoles -> Console e Videogiochi
     4840: 39, 4826: 39, 4850: 39,     # pedals, amps, electric guitars -> Strumenti Musicali
     79: 16, 267: 16, 1206: 16, 13: 16, 196: 16, 1037: 16,   # knitwear, sweatshirts, outerwear -> Abbigliamento e Accessori

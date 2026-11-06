@@ -21,7 +21,7 @@ def search_group(s) -> str:
     if s.budget:
         return "Budget"
     cats = set(s.filters.get("catalog", []) or [])
-    if cats & {3661, 3678, 3035, 3728, 3580, 3602, 3025}:
+    if cats & {3661, 3678, 3035, 3728, 3580, 3581, 3602, 3025}:
         return "Electronics"
     if cats & {4840}:
         return "Pedals"

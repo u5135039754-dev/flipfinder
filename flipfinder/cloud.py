@@ -37,6 +37,7 @@ def deal_record(deal: Deal) -> dict:
                     "difficulty": deal.repair.difficulty, "iphone_part": deal.repair.iphone_part} if deal.repair else None),
         **({"clothes": {"kind": deal.kind, "size": it.size, "brand": it.brand, "fake_risk": deal.fake_risk,
                         "fake_why": deal.fake_why, "fake_base": deal.fake_base}} if deal.fake_risk else {}),
+        **({"pc": deal.pc} if getattr(deal, "pc", None) else {}),
         # what the market value was worked out from, for the AI check
         "comparables": [{"title": c.title[:80], "price": c.price, "condition": c.condition, "source": c.source}
                         for c in (deal.sample or [])[:8]],
@@ -113,6 +114,16 @@ class Cloud:
         except (requests.RequestException, ValueError) as e:
             log.warning("AI check request failed: %s", e)
             return {}
+
+    def pc_specs(self, listings: list[dict]) -> dict:
+        """Gaming PC specs the patterns couldn't read, read by the Worker's AI: {key: specs}. Never stops a run."""
+        try:
+            res = self.session.post(f"{self.url}/api/pc_specs", json={"listings": listings}, timeout=120)
+            rows = (res.json() if res.ok else {}).get("results") or []
+        except (requests.RequestException, ValueError) as e:
+            log.warning("PC spec request failed: %s", type(e).__name__)
+            return {}
+        return {r["key"]: r["specs"] for r in rows if r.get("specs")}
 
     def preview_result(self, pid: str, result: dict) -> dict:
         """The app's ➕ Add search preview, checked by this run."""

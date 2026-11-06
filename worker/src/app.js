@@ -253,6 +253,11 @@ const API = {
     return { status: "ok", done };
   },
 
+  /** Gaming PC specs the scanner couldn't read from a listing: the AI reads its text (counted in the AI's daily limit). */
+  async "POST /api/pc_specs"(ctx, body) {
+    return { results: await ctx.bot.ai.pcSpecs(body?.listings || []) };
+  },
+
   /**
    * The owner's look at listing kits for past deals: made with the real prompt, returned here, posted
    * and saved nowhere. `as`: {n: {paid, repair: {part, cost}}} to try a deal as if bought (and repaired).
