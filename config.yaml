@@ -95,7 +95,7 @@ reverb:
 pc:
   pickup_km: 100             # Subito desktops for pickup: within this distance (a region, not just the province)
   desktop_ship_min: 15       # a tower by courier is a big heavy box: never counted cheaper than this
-  asking_factor: 0           # 0 = resale from sold listings only; e.g. 0.85 = asking prices x 0.85 until enough sold
+  asking_factor: 0.85        # asking prices x 0.85 until 3 of the same combo have sold (0 = sold listings only)
   details_per_run: 8         # listing pages opened per run (Vinted/eBay), the rest wait for the next run
   ai_per_run: 8              # descriptions the AI reads per run when the patterns miss RAM, card or SSD
 
