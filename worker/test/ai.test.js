@@ -583,13 +583,16 @@ test("gaming PCs: the AI reads specs the scanner couldn't (counted, capped, off 
   await t.update(msg("/ai on"));
   const d = await t.store.deal(dealKey);
   await t.store.saveDeal(dealKey, { ...d, title: "PC gaming", group: "Electronics",
-    pc: { form: "desktop", line: "i5-10400F · GTX 1660 Super · 16 GB DDR4 · 512 GB SSD · WiFi ❓ BT ❓", dongle: true } });
+    pc: { form: "desktop", line: "i5-10400F · GTX 1660 Super · 16 GB DDR4 · 512 GB SSD · WiFi ❓ BT ❓", dongle: true,
+      min_profit: 30, upgrades: [["8 GB RAM", 15]] } });
   t.tg.clear();
   t.tg.answerClaude = () => text(CHECK);
   await t.update(groupTap(`ai:${dealKey}`));
   const listing = t.tg.claude.at(-1).body.messages[0].content.at(-1).text;
   assert.match(listing, /category: gaming PC \(desktop\); specs the scanner read: i5-10400F · GTX 1660 Super/);
   assert.match(listing, /WiFi\/Bluetooth not stated \(a €10 USB dongle is in our cost\)/);
+  assert.match(listing, /we fit 8 GB RAM \(€15\) before reselling/);
+  assert.match(listing, /min profit we need: €30/);                    // PCs' own rule, not the main €50
   assert.match(SYSTEM, /ex-mining card/);
   assert.match(SYSTEM, /stock or catalogue photos instead of the real PC/);
   // ❓ Seller questions: spec screenshot + WiFi/BT first, packing for a desktop by courier, then one from the AI

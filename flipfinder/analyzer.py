@@ -628,40 +628,56 @@ def _jackson_value(item: Item, pool: list[Item], rules: Rules) -> tuple[float | 
 
 PC_SOLD_MIN = 3        # sold PCs of the same combo needed for a resale value
 PC_ASKING_MIN = 5      # asking-price listings of the same combo, when asking prices are allowed (pc_asking_factor)
+PC_OLD_FACTOR = 0.8    # an older DDR3 PC valued on newer PCs with the same card (no DDR3 ones to compare)
 
 
 def _pc_value(item: Item, pool: list[Item], rules: Rules) -> tuple[float | None, list[Item], str, str, int]:
     """
-    A gaming PC's resale value: the median price the same form + graphics card + CPU tier sold for (titles of
-    sold listings, sold.py). (value, comparables, basis, combo, sold used); None when too few sold.
+    A gaming PC's resale value: the median price the same form + graphics card + CPU tier (+ DDR3 or not) sold for
+    (titles of sold listings, sold.py), else asking prices x pc_asking_factor. Too few of the exact combo: the same
+    card with any CPU (newer PCs; x PC_OLD_FACTOR for a DDR3 one). (value, comparables, basis, combo, sold used).
     """
     from . import pc
     spec = item.specs or {}
     want = pc.combo(spec)
     if not want:
         return None, [], "PC: no graphics card", "", 0
-    tier_known = bool((spec.get("cpu") or {}).get("tier"))
+    form, gpu = spec["form"], spec["gpu"]
+    tier = (spec.get("cpu") or {}).get("tier")
+    old = pc.ddr4(spec) is False
 
-    def same(title: str) -> bool:
-        c = pc.title_combo(title, rules.pc_form or spec["form"])
+    def parts(title: str):
+        c = pc.title_combo(title, rules.pc_form or form)
         if c is None:
-            return False
-        return c == want if tier_known else c.rsplit(" · ", 1)[0] == want   # CPU not stated: same card, any CPU
-    sold = [x[0] for x in rules.sold if x[0].id != item.id and same(x[0].title)]
-    kept = remove_outliers([s.price for s in sold])
-    n_sold = len(kept)
-    label = want + ("" if tier_known else " · any CPU")
-    if n_sold >= PC_SOLD_MIN:
-        comps = [s for s in sold if kept[0] <= s.price <= kept[-1]]
-        return round(median(kept), 2), comps, f"PC sold: {label}", label, len(comps)
-    if rules.pc_asking_factor > 0:
-        asking = [p for p in pool if p.id != item.id and same(p.title)]
-        kept = remove_outliers([p.price for p in asking])
-        if len(kept) >= PC_ASKING_MIN:
-            comps = [p for p in asking if kept[0] <= p.price <= kept[-1]]
-            return (round(median(kept) * rules.pc_asking_factor, 2), comps,
-                    f"PC asking x{rules.pc_asking_factor:g}: {label}", label, 0)
-    return None, [], f"PC: {n_sold} sold {label}", label, 0
+            return None
+        f, g, *rest = c.split(" · ")
+        return f, g, next((x for x in rest if x != "ddr3"), None), "ddr3" in rest
+
+    def exact(p) -> bool:
+        return p is not None and p[:2] == (form, gpu) and (p[2] == tier or not tier) and p[3] == old
+
+    def card(p) -> bool:   # same card, any CPU, a newer PC
+        return p is not None and p[:2] == (form, gpu) and not p[3]
+
+    n_sold = 0
+    levels = [(exact, want if tier else f"{form} · {gpu} · any CPU" + (" · ddr3" if old else ""), 1.0)]
+    if tier or old:
+        levels.append((card, f"{form} · {gpu} · any CPU" + (" · older" if old else ""), PC_OLD_FACTOR if old else 1.0))
+    for match, label, factor in levels:
+        sold = [x[0] for x in rules.sold if x[0].id != item.id and match(parts(x[0].title))]
+        kept = remove_outliers([s.price for s in sold])
+        n_sold = max(n_sold, len(kept))
+        if len(kept) >= PC_SOLD_MIN:
+            comps = [s for s in sold if kept[0] <= s.price <= kept[-1]]
+            return round(median(kept) * factor, 2), comps, f"PC sold: {label}", label, len(comps)
+        if rules.pc_asking_factor > 0:
+            asking = [p for p in pool if p.id != item.id and match(parts(p.title))]
+            kept = remove_outliers([p.price for p in asking])
+            if len(kept) >= PC_ASKING_MIN:
+                comps = [p for p in asking if kept[0] <= p.price <= kept[-1]]
+                return (round(median(kept) * rules.pc_asking_factor * factor, 2), comps,
+                        f"PC asking x{rules.pc_asking_factor:g}: {label}", label, 0)
+    return None, [], f"PC: {n_sold} sold {want}", want, 0
 
 
 def _comparables(item: Item, pool: list[Item], min_comparables: int,
@@ -931,8 +947,11 @@ def assess(item: Item, pool: list[Item], rules: Rules, query: str = "",
             ship = max(ship, rules.pc_ship_min)   # a tower by courier: a big, heavy box, whatever the cheapest option says
         dongle = pc.needs_dongle(spec)
         missing += pc.DONGLE if dongle else 0.0   # WiFi/Bluetooth not stated: a USB dongle
+        ups = pc.upgrades(spec)
+        missing += sum(c for _, c in ups)          # a 512 GB SSD / more RAM so it meets the minimums when resold
         pc_info = {"form": spec["form"], "line": pc.line(spec), "dongle": dongle, "combo": kind,
-                   "pickup": not courier, "ai": bool(spec.get("ai"))}
+                   "pickup": not courier, "ai": bool(spec.get("ai")), "min_profit": rules.min_profit,
+                   "upgrades": [[n, c] for n, c in ups]}
     cost = item.total_price + ship + missing + (fix.cost if fix else 0.0)
     if fix and fix.iphone_part:
         # iOS shows "unknown part" after a non-original screen/battery/camera: it sells for less

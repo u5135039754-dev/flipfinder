@@ -42,11 +42,18 @@ def test_the_minimums():
     def why(title, desc=""):
         return pc.problems(pc.parse(title, desc))
     assert why("PC Gaming i5-6600K 16 GB RAM GTX 750 Ti SSD 512") == ["GTX 750 Ti is under a GTX 1050"]
-    assert why("PC i7 4790 GTX 1060 16gb ssd 500") == ["DDR3 RAM"]                 # a 4th-gen Intel takes DDR3
-    assert why("PC i5 9400 GTX 1060 16 GB DDR3 SSD 512") == ["DDR3 RAM"]
-    assert why("PC GT 1030 i3 8100 8GB SSD 240") == ["GT 1030 is under a GTX 1050", "240 GB SSD (under 256)"]
-    assert why("PC Ryzen 5 3600 GTX 1660 16 GB HDD 1 TB") == ["HDD only"]
-    assert why("PC Ryzen 5 3600 GTX 1660 4 GB RAM SSD 512") == ["4 GB RAM"]
+    assert why("PC i7 4790 GTX 1060 16gb ssd 500") == []                # DDR3 is fine with a good card...
+    old = pc.parse("PC i7 4790 GTX 1060 16gb ssd 500")
+    assert pc.combo(old) == "desktop · gtx 1060 · i7 · ddr3"              # ...valued on other DDR3 PCs
+    assert pc.combo(pc.parse("PC i7 8700 GTX 1060 16gb ssd 500")) == "desktop · gtx 1060 · i7"
+    assert why("PC GT 1030 i3 8100 8GB SSD 240") == ["GT 1030 is under a GTX 1050"]
+    for title, ups in (("PC i5 8400 GTX 1060 16 GB SSD 240", []), ("PC i5 8400 GTX 1060 16 GB SSD 255", []),
+                       ("PC Ryzen 5 3600 GTX 1660 16 GB HDD 1 TB", [("512 GB SSD", 30)]),
+                       ("PC Ryzen 5 3600 GTX 1660 16 GB SSD 120", [("512 GB SSD", 30)]),
+                       ("PC Ryzen 5 3600 GTX 1660 4 GB RAM SSD 512", [("8 GB RAM", 15)])):
+        assert why(title) == [] and pc.upgrades(pc.parse(title)) == ups, title   # an upgrade on the cost, not a skip
+    assert why("PC Ryzen 5 3600 GTX 1660 16 GB") == ["SSD not found"]   # no storage at all: not posted
+    assert "HDD only" in pc.line(pc.parse("PC Ryzen 5 3600 GTX 1660 16 GB HDD 1 TB"))
     assert why("PC i5 8400 Intel UHD 630 16 GB SSD 512") == ["integrated graphics"]
     assert why("PC Xeon E5-2670 v3 GTX 1070 32GB SSD 480GB no porta ethernet") == ["no Ethernet"]
     assert why("PC Ryzen 5 RX 580 16 GB SSD 512 + HDD 1TB") == []                     # SSD + HDD is fine
@@ -87,7 +94,8 @@ def test_valued_on_what_the_same_combo_sold_for():
     assert d.shipping == 15 and d.missing_part == 10 and d.cost == 175
     assert d.profit == 120 and not d.blocked
     assert d.pc == {"form": "desktop", "line": "i5-9400F · GTX 1660 Super · 16 GB DDR4 · 512 GB SSD · WiFi ❓ BT ❓",
-                    "dongle": True, "combo": "desktop · gtx 1660 super · i5", "pickup": False, "ai": False}
+                    "dongle": True, "combo": "desktop · gtx 1660 super · i5", "pickup": False, "ai": False,
+                    "min_profit": R.min_profit, "upgrades": []}
     # too few sold: no value (asking prices only with pc.asking_factor)
     assert assess(item, asking, replace(R, sold=combo_sold[:2]), "pc gaming") is None
     d = assess(item, asking, replace(R, sold=combo_sold[:2], pc_asking_factor=0.85), "pc gaming", shipping=8)
@@ -111,16 +119,41 @@ def test_the_deal_card():
     assert "📶 WiFi/Bluetooth not stated: ask the seller · +€10.00 for a USB dongle (included)" in text
     assert "🏷 Resale: <b>€305.00</b> (median of 4 sold GTX 1660 Super + i5 desktops)" in text
     assert "desktop · gtx" not in text                                    # the combo isn't shown as an extra
+    assert "Upgrade" not in text
+    # too few of the exact combo: the same card with any CPU (a DDR3 PC 20% lower)
+    item = it(3, 120, "PC i7 8700 GTX 1660 Super 16GB SSD 512 WiFi Bluetooth")
+    item.specs = pc.parse(item.title)
+    d = assess(item, [], replace(R, sold=sold_list), "pc gaming", shipping=8)
+    assert d.market_value == 305 and d.pc["combo"] == "desktop · gtx 1660 super · any CPU"
+    assert "(median of 4 sold GTX 1660 Super + any CPU desktops)" in format_deal(d)
+    item = it(4, 100, "PC i7 3770 GTX 1660 Super 16GB SSD 512 WiFi Bluetooth")
+    item.specs = pc.parse(item.title)
+    d = assess(item, [], replace(R, sold=sold_list), "pc gaming", shipping=8)
+    assert d.market_value == 244 and d.pc["combo"] == "desktop · gtx 1660 super · any CPU · older"
+    assert "GTX 1660 Super + any CPU desktops, 20% off for an older DDR3 PC)" in format_deal(d)
+    # DDR3 ones of the same combo come first
+    old_sold = [sold(500 + n, p, "PC i7 3770 GTX 1660 Super 16GB") for n, p in enumerate((200, 210, 220))]
+    d = assess(item, [], replace(R, sold=sold_list + old_sold), "pc gaming", shipping=8)
+    assert d.market_value == 210 and "GTX 1660 Super + i7 DDR3 desktops" in format_deal(d)
+    # a hard disk and 4 GB: the upgrades are on the cost and on the card
+    item = it(2, 150, "PC gaming i5 9400F GTX 1660 Super 4GB RAM HDD 1TB WiFi Bluetooth")
+    item.specs = pc.parse(item.title)
+    d = assess(item, [], replace(R, sold=sold_list), "pc gaming", shipping=8)
+    assert d.missing_part == 45 and d.pc["upgrades"] == [["512 GB SSD", 30], ["8 GB RAM", 15]]
+    text = format_deal(d)
+    assert "🔧 Upgrade before reselling: 512 GB SSD +€30.00 · 8 GB RAM +€15.00 (included)" in text
+    assert "HDD only" in text and "📶" not in text
 
 
 def test_searches_electronics_topic_italy_only_and_not_in_the_fast_lane():
     cfg = config.load()
     pcs = [s for s in cfg.searches if s.model == "pc"]
     assert len(pcs) == 9 and {search_group(s) for s in pcs} == {"Electronics"}
-    assert {s.max_price for s in pcs} == {200}
+    assert {s.max_price for s in pcs} == {300}
     sc = Scanner(cfg)
     r = sc._rules(next(s for s in pcs if s.query == "pc gaming"))
-    assert (r.model, r.pc_form, r.abroad, r.repairs, r.max_price, r.pc_ship_min) == ("pc", "desktop", False, False, 200, 15)
+    assert (r.model, r.pc_form, r.abroad, r.repairs, r.max_price, r.pc_ship_min) == ("pc", "desktop", False, False, 300, 15)
+    assert (r.min_profit, r.min_roi) == (30, 25)                         # PCs' own rules (config pc:)
     assert sc._rules(next(s for s in pcs if s.query == "notebook gtx")).pc_form == "laptop"
     assert sc._ebay_category(pcs[0]) == 179 and sc._subito_category(pcs[0]) == 10
     fs = {**fastlane.DEFAULTS, "groups": ["Electronics"]}

@@ -435,6 +435,8 @@ class Scanner:
         if s.model == "pc":   # gaming PCs: Italy only, never repaired, valued on what the same combo sold for
             pcs = getattr(self.cfg, "pc", None) or {}
             rules = replace(rules, repairs=False, abroad=False, pc_form=pc_form(s),
+                            min_profit=float(pcs.get("min_profit", rules.min_profit)),
+                            min_roi=float(pcs.get("min_roi", rules.min_roi)),
                             pc_asking_factor=float(pcs.get("asking_factor") or 0),
                             pc_ship_min=float(pcs.get("desktop_ship_min") or 15))
         if s.clothes:   # designer clothes: their own minimums (/setrule clothes ...) and the fake checks
@@ -733,7 +735,7 @@ class Scanner:
 
     def _evaluate_pc(self, s: Search, fresh: list[Item], pool: list[Item], rules: Rules) -> list[Deal]:
         """
-        Gaming PCs: specs first. A quick look at the title drops the hopeless ones (a weak card, DDR3, a small SSD);
+        Gaming PCs: specs first. A quick look at the title drops the hopeless ones (a weak card, no Ethernet);
         the rest get their page opened (a few per run, a good card in the title first; the others wait for the next
         run), the AI reads the text the patterns couldn't, and only a PC that meets every minimum is valued.
         """

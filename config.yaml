@@ -90,9 +90,11 @@ reverb:
   pool_pages: 2
 
 # Gaming PCs (the `model: pc` searches, Electronics topic): desktops and laptops that meet the minimums in
-# flipfinder/pc.py (RAM 8 GB+ DDR4, GTX 1050 or better, SSD 256 GB+), valued on what the same form + graphics card +
-# CPU tier sold for. The main rules apply (min profit, ROI), with their own €200 max price (max_price on each search).
+# flipfinder/pc.py (GTX 1050 or better, RAM 8 GB+, SSD 240 GB+; less RAM or SSD = the upgrade on the cost), valued on
+# what the same form + graphics card + CPU tier sold for. Their own rules below, €300 max price (max_price on each search).
 pc:
+  min_profit: 30             # cheap PCs rarely leave the main €50
+  min_roi: 25
   pickup_km: 100             # Subito desktops for pickup: within this distance (a region, not just the province)
   desktop_ship_min: 15       # a tower by courier is a big heavy box: never counted cheaper than this
   asking_factor: 0.85        # asking prices x 0.85 until 3 of the same combo have sold (0 = sold listings only)
@@ -789,7 +791,7 @@ searches:
   - query: pc gaming
     model: pc
     price_from: 60
-    max_price: 200
+    max_price: 300
     filters: {catalog: [3581]}
     exclude_keywords: &pc_excl [solo case, case vuoto, scheda madre, solo scheda, senza scheda video, senza gpu,
                                 no gpu, per pezzi, ricambi, non funziona, non si accende, non parte, mining, minare,
@@ -802,7 +804,7 @@ searches:
   - query: pc fisso gaming
     model: pc
     price_from: 60
-    max_price: 200
+    max_price: 300
     filters: {catalog: [3581]}
     exclude_keywords: *pc_excl
     max_roi: 150
@@ -813,7 +815,7 @@ searches:
   - query: computer gaming
     model: pc
     price_from: 60
-    max_price: 200
+    max_price: 300
     filters: {catalog: [3581]}
     exclude_keywords: *pc_excl
     max_roi: 150
@@ -824,7 +826,7 @@ searches:
   - query: gtx
     model: pc
     price_from: 60
-    max_price: 200
+    max_price: 300
     filters: {catalog: [3581]}
     exclude_keywords: *pc_excl
     max_roi: 150
@@ -835,7 +837,7 @@ searches:
   - query: rtx
     model: pc
     price_from: 60
-    max_price: 200
+    max_price: 300
     filters: {catalog: [3581]}
     exclude_keywords: *pc_excl
     max_roi: 150
@@ -846,7 +848,7 @@ searches:
   - query: rx
     model: pc
     price_from: 60
-    max_price: 200
+    max_price: 300
     filters: {catalog: [3581]}
     exclude_keywords: *pc_excl
     max_roi: 150
@@ -857,7 +859,7 @@ searches:
   - query: notebook gaming
     model: pc
     price_from: 60
-    max_price: 200
+    max_price: 300
     filters: {catalog: [3580]}
     exclude_keywords: *pc_excl
     max_roi: 150
@@ -868,7 +870,7 @@ searches:
   - query: notebook gtx
     model: pc
     price_from: 60
-    max_price: 200
+    max_price: 300
     filters: {catalog: [3580]}
     exclude_keywords: *pc_excl
     max_roi: 150
@@ -879,7 +881,7 @@ searches:
   - query: notebook rtx
     model: pc
     price_from: 60
-    max_price: 200
+    max_price: 300
     filters: {catalog: [3580]}
     exclude_keywords: *pc_excl
     max_roi: 150

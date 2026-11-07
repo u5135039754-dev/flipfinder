@@ -5,7 +5,8 @@ from __future__ import annotations
 import html
 import logging
 
-from .analyzer import Deal
+from .analyzer import PC_OLD_FACTOR, Deal
+from .pc import DONGLE
 
 log = logging.getLogger(__name__)
 
@@ -70,8 +71,10 @@ def format_deal(deal: Deal) -> str:
         value_line(deal),
         *([demand_line(deal)] if deal.demand else []),
         *platform_lines(deal),
-        *([f"📶 WiFi/Bluetooth not stated: ask the seller · +{money(deal.missing_part, c)} for a USB dongle (included)"]
-          if pc.get("dongle") else
+        *([f"🔧 Upgrade before reselling: " + " · ".join(f"{n} +{money(v, c)}" for n, v in pc["upgrades"]) + " (included)"]
+          if pc.get("upgrades") else []),
+        *([f"📶 WiFi/Bluetooth not stated: ask the seller · +{money(DONGLE, c)} for a USB dongle (included)"]
+          if pc.get("dongle") else [] if pc else
           [f"🔋 No battery/charger: +{money(deal.missing_part, c)} to buy one (included)"] if deal.missing_part else []),
         *([f"🔧 Part + tools: {money(deal.repair.cost, c)} (included)"] if deal.repair else []),
         f"💰 Possible profit: <b>{money(deal.profit, c)}</b>",
@@ -140,9 +143,11 @@ def value_line(deal: Deal) -> str:
     pc = getattr(deal, "pc", None) or {}
     if pc:   # "desktop · gtx 1660 super · i5" -> "GTX 1660 Super + i5 desktops"
         from .pc import label_gpu
-        form, gpu, *cpu = pc.get("combo", "").split(" · ") + [""] * 2
-        tier = {"old amd": "older AMD", "any CPU": "any CPU"}.get(cpu[0], cpu[0] if cpu[0][:1] == "i" else cpu[0].title())
-        what = f"{label_gpu(gpu)}{' + ' + tier if tier else ''} {form}s".strip()
+        form, gpu, *rest = pc.get("combo", "").split(" · ") + [""]
+        cpu = next((x for x in rest if x not in ("ddr3", "older", "")), "")
+        tier = {"old amd": "older AMD", "any CPU": "any CPU"}.get(cpu, cpu if cpu[:1] == "i" else cpu.title())
+        what = (f"{label_gpu(gpu)}{' + ' + tier if tier else ''}{' DDR3' if 'ddr3' in rest else ''} {form}s".strip()
+                + (f", {1 - PC_OLD_FACTOR:.0%} off for an older DDR3 PC" if "older" in rest else ""))
         if deal.sold_count:
             return f"🏷 Resale: <b>{money(deal.market_value, c)}</b> (median of {deal.sold_count} sold {html.escape(what)})"
         return (f"🏷 Resale: <b>{money(deal.market_value, c)}</b> (asking prices of {deal.comparables} "

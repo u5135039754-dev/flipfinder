@@ -350,6 +350,7 @@ export class AI {
   // --- what Claude sees about a deal
   /** The min profit for this deal (budget deals have their own rules). */
   async minProfit(d) {
+    if (d.pc?.min_profit != null) return d.pc.min_profit;   // gaming PCs have their own rules (config pc:)
     const view = await this.bot.view();
     const rules = d.group === "Budget" ? { ...view.rules, ...(view.budget_rules || {}) }
       : d.group === "Clothes" ? { ...view.rules, ...(view.clothes_rules || {}) } : view.rules;
@@ -378,7 +379,8 @@ export class AI {
         `size ${d.clothes.size || "?"}); the scanner's fake risk from price and seller: ${d.clothes.fake_risk}` +
         (d.clothes.fake_why?.length ? ` (${d.clothes.fake_why.join(", ")})` : "") : "",
       d.pc ? `category: gaming PC (${d.pc.form}); specs the scanner read: ${d.pc.line}` +
-        (d.pc.dongle ? "; WiFi/Bluetooth not stated (a €10 USB dongle is in our cost)" : "") : "",
+        (d.pc.dongle ? "; WiFi/Bluetooth not stated (a €10 USB dongle is in our cost)" : "") +
+        (d.pc.upgrades?.length ? `; we fit ${d.pc.upgrades.map(([n, c]) => `${n} (€${c})`).join(" + ")} before reselling (in our cost)` : "") : "",
       "</listing>",
       "<numbers>",
       `our total cost (price + fees + shipping): €${d.cost}`, `market value (median of similar listings): €${d.value}`,

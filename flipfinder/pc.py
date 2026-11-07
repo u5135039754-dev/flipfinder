@@ -5,9 +5,10 @@ Specs come from the title, the description and the listing's attributes, read he
 the graphics card or the SSD can't be found that way, the Worker's AI (Haiku) reads the description instead
 (main.py, scanner.Scanner._pc_specs). A PC is only posted when every minimum is met:
 
-- RAM 8 GB or more, DDR4 or newer (DDR3 is skipped; when the listing doesn't say, the CPU's generation does)
+- RAM 8 GB or more (under 8: RAM_UPGRADE on the cost). DDR3 is fine with a good card, valued on other DDR3 PCs
 - a graphics card from GPU_OK: GTX 1050 or better (integrated graphics, GT 710/730/1030, GTX 9xx and older skipped)
-- an SSD of 256 GB or more (HDD only is skipped, SSD + HDD is fine)
+- an SSD of 240 GB or more (smaller, or a hard disk only: SSD_UPGRADE for a 512 GB SSD on the cost)
+- RAM, card and storage must be found (patterns or the AI), else it's not posted
 - Ethernet: only "no Ethernet" said outright is skipped. WiFi/Bluetooth not mentioned: posted with "ask the seller"
   and €10 for a USB dongle on the cost (laptops always have both)
 """
@@ -20,7 +21,9 @@ from functools import lru_cache
 
 DONGLE = 10.0                  # a USB WiFi + Bluetooth dongle, when the listing doesn't say it has them
 MIN_RAM_GB = 8
-MIN_SSD_GB = 256
+MIN_SSD_GB = 240               # 240/250/256 GB are one size class
+SSD_UPGRADE = 30.0             # a 512 GB SSD, when the SSD is small or there's only a hard disk
+RAM_UPGRADE = 15.0             # one more 8 GB stick, when it has under 8 GB
 DESKTOP_CATALOG, LAPTOP_CATALOG = 3581, 3580   # Vinted: Desktop computer, Computer portatili
 
 
@@ -281,7 +284,7 @@ def ddr4(spec: dict) -> bool | None:
 
 
 def problems(spec: dict) -> list[str]:
-    """Why it can't be posted (empty = it meets every minimum)."""
+    """Why it can't be posted (empty = it meets every minimum, maybe after the upgrades in `upgrades`)."""
     out = []
     if spec["gpu"] is None:
         out.append("integrated graphics" if spec.get("integrated") else "graphics card not found")
@@ -289,16 +292,20 @@ def problems(spec: dict) -> list[str]:
         out.append(f"{label_gpu(spec['gpu'])} is under a GTX 1050")
     if spec["ram_gb"] is None:
         out.append("RAM not found")
-    elif spec["ram_gb"] < MIN_RAM_GB:
-        out.append(f"{spec['ram_gb']} GB RAM")
-    if ddr4(spec) is False:
-        out.append("DDR3 RAM")
-    if spec["ssd_gb"] is None:
-        out.append("HDD only" if spec["hdd"] else "SSD not found")
-    elif spec["ssd_gb"] < MIN_SSD_GB:
-        out.append(f"{spec['ssd_gb']} GB SSD (under 256)")
+    if spec["ssd_gb"] is None and not spec["hdd"]:
+        out.append("SSD not found")
     if spec.get("no_ethernet"):
         out.append("no Ethernet")
+    return out   # DDR3 is fine with a good card (valued on other DDR3 PCs: `combo`)
+
+
+def upgrades(spec: dict) -> list[tuple[str, float]]:
+    """What we'd fit before reselling so it meets the minimums: a 512 GB SSD, 8 GB more RAM."""
+    out = []
+    if spec["ssd_gb"] is None or spec["ssd_gb"] < MIN_SSD_GB:
+        out.append(("512 GB SSD", SSD_UPGRADE))
+    if spec["ram_gb"] is not None and spec["ram_gb"] < MIN_RAM_GB:
+        out.append(("8 GB RAM", RAM_UPGRADE))
     return out
 
 
@@ -325,9 +332,13 @@ def line(spec: dict) -> str:
     wifi, bt = wifi_bt(spec)
     mark = {True: "✅", False: "❌", None: "❓"}
     ram = f"{spec['ram_gb']} GB" + (f" {spec['ram_type']}" if spec.get("ram_type") else " DDR4" if ddr4(spec) else "")
-    ssd = (f"{spec['ssd_gb'] / 1000:g} TB" if spec["ssd_gb"] >= 1000 else f"{spec['ssd_gb']} GB") + " SSD"
-    parts = [(spec.get("cpu") or {}).get("name") or "CPU ❓", label_gpu(spec["gpu"]), ram,
-             ssd + (" + HDD" if spec.get("hdd") else ""), f"WiFi {mark[wifi]} BT {mark[bt]}"]
+    if spec["ssd_gb"] is None:
+        disk = "HDD only"
+    else:
+        disk = (f"{spec['ssd_gb'] / 1000:g} TB" if spec["ssd_gb"] >= 1000 else f"{spec['ssd_gb']} GB") + " SSD" + (
+            " + HDD" if spec.get("hdd") else "")
+    parts = [(spec.get("cpu") or {}).get("name") or "CPU ❓", label_gpu(spec["gpu"]), ram, disk,
+             f"WiFi {mark[wifi]} BT {mark[bt]}"]
     return " · ".join(parts)
 
 
@@ -376,11 +387,13 @@ def is_pc_title(title: str, form: str = "") -> bool:
 
 # --- comparing: the same CPU + graphics card combo -------------------------------------------------------------
 def combo(spec: dict) -> str | None:
-    """'desktop · gtx 1660 super · i5': the form, the exact card and the CPU's tier (None without a card)."""
+    """'desktop · gtx 1660 super · i5': the form, the exact card and the CPU's tier (None without a card).
+    A DDR3 platform (i5-4690, FX) is its own combo: 'desktop · gtx 1650 · i5 · ddr3' sells for less."""
     if not spec.get("gpu"):
         return None
     tier = (spec.get("cpu") or {}).get("tier")
-    return " · ".join(x for x in (spec["form"], spec["gpu"], tier) if x)
+    old = "ddr3" if ddr4(spec) is False else ""
+    return " · ".join(x for x in (spec["form"], spec["gpu"], tier, old) if x)
 
 
 @lru_cache(maxsize=50_000)
